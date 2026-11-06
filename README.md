@@ -1,5 +1,7 @@
 # Pindo
 
+[![macOS build](https://github.com/CodexSpaceSafe-Projects/pindo/actions/workflows/macos.yml/badge.svg)](https://github.com/CodexSpaceSafe-Projects/pindo/actions/workflows/macos.yml)
+
 面向多项目并行工作的 macOS 菜单栏待办。先记录想法，从清单挑一条交给 Codex；它运行时继续挑另一条，检查结果后再勾选完成。
 
 原生实现使用 **SwiftUI + AppKit**，最低 macOS 14，无第三方运行时依赖。
@@ -80,6 +82,6 @@ design/                 设计记录与较早的网页交互原型
 
 `swift test` 在 Linux 上编译和运行 `PindoCoreTests`；Mac 上还会编译原生应用并运行 `PindoMacTests`。`.github/workflows/macos.yml` 已配置 macOS 构建、测试、打包与进程启动检查，运行后可下载应用压缩包。
 
-当前开发环境为 Linux，核心模块已实际编译测试；原生源码已做 Swift 语法解析，但这里无法执行 AppKit／SwiftUI 的 macOS 编译和真机交互。新增的 macOS 测试与 CI 配置不代表已经通过 macOS 验收。
+当前开发环境为 Linux，核心模块已实际编译测试。[macOS CI 已通过完整构建](https://github.com/CodexSpaceSafe-Projects/pindo/actions/runs/42206508251)：原生编译和测试、Apple Silicon 与 Intel 通用版打包、临时签名校验、进程启动检查及产物上传。菜单栏与系统服务的实际交互仍需在 Mac 上验收。
 
 首次 Mac 验收请覆盖：菜单栏与多屏位置、备注外部点击返回、全局快捷键与输入法、快捷键冲突回退、登录启动、两个 Codex 事项并行交接、30 秒快照及恢复。CI 的进程启动检查仅检查应用没有立即退出，不能替代这些交互验证。
