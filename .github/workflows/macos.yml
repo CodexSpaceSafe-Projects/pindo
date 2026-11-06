@@ -19,7 +19,7 @@ jobs:
       version: ${{ steps.metadata.outputs.version }}
       archive: ${{ steps.metadata.outputs.archive }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Toolchain
         run: swift --version
       - name: Resolve app version
@@ -71,7 +71,7 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent dist/Pindo.app "dist/$ARCHIVE_NAME"
           cd dist
           shasum -a 256 "$ARCHIVE_NAME" > SHA256SUMS
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: Pindo-macOS-${{ steps.metadata.outputs.version }}
           path: |
@@ -79,10 +79,10 @@ jobs:
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 14
-      - name: Annotate Swift compilation errors
+      - name: Annotate build errors
         if: failure()
         run: python3 scripts/ci-annotate.py /tmp/pindo-tests.log /tmp/pindo-build.log
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: macOS-build-logs
@@ -97,7 +97,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           name: Pindo-macOS-${{ needs.native.outputs.version }}
           path: release-files

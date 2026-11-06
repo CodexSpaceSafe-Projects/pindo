@@ -13,11 +13,14 @@ workspace = os.environ.get("GITHUB_WORKSPACE", "")
 pattern = re.compile(r"^(.+?\.swift):(\d+):(\d+): error: (.+)$")
 diagnostics = set()
 summary = []
+tails = []
 for argument in sys.argv[1:]:
     path = Path(argument)
     if not path.is_file():
         continue
-    for line in path.read_text(errors="replace").splitlines():
+    lines = path.read_text(errors="replace").splitlines()
+    tails.append(f"{path.name}:\n" + "\n".join(lines[-30:]))
+    for line in lines:
         match = pattern.match(line)
         if not match or match.groups() in diagnostics:
             continue
@@ -29,8 +32,13 @@ for argument in sys.argv[1:]:
         print(f"::error file={property_path},line={row},col={column}::{escape(message)}")
         summary.append(f"{filename}:{row}:{column}: {message}")
 
+if not summary and tails:
+    message = tails[-1][-6000:]
+    print(f"::error::{escape(message)}")
+    summary.append(message)
+
 if summary and os.environ.get("GITHUB_STEP_SUMMARY"):
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
-        output.write("### Swift compilation errors\n\n```text\n")
+        output.write("### Build diagnostics\n\n```text\n")
         output.write("\n".join(summary[:30]).replace("```", "'''"))
         output.write("\n```\n")
