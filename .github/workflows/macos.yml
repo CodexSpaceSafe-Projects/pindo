@@ -90,8 +90,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
   release:
-    name: Publish version release
-    if: startsWith(github.ref, 'refs/tags/v')
+    name: Publish GitHub release
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: native
     runs-on: ubuntu-latest
     permissions:
@@ -104,15 +104,32 @@ jobs:
       - name: Publish application and checksum
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          BUILD_REF: ${{ github.ref_name }}
+          APP_VERSION: ${{ needs.native.outputs.version }}
           ARCHIVE_NAME: ${{ needs.native.outputs.archive }}
         run: |
           set -euo pipefail
-          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            options=()
-            if [[ "$RELEASE_TAG" == *-* ]]; then options+=(--prerelease); fi
-            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
-              --title "Pindo ${RELEASE_TAG#v}" --generate-notes "${options[@]}"
+          options=(--latest=true)
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            release_tag="$BUILD_REF"
+            title="Pindo ${release_tag#v}"
+            options+=(--verify-tag)
+            if [[ "$release_tag" == *-* ]]; then
+              options=(--verify-tag --prerelease --latest=false)
+            fi
+          else
+            release_tag="build-$GITHUB_RUN_NUMBER"
+            title="Pindo $APP_VERSION (build $GITHUB_RUN_NUMBER)"
           fi
-          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
-            "release-files/$ARCHIVE_NAME" release-files/SHA256SUMS
+          printf 'Commit: `%s`\n\n[Build and test results](%s/%s/actions/runs/%s)\n' \
+            "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > release-notes.md
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$release_tag" --repo "$GITHUB_REPOSITORY" --clobber \
+              "release-files/$ARCHIVE_NAME" release-files/SHA256SUMS
+          else
+            gh release create "$release_tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "$title" --notes-file release-notes.md --generate-notes "${options[@]}" \
+              "release-files/$ARCHIVE_NAME" release-files/SHA256SUMS
+          fi
+          release_url=$(gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url)
+          printf '### Download\n\n[%s](%s)\n' "$title" "$release_url" >> "$GITHUB_STEP_SUMMARY"

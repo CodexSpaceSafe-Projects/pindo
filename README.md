@@ -22,7 +22,11 @@ open dist/Pindo.app
 
 ## GitHub 自动构建与下载
 
-每次推送分支、提交 Pull Request，或在 [Actions](https://github.com/CodexSpaceSafe-Projects/pindo/actions/workflows/macos.yml) 手动运行，都会在 macOS 上测试、编译并打包。成功后，在对应运行页面的 **Artifacts** 下载 `Pindo-macOS-版本号`，解压其中的应用压缩包得到 `Pindo.app`。构建产物保留 14 天，包含 Apple Silicon 与 Intel 通用二进制和 `SHA256SUMS` 校验文件。
+每次推送 `main` 或在 `main` 上手动运行 [Actions](https://github.com/CodexSpaceSafe-Projects/pindo/actions/workflows/macos.yml)，通过测试、编译和打包后，都会自动创建 [GitHub Release](https://github.com/CodexSpaceSafe-Projects/pindo/releases/latest)。无需手动打标签：自动发布的标签为 `build-构建编号`，标题为 `Pindo 版本号 (build 构建编号)`，并附上对应提交和构建记录。
+
+在 Release 中下载 `Pindo-版本号-macOS-universal.zip`，解压得到 `Pindo.app`；同时提供 `SHA256SUMS` 校验文件。应用兼容 Apple Silicon 和 Intel。每次成功构建保留独立 Release，最新构建会更新 Releases 的 Latest 下载入口。
+
+其他分支和 Pull Request 同样执行构建，但不自动发布 Release。所有成功构建也会提供保留 14 天的 **Artifacts → Pindo-macOS-版本号** 下载。重跑同一次工作流会更新该次 Release 的附件。
 
 发布正式版本时，推送版本标签，例如：
 
@@ -31,7 +35,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-标签构建成功后会自动创建 [GitHub Release](https://github.com/CodexSpaceSafe-Projects/pindo/releases)，附上应用压缩包和校验文件。`v0.2.0-beta.1` 会标记为预发布。应用版本取自标签，构建编号取自 Actions 运行编号。普通提交的版本号取自 `Resources/Info.plist`。
+标签构建成功后会自动创建对应版本的 [GitHub Release](https://github.com/CodexSpaceSafe-Projects/pindo/releases)，附上应用压缩包和校验文件。`v0.2.0-beta.1` 会标记为预发布，并保留已有 Latest 指向。应用版本取自标签，构建编号取自 Actions 运行编号。普通提交的版本号取自 `Resources/Info.plist`。
 
 也可以在 Mac 上运行 `PINDO_UNIVERSAL=1 bash scripts/build-app.sh` 构建通用版。当前使用临时签名，尚未配置 Apple Developer ID 签名与公证；自动构建不会绕过 macOS 的安全检查。
 
