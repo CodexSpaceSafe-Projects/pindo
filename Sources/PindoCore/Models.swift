@@ -169,7 +169,7 @@ public struct PindoDocument: Codable, Equatable, Sendable {
 
 public enum PindoError: LocalizedError {
     case invalidDay, emptyTitle, missingTask, invalidHotkey, unsupportedVersion
-    case invalidData(String), corruptFile(String), snapshotTooLarge, missingSnapshot, recoveryRequired
+    case invalidData(String), corruptFile(String), snapshotTooLarge, protectionSnapshotTooLarge, missingSnapshot, recoveryRequired
     public var errorDescription: String? {
         switch self {
         case .invalidDay: return "日期无效。"
@@ -180,6 +180,7 @@ public enum PindoError: LocalizedError {
         case .invalidData(let reason): return "资料无效：\(reason)。"
         case .corruptFile(let file): return "无法读取 \(file)，原文件已保留。"
         case .snapshotTooLarge: return "快照超过 30 MB 上限，当前资料仍会保存，旧备份已保留。"
+        case .protectionSnapshotTooLarge: return "备份容量不足，无法保留操作前的保护快照。已取消替换，当前资料和原备份已保留。"
         case .missingSnapshot: return "这个快照已不存在，可能已达到上限被清理。"
         case .recoveryRequired: return "上次恢复尚未完成，请重试恢复或重新打开 Pindo。"
         }

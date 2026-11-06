@@ -135,9 +135,7 @@ public final class PindoRepository {
         try flush()
         let target = try PindoDocument.fromSnapshot(archive.state(at: snapshotID))
         guard target != document else { return }
-        var next = archive
-        _ = try next.append(document, label: "恢复前的保护快照", now: now)
-        _ = try next.append(target, label: "恢复后的快照", now: now)
+        let next = try protectedArchive(replacingWith: target, beforeLabel: "恢复前的保护快照", afterLabel: "恢复后的快照", now: now)
         let transaction = RecoveryTransaction(document: target, archive: next)
         // The redo journal makes a crash between the two replacements recoverable.
         try io.write(DocumentCodec.encode(transaction), to: journalURL)
@@ -162,9 +160,7 @@ public final class PindoRepository {
         guard !needsRecovery else { throw PindoError.recoveryRequired }
         try flush()
         guard backupIsReadable else { throw PindoError.corruptFile("snapshots.json") }
-        var next = archive
-        _ = try next.append(document, label: "导入前的保护快照")
-        _ = try next.append(imported, label: "导入后的快照")
+        let next = try protectedArchive(replacingWith: imported, beforeLabel: "导入前的保护快照", afterLabel: "导入后的快照")
         let transaction = RecoveryTransaction(document: imported, archive: next)
         try io.write(DocumentCodec.encode(transaction), to: journalURL)
         needsRecovery = true
@@ -175,5 +171,15 @@ public final class PindoRepository {
             document = imported; archive = next; lastSnapshotState = try imported.snapshotValue()
             needsRecovery = false; hasUnsavedChanges = false
         } catch { throw PindoError.recoveryRequired }
+    }
+
+    private func protectedArchive(replacingWith target: PindoDocument, beforeLabel: String, afterLabel: String, now: Date = Date()) throws -> SnapshotArchive {
+        var next = archive
+        _ = try next.append(document, label: beforeLabel, now: now)
+        let protectionID = next.entries.last?.record.id ?? next.baselineRecord.id
+        _ = try next.append(target, label: afterLabel, now: now)
+        // Compaction must retain the previous document before we journal a replacement.
+        guard next.records.contains(where: { $0.id == protectionID }) else { throw PindoError.protectionSnapshotTooLarge }
+        return next
     }
 }

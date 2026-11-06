@@ -126,7 +126,12 @@ enum SaveState { case saved, saving, failed }
         _ = commit { $0.rollover(to: today, groupID: groupID, ungroupedOnly: onlyUngrouped) }
     }
     func move(_ task: TodoItem, offset: Int) {
-        let visible = task.phase == .inProgress ? inProgress : task.phase == .completed ? completed : pending
+        let visible: [TodoItem]
+        switch task.phase {
+        case .inProgress: visible = inProgress
+        case .completed: visible = completed
+        case .pending: visible = selectedDay == today && task.plannedDay < today ? previous : pending
+        }
         guard let i = visible.firstIndex(where: { $0.id == task.id }), visible.indices.contains(i + offset) else { return }
         let other = visible[i + offset]
         _ = commit { doc in

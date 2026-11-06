@@ -89,4 +89,50 @@ final class AppModelTests: XCTestCase {
         settings.layoutSubtreeIfNeeded()
         XCTAssertGreaterThanOrEqual(settings.fittingSize.width, 690)
     }
+
+    @MainActor func testPreviousTasksMoveWithinTheirGroupAndPersistOrder() async throws {
+        let model = try makeModel(), today = DayKey()
+        model.today = today; model.selectedDay = today
+        let group = model.document.groups[0].id
+        XCTAssertTrue(model.addTask(title: "旧任务 A", day: today.adding(days: -3), groupID: group))
+        XCTAssertTrue(model.addTask(title: "其他分组", day: today.adding(days: -2), groupID: nil))
+        XCTAssertTrue(model.addTask(title: "今天的任务", day: today, groupID: group))
+        XCTAssertTrue(model.addTask(title: "旧任务 B", day: today.adding(days: -1), groupID: group))
+        model.groupFilter = .group(group)
+        let original = model.document
+        let first = model.previous[0], second = model.previous[1]
+
+        model.move(second, offset: -1)
+
+        XCTAssertEqual(model.previous.map(\.id), [second.id, first.id])
+        XCTAssertEqual(model.pending.map(\.title), ["今天的任务"])
+        XCTAssertEqual(model.document.tasks[1], original.tasks[1])
+        XCTAssertEqual(model.document.tasks[2], original.tasks[2])
+        let reopened = try PindoRepository(directory: model.repository.directory)
+        XCTAssertEqual(reopened.document, model.document)
+
+        let afterMove = model.document
+        model.move(second, offset: -1)
+        XCTAssertEqual(model.document, afterMove)
+        model.move(second, offset: 1)
+        XCTAssertEqual(model.document, original)
+    }
+
+    @MainActor func testPastDateSortingStaysWithinTheSelectedDate() async throws {
+        let model = try makeModel(), today = DayKey()
+        let selectedDay = today.adding(days: -2)
+        model.today = today; model.selectedDay = selectedDay
+        XCTAssertTrue(model.addTask(title: "旧任务 A", day: selectedDay, groupID: nil))
+        XCTAssertTrue(model.addTask(title: "另一天的任务", day: today.adding(days: -1), groupID: nil))
+        XCTAssertTrue(model.addTask(title: "旧任务 B", day: selectedDay, groupID: nil))
+        let original = model.document
+        let first = model.pending[0], second = model.pending[1]
+
+        model.move(second, offset: -1)
+
+        XCTAssertEqual(model.pending.map(\.id), [second.id, first.id])
+        XCTAssertEqual(model.document.tasks[1], original.tasks[1])
+        model.move(second, offset: 1)
+        XCTAssertEqual(model.document, original)
+    }
 }

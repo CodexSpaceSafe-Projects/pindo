@@ -143,6 +143,48 @@ final class PindoCoreTests: XCTestCase {
         XCTAssertNil(io.files[repo.journalURL])
     }
 
+    func testRestoreRejectsCompactionThatWouldDiscardCurrentContent() throws {
+        let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
+        var item = task(); item.note = String(repeating: "甲", count: 3_400_000)
+        try repo.update { $0.tasks.append(item) }
+        _ = try repo.captureIfChanged(now: now)
+        let target = repo.archive.records.last!.id
+        try repo.stageNote(taskID: item.id, text: String(repeating: "乙", count: 3_400_000), now: now)
+        try repo.flush()
+        let documentBefore = repo.document, archiveBefore = repo.archive, filesBefore = io.files
+        let writesBefore = io.writes.count
+
+        XCTAssertThrowsError(try repo.restore(snapshotID: target, now: now)) { error in
+            guard case PindoError.protectionSnapshotTooLarge = error else { return XCTFail("Unexpected error: \(error)") }
+        }
+
+        XCTAssertTrue(repo.document == documentBefore, "Restore must preserve the current document when protection cannot fit")
+        XCTAssertTrue(repo.archive == archiveBefore, "Restore must preserve the original archive")
+        XCTAssertEqual(io.files, filesBefore)
+        XCTAssertEqual(io.writes.count, writesBefore)
+        XCTAssertNil(io.files[repo.journalURL])
+        XCTAssertFalse(repo.needsRecovery)
+    }
+
+    func testRestoreAtRetentionLimitPreservesTheExistingCurrentSnapshot() throws {
+        let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
+        try repo.update { $0.tasks.append(self.task()) }
+        for i in 0..<SnapshotArchive.maximumCount {
+            try repo.update { $0.tasks[0].note = "版本\(i)" }
+            _ = try repo.captureIfChanged(now: now.addingTimeInterval(Double(i * 30)))
+        }
+        let targetID = repo.archive.baselineRecord.id
+        let target = try PindoDocument.fromSnapshot(repo.archive.state(at: targetID))
+        let documentBefore = repo.document, protectionID = repo.archive.records.last!.id
+
+        try repo.restore(snapshotID: targetID, now: now)
+
+        XCTAssertEqual(repo.document, target)
+        XCTAssertEqual(repo.archive.count, SnapshotArchive.maximumCount)
+        XCTAssertEqual(try PindoDocument.fromSnapshot(repo.archive.state(at: protectionID)), documentBefore)
+        XCTAssertEqual(try repo.archive.validated(), repo.archive)
+    }
+
     func testInterruptedRestoreCompletesFromJournalOnReopen() throws {
         let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
         let item = task(); try repo.update { $0.tasks.append(item) }; _ = try repo.captureIfChanged(now: now)
@@ -198,6 +240,28 @@ final class PindoCoreTests: XCTestCase {
         try repo.importDocument(DocumentCodec.encode(imported))
         XCTAssertEqual(repo.document.tasks[0].title, "导入的事项")
         XCTAssertTrue(repo.archive.records.contains { $0.label == "导入前的保护快照" })
+    }
+
+    func testImportRejectsCompactionThatWouldDiscardTheExistingCurrentSnapshot() throws {
+        let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
+        var item = task(); item.note = String(repeating: "甲", count: 3_400_000)
+        try repo.update { $0.tasks.append(item) }
+        _ = try repo.captureIfChanged(now: now)
+        var imported = repo.document
+        imported.tasks[0].note = String(repeating: "乙", count: 3_400_000)
+        let documentBefore = repo.document, archiveBefore = repo.archive, filesBefore = io.files
+        let writesBefore = io.writes.count
+
+        XCTAssertThrowsError(try repo.importDocument(DocumentCodec.encode(imported))) { error in
+            guard case PindoError.protectionSnapshotTooLarge = error else { return XCTFail("Unexpected error: \(error)") }
+        }
+
+        XCTAssertTrue(repo.document == documentBefore, "Import must preserve the current document when protection cannot fit")
+        XCTAssertTrue(repo.archive == archiveBefore, "Import must preserve the original archive")
+        XCTAssertEqual(io.files, filesBefore)
+        XCTAssertEqual(io.writes.count, writesBefore)
+        XCTAssertNil(io.files[repo.journalURL])
+        XCTAssertFalse(repo.needsRecovery)
     }
 
     func testRealFilesRoundTripWithSeparatePrimaryAndBackup() throws {
