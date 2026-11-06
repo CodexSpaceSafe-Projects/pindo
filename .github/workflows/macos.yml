@@ -1,0 +1,118 @@
+name: Build macOS app
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: macos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+jobs:
+  native:
+    name: Test and build universal macOS app
+    runs-on: macos-15
+    timeout-minutes: 25
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      archive: ${{ steps.metadata.outputs.archive }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version
+      - name: Resolve app version
+        id: metadata
+        env:
+          BUILD_REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            if [[ "$BUILD_REF" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)([-+][0-9A-Za-z.+-]+)?$ ]]; then
+              version="${BASH_REMATCH[1]}"
+            else
+              echo 'Version tags must look like v1.2.3 or v1.2.3-beta.1' >&2
+              exit 1
+            fi
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'archive=Pindo-%s-macOS-universal.zip\n' "$version" >> "$GITHUB_OUTPUT"
+      - name: Core tests and native compilation
+        run: |
+          set -euo pipefail
+          swift test --jobs 4 2>&1 | tee /tmp/pindo-tests.log
+      - name: Bundle and verify application
+        env:
+          PINDO_UNIVERSAL: '1'
+          PINDO_VERSION: ${{ steps.metadata.outputs.version }}
+          PINDO_BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          bash scripts/build-app.sh 2>&1 | tee /tmp/pindo-build.log
+      - name: Smoke-launch the app
+        run: |
+          set -euo pipefail
+          app_binary="$PWD/dist/Pindo.app/Contents/MacOS/Pindo"
+          "$app_binary" > /tmp/pindo-startup.log 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true' EXIT
+          sleep 5
+          if ! kill -0 "$app_pid" 2>/dev/null; then
+            cat /tmp/pindo-startup.log
+            exit 1
+          fi
+      - name: Archive application
+        env:
+          ARCHIVE_NAME: ${{ steps.metadata.outputs.archive }}
+        run: |
+          set -euo pipefail
+          ditto -c -k --sequesterRsrc --keepParent dist/Pindo.app "dist/$ARCHIVE_NAME"
+          cd dist
+          shasum -a 256 "$ARCHIVE_NAME" > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Pindo-macOS-${{ steps.metadata.outputs.version }}
+          path: |
+            dist/Pindo-*-macOS-universal.zip
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+      - name: Annotate Swift compilation errors
+        if: failure()
+        run: python3 scripts/ci-annotate.py /tmp/pindo-tests.log /tmp/pindo-build.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macOS-build-logs
+          path: /tmp/pindo-*.log
+          if-no-files-found: ignore
+          retention-days: 7
+  release:
+    name: Publish version release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: native
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Pindo-macOS-${{ needs.native.outputs.version }}
+          path: release-files
+      - name: Publish application and checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          ARCHIVE_NAME: ${{ needs.native.outputs.archive }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            options=()
+            if [[ "$RELEASE_TAG" == *-* ]]; then options+=(--prerelease); fi
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "Pindo ${RELEASE_TAG#v}" --generate-notes "${options[@]}"
+          fi
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "release-files/$ARCHIVE_NAME" release-files/SHA256SUMS
