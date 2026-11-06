@@ -15,7 +15,7 @@ if [[ "${PINDO_UNIVERSAL:-0}" == "1" ]]; then
   swift build -c release --product Pindo --arch x86_64 --jobs "${PINDO_BUILD_JOBS:-4}"
   intel_binary_dir="$(swift build -c release --arch x86_64 --show-bin-path)"
   /usr/bin/lipo -create "$arm_binary_dir/Pindo" "$intel_binary_dir/Pindo" -output "$app_dir/Contents/MacOS/Pindo"
-  /usr/bin/lipo -verify_arch arm64 x86_64 "$app_dir/Contents/MacOS/Pindo"
+  /usr/bin/lipo "$app_dir/Contents/MacOS/Pindo" -verify_arch arm64 x86_64
 else
   swift build -c release --product Pindo --jobs "${PINDO_BUILD_JOBS:-4}"
   binary_dir="$(swift build -c release --show-bin-path)"
