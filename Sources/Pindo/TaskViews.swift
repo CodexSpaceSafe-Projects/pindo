@@ -233,7 +233,7 @@ struct NoteView: View {
     let task: TodoItem
     var onBack: (() -> Void)? = nil
     private var note: Binding<String> { Binding(get: { model.task(task.id)?.note ?? "" }, set: { model.updateNote(task.id, text: $0) }) }
-    private func finishEditing() { NSApp.keyWindow?.makeFirstResponder(nil); model.flush() }
+    private func finishEditing() { model.flush() }
     private func back() { finishEditing(); if let onBack { onBack() } else { model.leaveNote() } }
     var body: some View {
         VStack(spacing: 0) {

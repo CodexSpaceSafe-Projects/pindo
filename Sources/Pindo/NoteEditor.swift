@@ -88,6 +88,9 @@ struct NoteEditor: NSViewRepresentable {
             outsideMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self, weak scroll] event in
                 guard let self, let scroll, !self.returning, self.isOutsideEditor(event, scroll: scroll) else { return event }
                 self.returning = true
+                // Commit through this editor's window, before a settings action
+                // can move keyboard focus into a different window.
+                scroll.window?.makeFirstResponder(nil)
                 // Let AppKit finish the click/IME commit before removing the editor.
                 DispatchQueue.main.async { [weak self] in self?.parent.onOutsideClick?() }
                 return event

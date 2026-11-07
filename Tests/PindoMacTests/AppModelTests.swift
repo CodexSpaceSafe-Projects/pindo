@@ -261,7 +261,8 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(panel.styleMask.contains(.fullSizeContentView))
         XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
         XCTAssertEqual(panel.contentMinSize, NSSize(width: 360, height: 420))
-        panel.setContentSize(NSSize(width: 620, height: 780))
+        let screen = try XCTUnwrap(NSScreen.main).visibleFrame
+        panel.setContentSize(NSSize(width: min(620, screen.width - 40), height: min(560, screen.height - 40)))
         let frame = panel.frame
         panel.configurePin(false); panel.showInFront(); panel.orderOut(nil); panel.showInFront()
         XCTAssertEqual(panel.frame.size, frame.size)
@@ -274,7 +275,14 @@ final class AppModelTests: XCTestCase {
         let editor = NoteEditor(text: Binding(get: { stored }, set: { stored = $0 }))
         let coordinator = editor.makeCoordinator()
         let view = ComposingTextView()
-        view.allowsUndo = true; view.string = stored; view.delegate = coordinator
+        view.isRichText = false; view.allowsUndo = true; view.string = stored; view.delegate = coordinator
+        // Text views obtain undo from their responder/window chain in the app.
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 400), styleMask: .titled, backing: .buffered, defer: false)
+        let scroll = NSScrollView(frame: window.contentView!.bounds)
+        scroll.documentView = view; window.contentView = scroll
+        XCTAssertTrue(window.makeFirstResponder(view))
+        let undo = try XCTUnwrap(view.undoManager)
+        undo.removeAllActions()
         let source = stored as NSString
         view.setSelectedRange(NSRange(location: source.length, length: 0))
         let selection = view.selectedRange()
@@ -297,7 +305,9 @@ final class AppModelTests: XCTestCase {
         view.insertText("新", replacementRange: NSRange(location: NSNotFound, length: 0))
         coordinator.publish(view)
         XCTAssertTrue(stored.hasSuffix("新"))
-        view.undoManager?.undo()
+        view.breakUndoCoalescing()
+        XCTAssertTrue(undo.canUndo)
+        undo.undo()
         coordinator.publish(view)
         XCTAssertEqual(view.string, source as String)
         XCTAssertEqual(stored, source as String)
