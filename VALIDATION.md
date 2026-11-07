@@ -1,6 +1,15 @@
-# Validation record
+# 验证记录
 
-Current development environment: Linux x86_64, Swift 6.0.3 in Swift 5 language mode.
+## 本轮：提示音、菜单栏快捷菜单、语言和分组配色
+
+- 在 macOS 27.0.1 上用本机的 macOS 26.5 SDK 原生编译、打包并验证应用签名。已核对打包的简体中文和英文资源、翻译键和格式参数。
+- 用本机 AppKit 对添加和完成音效分别发起两次连续静音播放请求，两次都被接受。本机命令行工具未包含 XCTest，完整测试由 GitHub 的 macOS 工作流运行。
+- 实机验收：连续完成两条不同的待办，两次都应有音效；左键打开和收起清单，单击右键不打开菜单，双击右键打开菜单，逐项检查设置、退出和添加待办。
+- 在通用设置中来回切换英文、简体中文和跟随系统，检查已打开的面板、日历、设置与菜单；重启后保留选择。检查新建及已有分组的七色列表，只有点击末尾的自定义选项才打开系统颜色面板。
+
+## 之前版本的验证记录
+
+Earlier development environment: Linux x86_64, Swift 6.0.3 in Swift 5 language mode.
 
 ## Local pre-push checks
 

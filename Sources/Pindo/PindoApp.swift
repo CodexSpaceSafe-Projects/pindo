@@ -90,6 +90,7 @@ import PindoCore
             model.dismissList = { [weak self] in self?.closeList(restoreFocus: true) }
             model.hideQuickAdd = { [weak self] in self?.closeQuick() }
             model.preferencesChanged = { [weak self] in self?.apply($0) }
+            model.interfaceLanguageChanged = { [weak self] in self?.updateLanguage() }
             model.pinChanged = { [weak self] pinned in self?.applyPin(pinned) }
             model.configureHotkeys = { [weak self] in try self?.hotkeys.configure($0) }
             model.configureLogin = { enabled in if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() } }
@@ -101,33 +102,75 @@ import PindoCore
             if let button = item.button {
                 button.image = NSImage(systemSymbolName: "checklist", accessibilityDescription: "Pindo")
                 button.image?.isTemplate = true; button.imagePosition = .imageLeading
-                button.target = self; button.action = #selector(statusClicked)
-                button.sendAction(on: .leftMouseDown)
-                button.toolTip = "Pindo · 待办清单"
+                button.target = self; button.action = #selector(statusClicked(_:))
+                button.sendAction(on: [.leftMouseDown, .rightMouseDown])
             }
-            installMenu(); apply(model.document.preferences); installDismissalObservers()
+            updateLanguage(); apply(model.document.preferences); installDismissalObservers()
             NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didWake), name: NSWorkspace.didWakeNotification, object: nil)
             NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didActivateApplication(_:)), name: NSWorkspace.didActivateApplicationNotification, object: nil)
         } catch {
-            let alert = NSAlert(); alert.messageText = "Pindo 未能读取资料"; alert.informativeText = error.localizedDescription + "\n原文件不会被覆盖。"
-            alert.addButton(withTitle: "显示资料目录"); alert.addButton(withTitle: "退出")
+            let l10n = localization
+            let alert = NSAlert()
+            alert.messageText = l10n("Pindo 未能读取资料")
+            alert.informativeText = l10n.error(error) + "\n" + l10n("原文件不会被覆盖。")
+            alert.addButton(withTitle: l10n("显示资料目录")); alert.addButton(withTitle: l10n("退出"))
             if alert.runModal() == .alertFirstButtonReturn, let directory = try? PindoRepository.defaultDirectory() { NSWorkspace.shared.open(directory) }
             NSApp.terminate(nil)
         }
+    }
+
+    private var localization: PindoLocalization {
+        model?.localization ?? PindoLocalization(InterfaceLanguage(defaults: .standard))
+    }
+
+    private func updateLanguage() {
+        let l10n = localization
+        statusItem?.button?.toolTip = l10n("Pindo · 待办清单（右键双击打开菜单）")
+        settingsWindow?.title = l10n("Pindo 设置")
+        installMenu()
     }
 
     private func apply(_ preferences: Preferences) {
         switch preferences.appearance { case .system: NSApp.appearance = nil; case .light: NSApp.appearance = NSAppearance(named: .aqua); case .dark: NSApp.appearance = NSAppearance(named: .darkAqua) }
         statusItem?.button?.title = preferences.showTodayCount && (model?.todayCount ?? 0) > 0 ? " \(model!.todayCount)" : ""
         if lastPreferences?.quickAddHotkey != preferences.quickAddHotkey || lastPreferences?.listHotkey != preferences.listHotkey {
-            do { try hotkeys.configure(preferences) } catch { model?.errorMessage = error.localizedDescription }
+            do { try hotkeys.configure(preferences) } catch { model?.notice = .failure(error) }
         }
         lastPreferences = preferences
     }
 
-    @objc private func statusClicked() {
-        if let event = NSApp.currentEvent { lastStatusClickAt = event.timestamp }
+    @objc private func statusClicked(_ button: NSStatusBarButton) {
+        if let event = NSApp.currentEvent {
+            lastStatusClickAt = event.timestamp
+            if event.type == .rightMouseDown || event.type == .rightMouseUp {
+                if event.clickCount == 2 { showStatusMenu(from: button) }
+                return
+            }
+        }
         toggleList(fromStatus: true)
+    }
+
+    private func showStatusMenu(from button: NSStatusBarButton) {
+        let l10n = localization
+        let menu = NSMenu()
+        let settingsItem = NSMenuItem(title: l10n("设置"), action: nil, keyEquivalent: "")
+        settingsItem.submenu = NSMenu(title: settingsItem.title)
+        if let submenu = settingsItem.submenu {
+            submenu.addItem(settingsMenuItem(l10n, key: ""))
+            submenu.addItem(.separator())
+            submenu.addItem(quitMenuItem(l10n, key: ""))
+        }
+        menu.addItem(settingsItem)
+        let add = NSMenuItem(title: l10n("添加待办"), action: #selector(showQuickFromMenu), keyEquivalent: "")
+        add.target = self
+        menu.addItem(add)
+        let bottom = button.isFlipped ? button.bounds.maxY : button.bounds.minY
+        menu.popUp(positioning: nil, at: NSPoint(x: button.bounds.minX, y: bottom), in: button)
+    }
+
+    @objc private func showQuickFromMenu() {
+        if let panel = quickPanel, panel.isVisible { panel.showInFront() }
+        else { toggleQuick() }
     }
     @objc private func didWake() { model?.captureSnapshot() }
     func toggleList(fromStatus: Bool = false) {
@@ -141,7 +184,7 @@ import PindoCore
         if listPanel == nil {
             let panel = QuickPanel.taskPanel()
             panel.delegate = self
-            panel.contentView = glassHost(TaskPanelView(model: model).ignoresSafeArea())
+            panel.contentView = glassHost(TaskPanelView(model: model).ignoresSafeArea(), model: model)
             listPanel = panel
         }
         guard let panel = listPanel else { return }
@@ -191,7 +234,7 @@ import PindoCore
             panel.setContentSize(NSSize(width: 470, height: min(max(height, 180), 520)))
             panel.setFrameOrigin(NSPoint(x: panel.frame.minX, y: top - panel.frame.height))
             self?.keepQuickOnScreen(panel)
-        }).id(model.quickInvocationID).ignoresSafeArea())
+        }).id(model.quickInvocationID).ignoresSafeArea(), model: model)
         if let origin = quickPosition.restoredOrigin(size: panel.frame.size, visibleFrames: NSScreen.screens.map(\.visibleFrame)) {
             panel.setFrameOrigin(origin)
         } else { position(panel) }
@@ -221,9 +264,9 @@ import PindoCore
             }
         }
         localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            guard let self, event.window != nil else { return event }
+            guard let self, let window = event.window, window !== self.statusItem?.button?.window else { return event }
             // Leave auxiliary windows (date picker, context menus, IME candidates) alone.
-            if event.window === self.settingsWindow || self.belongs(event.window, to: self.listPanel) || event.window === self.statusItem?.button?.window { self.closeQuick() }
+            if window === self.settingsWindow || self.belongs(window, to: self.listPanel) { self.closeQuick() }
             if self.model?.isPinned != true && (event.window === self.settingsWindow || self.belongs(event.window, to: self.quickPanel)) { self.closeList() }
             return event
         }
@@ -263,16 +306,19 @@ import PindoCore
         closeQuick(); guard let model else { return }
         if settingsWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 620), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-            window.title = "Pindo 设置"; window.minSize = NSSize(width: 740, height: 550)
+            window.title = localization("Pindo 设置"); window.minSize = NSSize(width: 740, height: 550)
             window.isReleasedWhenClosed = false; window.delegate = self
             window.isOpaque = false; window.backgroundColor = .clear
             // The rectangular content meets the native title bar without cutouts.
-            window.contentView = glassHost(SettingsView(model: model))
+            window.contentView = glassHost(SettingsView(model: model), model: model)
             settingsWindow = window; window.center()
         }
         NSApp.activate(ignoringOtherApps: true); settingsWindow?.makeKeyAndOrderFront(nil)
     }
-    func windowWillClose(_ notification: Notification) { model?.flush() }
+    func windowWillClose(_ notification: Notification) {
+        if let window = notification.object as? NSWindow, window === settingsWindow { GroupColorEditor.shared.close() }
+        model?.flush()
+    }
     func windowDidMove(_ notification: Notification) {
         if let panel = notification.object as? QuickPanel, panel === quickPanel, panel.isVisible { quickPosition.save(frame: panel.frame) }
     }
@@ -280,7 +326,10 @@ import PindoCore
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         listPanel?.makeFirstResponder(nil); quickPanel?.makeFirstResponder(nil)
         guard model?.flush() == false else { return .terminateNow }
-        let alert = NSAlert(); alert.messageText = "还有内容未能保存"; alert.informativeText = "请保留当前文字，修复保存问题后再退出。"; alert.addButton(withTitle: "重试保存"); alert.addButton(withTitle: "取消退出")
+        let l10n = localization
+        let alert = NSAlert()
+        alert.messageText = l10n("还有内容未能保存"); alert.informativeText = l10n("请保留当前文字，修复保存问题后再退出。")
+        alert.addButton(withTitle: l10n("重试保存")); alert.addButton(withTitle: l10n("取消退出"))
         if alert.runModal() == .alertFirstButtonReturn, model?.flush() == true { return .terminateNow }
         return .terminateCancel
     }
@@ -291,26 +340,40 @@ import PindoCore
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
-    private func glassHost<V: View>(_ root: V) -> NSView {
+    private func glassHost<V: View>(_ root: V, model: AppModel) -> NSView {
         let effect = NSVisualEffectView()
         effect.material = .popover; effect.blendingMode = .behindWindow; effect.state = .active
-        let host = TransparentHostingView(rootView: root)
+        let host = TransparentHostingView(rootView: LocalizedAppContent(model: model, content: root))
         host.translatesAutoresizingMaskIntoConstraints = false
         effect.addSubview(host)
         NSLayoutConstraint.activate([host.leadingAnchor.constraint(equalTo: effect.leadingAnchor), host.trailingAnchor.constraint(equalTo: effect.trailingAnchor), host.topAnchor.constraint(equalTo: effect.topAnchor), host.bottomAnchor.constraint(equalTo: effect.bottomAnchor)])
         return effect
     }
+
+    private func settingsMenuItem(_ l10n: PindoLocalization, key: String) -> NSMenuItem {
+        let item = NSMenuItem(title: l10n("设置…"), action: #selector(showSettings), keyEquivalent: key)
+        item.target = self
+        return item
+    }
+
+    private func quitMenuItem(_ l10n: PindoLocalization, key: String) -> NSMenuItem {
+        let item = NSMenuItem(title: l10n("退出 Pindo"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: key)
+        item.target = NSApp
+        return item
+    }
+
     private func installMenu() {
+        let l10n = localization
         let main = NSMenu()
         let appItem = NSMenuItem(); let appMenu = NSMenu()
-        let settings = NSMenuItem(title: "设置…", action: #selector(showSettings), keyEquivalent: ","); settings.target = self; appMenu.addItem(settings)
-        appMenu.addItem(.separator()); appMenu.addItem(withTitle: "退出 Pindo", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(settingsMenuItem(l10n, key: ","))
+        appMenu.addItem(.separator()); appMenu.addItem(quitMenuItem(l10n, key: "q"))
         appItem.submenu = appMenu; main.addItem(appItem)
-        let editItem = NSMenuItem(); editItem.title = "编辑"; let edit = NSMenu(title: "编辑")
+        let editItem = NSMenuItem(); editItem.title = l10n("编辑"); let edit = NSMenu(title: editItem.title)
         for (title, action, key) in [("撤销", "undo:", "z"), ("剪切", "cut:", "x"), ("复制", "copy:", "c"), ("粘贴", "paste:", "v"), ("全选", "selectAll:", "a")] {
-            edit.addItem(withTitle: title, action: Selector(action), keyEquivalent: key)
+            edit.addItem(withTitle: l10n(title), action: Selector(action), keyEquivalent: key)
         }
-        let redo = NSMenuItem(title: "重做", action: Selector("redo:"), keyEquivalent: "z"); redo.keyEquivalentModifierMask = [.command, .shift]; edit.insertItem(redo, at: 1)
+        let redo = NSMenuItem(title: l10n("重做"), action: Selector("redo:"), keyEquivalent: "z"); redo.keyEquivalentModifierMask = [.command, .shift]; edit.insertItem(redo, at: 1)
         editItem.submenu = edit; main.addItem(editItem); NSApp.mainMenu = main
     }
 }

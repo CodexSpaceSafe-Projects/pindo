@@ -7,21 +7,18 @@ extension Color {
         let value = UInt64(hex.dropFirst(), radix: 16) ?? 0x9AA9AF
         self.init(red: Double((value >> 16) & 255) / 255, green: Double((value >> 8) & 255) / 255, blue: Double(value & 255) / 255)
     }
-    var hexString: String {
-        let c = NSColor(self).usingColorSpace(.deviceRGB) ?? .gray
-        return String(format: "#%02X%02X%02X", Int((c.redComponent * 255).rounded()), Int((c.greenComponent * 255).rounded()), Int((c.blueComponent * 255).rounded()))
-    }
 }
 
 struct ErrorBanner: View {
+    @Environment(\.pindoLocalization) private var l10n
     @ObservedObject var model: AppModel
     var body: some View {
         if let error = model.errorMessage {
             VStack(alignment: .leading, spacing: 7) {
                 Text(error).font(.system(size: 11)).textSelection(.enabled)
                 HStack {
-                    if model.repository.needsRecovery { Button("重试恢复") { model.retryRecovery() } }
-                    Button("关闭提示") { model.errorMessage = nil }
+                    if model.repository.needsRecovery { Button(l10n("重试恢复")) { model.retryRecovery() } }
+                    Button(l10n("关闭提示")) { model.notice = nil }
                 }.font(.system(size: 10))
             }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.red.opacity(0.09), in: RoundedRectangle(cornerRadius: 7))
@@ -31,6 +28,7 @@ struct ErrorBanner: View {
 }
 
 struct TaskDisclosure<Content: View>: View {
+    @Environment(\.pindoLocalization) private var l10n
     let title: String
     let count: Int
     @Binding var expanded: Bool
@@ -49,13 +47,14 @@ struct TaskDisclosure<Content: View>: View {
                     Spacer(minLength: 0)
                 }.font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
                     .padding(.horizontal, 8).padding(.vertical, 10).frame(maxWidth: .infinity).contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel("\(expanded ? "收起" : "展开")\(title)").accessibilityValue(expanded ? "已展开" : "已收起")
+            }.buttonStyle(.plain).accessibilityLabel(l10n(expanded ? "收起%@" : "展开%@", title)).accessibilityValue(expanded ? l10n("已展开") : l10n("已收起"))
             if expanded { content }
         }
     }
 }
 
 struct TaskPanelView: View {
+    @Environment(\.pindoLocalization) private var l10n
     @ObservedObject var model: AppModel
     @State private var datePickerOpen = false
     @State private var previousOpen = false
@@ -74,9 +73,9 @@ struct TaskPanelView: View {
                 Button { model.togglePin() } label: {
                     Image(systemName: model.isPinned ? "pin.fill" : "pin").foregroundStyle(model.isPinned ? Color.accentColor : Color.secondary)
                         .frame(width: 30, height: 30).background(model.isPinned ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 7)).contentShape(Rectangle())
-                }.help(model.isPinned ? "取消置顶，失焦后收起" : "固定面板并保持在前台").accessibilityLabel(model.isPinned ? "取消置顶" : "固定在前台")
+                }.help(model.isPinned ? l10n("取消置顶，失焦后收起") : l10n("固定面板并保持在前台")).accessibilityLabel(model.isPinned ? l10n("取消置顶") : l10n("固定在前台"))
                 Button { model.openSettings() } label: { Image(systemName: "gearshape").foregroundStyle(.secondary).frame(width: 30, height: 30).contentShape(Rectangle()) }
-                    .help("设置").accessibilityLabel("打开设置")
+                    .help(l10n("设置")).accessibilityLabel(l10n("打开设置"))
             }.buttonStyle(.plain).padding(.horizontal, 18).frame(height: 54)
             Divider()
             ErrorBanner(model: model)
@@ -101,24 +100,24 @@ struct TaskPanelView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 3) {
                 if !model.inProgress.isEmpty {
-                    Text("进行中 · \(model.inProgress.count)").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary).padding(8)
+                    Text(l10n("进行中 · %ld", model.inProgress.count)).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary).padding(8)
                     ForEach(model.inProgress) { TaskRow(model: model, task: $0) }
                 }
                 if model.selectedDay == model.today && !model.previous.isEmpty {
-                    TaskDisclosure(title: "之前未完成", count: model.previous.count, expanded: $previousOpen) {
+                    TaskDisclosure(title: l10n("之前未完成"), count: model.previous.count, expanded: $previousOpen) {
                         ForEach(model.previous) { TaskRow(model: model, task: $0) }
-                        Button("将这 \(model.previous.count) 件移到今天") { model.rollover() }.font(.system(size: 11)).buttonStyle(.borderless).padding(8)
+                        Button(l10n("将这 %ld 件移到今天", model.previous.count)) { model.rollover() }.font(.system(size: 11)).buttonStyle(.borderless).padding(8)
                     }
                 }
-                TaskDisclosure(title: "未完成", count: model.pending.count, expanded: $pendingOpen) {
+                TaskDisclosure(title: l10n("未完成"), count: model.pending.count, expanded: $pendingOpen) {
                     ForEach(model.pending) { TaskRow(model: model, task: $0) }
                     if model.pending.isEmpty {
-                        Text("想到一件事，就在下方记下来。").font(.system(size: 12)).foregroundStyle(.secondary)
+                        Text(l10n("想到一件事，就在下方记下来。")).font(.system(size: 12)).foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity).padding(.vertical, 28)
                     }
                 }
                 if !model.completed.isEmpty {
-                    TaskDisclosure(title: "已完成", count: model.completed.count, expanded: $completedOpen) {
+                    TaskDisclosure(title: l10n("已完成"), count: model.completed.count, expanded: $completedOpen) {
                         ForEach(model.completed) { TaskRow(model: model, task: $0) }
                     }
                 }
@@ -127,12 +126,12 @@ struct TaskPanelView: View {
     }
     private var composer: some View {
         HStack(spacing: 8) {
-            TextField("添加一件要做的事…", text: $model.listEntry).textFieldStyle(.plain).focused($entryFocused)
+            TextField(l10n("添加一件要做的事…"), text: $model.listEntry).textFieldStyle(.plain).focused($entryFocused)
                 .onChange(of: model.listEntry) { _, _ in model.scheduleDraftSave() }
                 .onSubmit { if model.submitListEntry() { entryFocused = true } }
             GroupSelectionMenu(groups: model.document.groups, selection: $model.listEntryGroupID)
             Button { if model.submitListEntry() { entryFocused = true } } label: { Image(systemName: "return").frame(width: 24, height: 25).contentShape(Rectangle()) }
-                .buttonStyle(.plain).help("添加待办").accessibilityLabel("添加待办")
+                .buttonStyle(.plain).help(l10n("添加待办")).accessibilityLabel(l10n("添加待办"))
                 .disabled(model.listEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }.font(.system(size: 13)).padding(12)
             .background(Color(nsColor: .textBackgroundColor).opacity(0.75), in: RoundedRectangle(cornerRadius: 11))
@@ -140,19 +139,19 @@ struct TaskPanelView: View {
     }
     private var dateBar: some View {
         HStack(spacing: 3) {
-            Button { model.selectedDay = model.selectedDay.adding(days: -1) } label: { Image(systemName: "chevron.left").frame(width: 22, height: 32) }.accessibilityLabel("前一天")
+            Button { model.selectedDay = model.selectedDay.adding(days: -1) } label: { Image(systemName: "chevron.left").frame(width: 22, height: 32) }.accessibilityLabel(l10n("前一天"))
             Button { datePickerOpen.toggle() } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "calendar").foregroundStyle(Color.accentColor)
-                    Text(model.selectedDay.date().formatted(.dateTime.month().day()))
+                    Text(model.selectedDay.date().formatted(.dateTime.month().day().locale(l10n.locale)))
                     Text(dayTitle).foregroundStyle(.secondary)
                 }.lineLimit(1).frame(height: 32).contentShape(Rectangle())
             }.popover(isPresented: $datePickerOpen) { TaskCalendarView(model: model) { datePickerOpen = false } }
-            Button { model.selectedDay = model.selectedDay.adding(days: 1) } label: { Image(systemName: "chevron.right").frame(width: 22, height: 32) }.accessibilityLabel("后一天")
+            Button { model.selectedDay = model.selectedDay.adding(days: 1) } label: { Image(systemName: "chevron.right").frame(width: 22, height: 32) }.accessibilityLabel(l10n("后一天"))
             Spacer(minLength: 8)
             Menu {
-                GroupMenuChoice(title: "全部分组", selected: model.groupFilter == .all) { model.groupFilter = .all }
-                GroupMenuChoice(title: "未分组", selected: model.groupFilter == .ungrouped) { model.groupFilter = .ungrouped }
+                GroupMenuChoice(title: l10n("全部分组"), selected: model.groupFilter == .all) { model.groupFilter = .all }
+                GroupMenuChoice(title: l10n("未分组"), selected: model.groupFilter == .ungrouped) { model.groupFilter = .ungrouped }
                 ForEach(model.document.groups) { group in
                     GroupMenuChoice(title: group.name, selected: model.groupFilter == .group(group.id)) { model.groupFilter = .group(group.id) }
                 }
@@ -165,26 +164,27 @@ struct TaskPanelView: View {
                     .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 7))
                     .overlay(RoundedRectangle(cornerRadius: 7).stroke(.primary.opacity(0.12)))
             }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize(horizontal: false, vertical: true).frame(maxWidth: 155)
-                .help("筛选待办分组").accessibilityLabel("筛选分组：\(groupTitle)")
+                .help(l10n("筛选待办分组")).accessibilityLabel(l10n("筛选分组：%@", groupTitle))
         }.font(.system(size: 11)).buttonStyle(.plain).padding(.horizontal, 12).frame(height: 50)
             .background(DayScrollMonitor { model.selectedDay = model.selectedDay.adding(days: $0) })
     }
     private var dayTitle: String {
-        if model.selectedDay == model.today { return "今天" }
-        if model.selectedDay == model.today.adding(days: -1) { return "昨天" }
-        if model.selectedDay == model.today.adding(days: 1) { return "明天" }
-        return model.selectedDay.date().formatted(.dateTime.weekday())
+        if model.selectedDay == model.today { return l10n("今天") }
+        if model.selectedDay == model.today.adding(days: -1) { return l10n("昨天") }
+        if model.selectedDay == model.today.adding(days: 1) { return l10n("明天") }
+        return model.selectedDay.date().formatted(.dateTime.weekday().locale(l10n.locale))
     }
     private var groupTitle: String {
         switch model.groupFilter {
-        case .all: return "全部分组"
-        case .ungrouped: return "未分组"
-        case .group(let id): return model.group(id)?.name ?? "全部分组"
+        case .all: return l10n("全部分组")
+        case .ungrouped: return l10n("未分组")
+        case .group(let id): return model.group(id)?.name ?? l10n("全部分组")
         }
     }
 }
 
 struct TaskRow: View {
+    @Environment(\.pindoLocalization) private var l10n
     @ObservedObject var model: AppModel
     let task: TodoItem
     @State private var hovered = false
@@ -194,37 +194,38 @@ struct TaskRow: View {
             Button { model.setPhase(task, task.phase == .completed ? .pending : .completed) } label: {
                 Image(systemName: task.phase == .completed ? "checkmark.circle.fill" : "circle").font(.system(size: 19, weight: .light)).foregroundStyle(task.phase == .completed ? Color.green : Color.secondary)
                     .frame(width: 25, height: 26)
-            }.buttonStyle(.plain).accessibilityLabel(task.phase == .completed ? "恢复未完成：\(task.title)" : "完成：\(task.title)")
+            }.buttonStyle(.plain).accessibilityLabel(task.phase == .completed ? l10n("恢复未完成：%@", task.title) : l10n("完成：%@", task.title))
             Button { model.noteID = task.id } label: {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 5) {
                         Text(task.title).font(.system(size: 14)).strikethrough(task.phase == .completed).fixedSize(horizontal: false, vertical: true)
                         if !task.note.isEmpty { Image(systemName: "note.text").font(.system(size: 9)).foregroundStyle(.secondary) }
                     }
-                    Text(model.group(task.groupID)?.name ?? "未分组").font(.system(size: 11)).foregroundStyle(groupColor)
+                    Text(model.group(task.groupID)?.name ?? l10n("未分组")).font(.system(size: 11)).foregroundStyle(groupColor)
                 }.foregroundStyle(task.phase == .completed ? Color.secondary : Color.primary)
                     .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel("打开备注：\(task.title)")
+            }.buttonStyle(.plain).accessibilityLabel(l10n("打开备注：%@", task.title))
             Button { model.editingID = task.id } label: { Image(systemName: "pencil").frame(width: 20, height: 25) }
-                .buttonStyle(.borderless).help("修改待办")
+                .buttonStyle(.borderless).help(l10n("修改待办"))
         }.padding(.leading, 16).padding(.trailing, 10).padding(.vertical, 10)
             .modifier(GroupStripe(color: groupColor))
             .background(hovered ? Color.primary.opacity(0.045) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
             .onHover { hovered = $0 }
             .contextMenu {
-                Button("打开备注") { model.noteID = task.id }
-                Button("复制内容") { _ = model.copyTask(task) }
-                if task.phase == .pending { Button("标记进行中") { model.setPhase(task, .inProgress) } }
-                if task.phase == .inProgress { Button("移回未完成") { model.setPhase(task, .pending) } }
+                Button(l10n("打开备注")) { model.noteID = task.id }
+                Button(l10n("复制内容")) { _ = model.copyTask(task) }
+                if task.phase == .pending { Button(l10n("标记进行中")) { model.setPhase(task, .inProgress) } }
+                if task.phase == .inProgress { Button(l10n("移回未完成")) { model.setPhase(task, .pending) } }
                 Divider()
-                Button("上移") { model.move(task, offset: -1) }; Button("下移") { model.move(task, offset: 1) }
-                Button("修改待办") { model.editingID = task.id }
-                Button("删除", role: .destructive) { model.delete(task) }
+                Button(l10n("上移")) { model.move(task, offset: -1) }; Button(l10n("下移")) { model.move(task, offset: 1) }
+                Button(l10n("修改待办")) { model.editingID = task.id }
+                Button(l10n("删除"), role: .destructive) { model.delete(task) }
             }
     }
 }
 
 struct NoteView: View {
+    @Environment(\.pindoLocalization) private var l10n
     @ObservedObject var model: AppModel
     let task: TodoItem
     var onBack: (() -> Void)? = nil
@@ -235,7 +236,7 @@ struct NoteView: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 5) {
                 Text(task.title).font(.system(size: 20, weight: .semibold)).lineLimit(2)
-                Text("\(model.group(task.groupID)?.name ?? "未分组") · \(task.plannedDay.date().formatted(.dateTime.month().day()))")
+                Text("\(model.group(task.groupID)?.name ?? l10n("未分组")) · \(task.plannedDay.date().formatted(.dateTime.month().day().locale(l10n.locale)))")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }.frame(maxWidth: .infinity, alignment: .leading).padding(18)
             NoteEditor(text: note, onOutsideClick: back).id(task.id)
@@ -243,14 +244,15 @@ struct NoteView: View {
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(.primary.opacity(0.06)))
                 .padding(.horizontal, 14)
             HStack {
-                Text(model.saveState == .saving ? "保存中…" : model.saveState == .failed ? "未保存" : "已保存")
-                Spacer(); Text("点击编辑区外返回 · Esc"); Text("\(note.wrappedValue.count) 字")
+                Text(model.saveState == .saving ? l10n("保存中…") : model.saveState == .failed ? l10n("未保存") : l10n("已保存"))
+                Spacer(); Text(l10n("点击编辑区外返回 · Esc")); Text(l10n("%ld 字", note.wrappedValue.count))
             }.font(.system(size: 10)).foregroundStyle(.secondary).padding(16)
         }.frame(maxWidth: .infinity, maxHeight: .infinity).onDisappear { model.flush() }
     }
 }
 
 struct EditTaskView: View {
+    @Environment(\.pindoLocalization) private var l10n
     @ObservedObject var model: AppModel
     let task: TodoItem
     @State private var title: String
@@ -260,11 +262,11 @@ struct EditTaskView: View {
     init(model: AppModel, task: TodoItem, dismiss: (() -> Void)? = nil) { self.model = model; self.task = task; self.dismiss = dismiss; _title = State(initialValue: task.title); _day = State(initialValue: task.plannedDay.date()); _groupID = State(initialValue: task.groupID) }
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("修改待办").font(.headline)
-            TextField("事项内容", text: $title).onSubmit(save)
-            DatePicker("计划日期", selection: $day, displayedComponents: .date)
-            Picker("分组", selection: $groupID) { Text("未分组").tag(UUID?.none); ForEach(model.document.groups) { Text($0.name).tag(Optional($0.id)) } }
-            HStack { Button("删除", role: .destructive) { model.delete(task); close() }; Spacer(); Button("取消") { close() }.keyboardShortcut(.cancelAction); Button("完成", action: save).keyboardShortcut(.defaultAction).disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+            Text(l10n("修改待办")).font(.headline)
+            TextField(l10n("事项内容"), text: $title).onSubmit(save)
+            DatePicker(l10n("计划日期"), selection: $day, displayedComponents: .date)
+            Picker(l10n("分组"), selection: $groupID) { Text(l10n("未分组")).tag(UUID?.none); ForEach(model.document.groups) { Text($0.name).tag(Optional($0.id)) } }
+            HStack { Button(l10n("删除"), role: .destructive) { model.delete(task); close() }; Spacer(); Button(l10n("取消")) { close() }.keyboardShortcut(.cancelAction); Button(l10n("完成"), action: save).keyboardShortcut(.defaultAction).disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
         }.padding(24).frame(width: 340)
     }
     private func close() { if let dismiss { dismiss() } else { model.editingID = nil } }
@@ -272,6 +274,7 @@ struct EditTaskView: View {
 }
 
 struct QuickAddView: View {
+    @Environment(\.pindoLocalization) private var l10n
     @ObservedObject var model: AppModel
     var sizeChanged: (CGFloat) -> Void
     @State private var date = Date()
@@ -284,20 +287,20 @@ struct QuickAddView: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
-            HStack { Label("Pindo", systemImage: "checklist").fontWeight(.semibold); Text("快速记录待办").foregroundStyle(.secondary); Spacer(); Button("esc") { model.hideQuickAdd() }.buttonStyle(.plain).foregroundStyle(.secondary) }.font(.system(size: 12))
+            HStack { Label("Pindo", systemImage: "checklist").fontWeight(.semibold); Text(l10n("快速记录待办")).foregroundStyle(.secondary); Spacer(); Button("esc") { model.hideQuickAdd() }.buttonStyle(.plain).foregroundStyle(.secondary) }.font(.system(size: 12))
             HStack(spacing: 10) {
-                TextField("有什么要做的？", text: $model.quickTitle).font(.system(size: 19)).textFieldStyle(.plain).focused($titleFocused).onSubmit(save).onChange(of: model.quickTitle) { _, _ in model.scheduleDraftSave() }
+                TextField(l10n("有什么要做的？"), text: $model.quickTitle).font(.system(size: 19)).textFieldStyle(.plain).focused($titleFocused).onSubmit(save).onChange(of: model.quickTitle) { _, _ in model.scheduleDraftSave() }
                 GroupSelectionMenu(groups: model.document.groups, selection: $groupID)
             }
             HStack {
-                DatePicker("日期", selection: $date, displayedComponents: .date).labelsHidden().fixedSize()
-                Spacer(); Button(showNote ? "收起备注" : "添加备注") { showNote.toggle() }.font(.system(size: 11))
+                DatePicker(l10n("日期"), selection: $date, displayedComponents: .date).labelsHidden().fixedSize()
+                Spacer(); Button(showNote ? l10n("收起备注") : l10n("添加备注")) { showNote.toggle() }.font(.system(size: 11))
             }.controlSize(.small)
             if showNote {
-                NoteEditor(text: $model.quickNote, accessibilityName: "快速记录备注").font(.system(size: 12)).frame(height: 100).padding(5).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 6)).onChange(of: model.quickNote) { _, _ in model.scheduleDraftSave() }
+                NoteEditor(text: $model.quickNote, accessibilityName: l10n("快速记录备注")).font(.system(size: 12)).frame(height: 100).padding(5).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 6)).onChange(of: model.quickNote) { _, _ in model.scheduleDraftSave() }
             }
             ErrorBanner(model: model)
-            HStack { Text(showNote ? "备注中 ⌘↵ 添加 · Esc 保留草稿" : "Return 添加 · Esc 保留草稿").font(.system(size: 10)).foregroundStyle(.secondary); Spacer(); Button("添加待办", action: save).keyboardShortcut(.return, modifiers: .command).disabled(model.quickTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+            HStack { Text(showNote ? l10n("备注中 ⌘↵ 添加 · Esc 保留草稿") : l10n("Return 添加 · Esc 保留草稿")).font(.system(size: 10)).foregroundStyle(.secondary); Spacer(); Button(l10n("添加待办"), action: save).keyboardShortcut(.return, modifiers: .command).disabled(model.quickTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
         }.padding(20).frame(width: 470).fixedSize(horizontal: false, vertical: true)
             .background(GeometryReader { proxy in
                 Color.clear.onAppear { sizeChanged(proxy.size.height) }.onChange(of: proxy.size.height) { _, height in sizeChanged(height) }

@@ -2,6 +2,10 @@ import AppKit
 import Carbon
 import PindoCore
 
+enum HotkeyRegistrationError: Error {
+    case handlerUnavailable, unavailable(String)
+}
+
 @MainActor final class GlobalHotkeys {
     enum Action { case quickAdd, showList }
     private struct Registration {
@@ -38,7 +42,7 @@ import PindoCore
     func configure(_ preferences: Preferences) throws {
         guard preferences.quickAddHotkey.isValid, preferences.listHotkey.isValid,
               !preferences.quickAddHotkey.matches(preferences.listHotkey) else { throw PindoError.invalidHotkey }
-        guard handler != nil else { throw PindoError.invalidData("系统热键处理器未能启动") }
+        guard handler != nil else { throw HotkeyRegistrationError.handlerUnavailable }
         let desired: [(Action, HotkeyBinding)] = [(.quickAdd, preferences.quickAddHotkey), (.showList, preferences.listHotkey)]
         var next: [Registration] = [], created: [Registration] = [], nextActions: [UInt32: Action] = [:]
         do {
@@ -54,7 +58,7 @@ import PindoCore
                 let identifier = nextID; nextID += 1
                 var ref: EventHotKeyRef?
                 let status = RegisterEventHotKey(binding.keyCode, carbon, EventHotKeyID(signature: 0x50494E44, id: identifier), GetApplicationEventTarget(), 0, &ref)
-                guard status == noErr, let ref else { throw PindoError.invalidData("快捷键 \(binding.display) 未能注册，可能已被占用；原快捷键保留") }
+                guard status == noErr, let ref else { throw HotkeyRegistrationError.unavailable(binding.display) }
                 let item = Registration(id: identifier, binding: binding, reference: ref)
                 created.append(item); next.append(item); nextActions[identifier] = action
             }

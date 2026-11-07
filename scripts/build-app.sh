@@ -22,6 +22,12 @@ else
   cp "$binary_dir/Pindo" "$app_dir/Contents/MacOS/Pindo"
 fi
 cp "$repo_dir/Resources/Info.plist" "$app_dir/Contents/Info.plist"
+for language in en zh-Hans; do
+  translations="$repo_dir/Sources/Pindo/Resources/$language.lproj/Pindo.strings"
+  /usr/bin/plutil -lint "$translations"
+  mkdir -p "$app_dir/Contents/Resources/$language.lproj"
+  cp "$translations" "$app_dir/Contents/Resources/$language.lproj/Pindo.strings"
+done
 if [[ -n "${PINDO_VERSION:-}" ]]; then
   [[ "$PINDO_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "PINDO_VERSION must be X.Y.Z" >&2; exit 1; }
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $PINDO_VERSION" "$app_dir/Contents/Info.plist"

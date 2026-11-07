@@ -16,4 +16,6 @@
 - Quick add also uses a native titled, full-size, nonactivating frame. Hosting surfaces have no additional rounded mask; settings content meets its title bar with square corners. Quick add persists its top-left anchor, clamps to visible displays and preserves the anchor when note height changes.
 - Status-item actions toggle from `isVisible`, without relying on asynchronous occlusion updates. Menu-bar clicks must be excluded from outside dismissal; group menus contain direct actions rather than nested Pickers.
 - Play feedback only after successful task creation or an actual transition to completed. Use the injected callback for tests; never play success feedback on failed writes.
+- 每次播放从系统命名音效复制出独立实例，并在播放结束后释放，避免快速操作复用正在播放的音效。
+- 应用自有文案通过 `PindoLocalization` 选择语言。新增界面文案时同步更新 `Sources/Pindo/Resources/` 内的简体中文和英文资源，保留格式参数的类型。打包时将两套资源复制进应用包；语言选择保存在本机偏好中，不进入待办备份。
 - Source design and implementation are independent of the MIT reference projects. No source files or dependencies from those projects are bundled.

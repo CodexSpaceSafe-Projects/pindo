@@ -52,7 +52,7 @@ public final class PindoRepository {
         try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("Pindo", isDirectory: true)
     }
 
-    public init(directory: URL, io: StorageIO = FileStorage(), now: Date = Date()) throws {
+    public init(directory: URL, io: StorageIO = FileStorage(), now: Date = Date(), initialDocument: @autoclosure () -> PindoDocument = PindoDocument()) throws {
         self.directory = directory; self.io = io
         try io.createDirectory(directory)
         try io.createDirectory(directory.appendingPathComponent("Backups"))
@@ -74,7 +74,7 @@ public final class PindoRepository {
             do { document = try DocumentCodec.decode(PindoDocument.self, from: bytes).validated() }
             catch { throw PindoError.corruptFile("data.json") }
         } else {
-            document = PindoDocument()
+            document = try initialDocument().validated()
             try io.write(DocumentCodec.encode(document), to: dataURL)
         }
         archive = try SnapshotArchive(document: document, now: now)

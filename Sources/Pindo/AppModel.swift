@@ -14,11 +14,12 @@ enum SaveState { case saved, saving, failed }
     @Published var listEntryGroupID: UUID?
     @Published var noteID: UUID?
     @Published var editingID: UUID?
-    @Published var errorMessage: String?
+    @Published var notice: PindoNotice?
+    @Published private(set) var interfaceLanguage: InterfaceLanguage
     @Published var saveState = SaveState.saved
     @Published var snapshotRecords: [SnapshotRecord] = []
     @Published var snapshotBytes = 0
-    @Published var backupWarning: String?
+    @Published private var snapshotFailure: Error?
     @Published var quickTitle: String
     @Published var quickNote: String
     @Published var listEntry: String
@@ -28,6 +29,7 @@ enum SaveState { case saved, saving, failed }
     var dismissList: () -> Void = {}
     var hideQuickAdd: () -> Void = {}
     var preferencesChanged: (Preferences) -> Void = { _ in }
+    var interfaceLanguageChanged: () -> Void = {}
     var configureHotkeys: ((Preferences) throws -> Void)?
     var configureLogin: ((Bool) throws -> Void)?
     var pinChanged: (Bool) -> Void = { _ in }
@@ -37,22 +39,39 @@ enum SaveState { case saved, saving, failed }
         return pasteboard.setString(text, forType: .string)
     }
     private(set) var repository: PindoRepository
+    private let defaults: UserDefaults
     private var noteSave: Task<Void, Never>?
     private var draftSave: Task<Void, Never>?
     private var snapshotTimer: Timer?
 
-    init(directory: URL) throws {
-        repository = try PindoRepository(directory: directory)
+    init(directory: URL, defaults: UserDefaults = .standard) throws {
+        self.defaults = defaults
+        let language = InterfaceLanguage(defaults: defaults)
+        interfaceLanguage = language
+        repository = try PindoRepository(directory: directory, initialDocument: PindoLocalization(language).initialDocument)
         document = repository.document
         listEntryGroupID = repository.document.preferences.defaultGroupID
-        quickTitle = UserDefaults.standard.string(forKey: "quickTitle") ?? ""
-        quickNote = UserDefaults.standard.string(forKey: "quickNote") ?? ""
-        listEntry = UserDefaults.standard.string(forKey: "listEntry") ?? ""
+        quickTitle = defaults.string(forKey: "quickTitle") ?? ""
+        quickNote = defaults.string(forKey: "quickNote") ?? ""
+        listEntry = defaults.string(forKey: "listEntry") ?? ""
         refreshSnapshots()
         snapshotTimer = Timer.scheduledTimer(withTimeInterval: SnapshotArchive.interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.captureSnapshot() }
         }
         RunLoop.main.add(snapshotTimer!, forMode: .common)
+    }
+
+    var localization: PindoLocalization { PindoLocalization(interfaceLanguage) }
+    var errorMessage: String? { notice?.resolve(in: localization) }
+    var backupWarning: String? {
+        snapshotFailure.map { localization.error($0) } ?? repository.backupWarning.map { localization($0) }
+    }
+
+    func setInterfaceLanguage(_ language: InterfaceLanguage) {
+        guard interfaceLanguage != language else { return }
+        defaults.set(language.rawValue, forKey: InterfaceLanguage.defaultsKey)
+        interfaceLanguage = language
+        interfaceLanguageChanged()
     }
 
     func task(_ id: UUID) -> TodoItem? { document.tasks.first { $0.id == id } }
@@ -91,13 +110,13 @@ enum SaveState { case saved, saving, failed }
             if let id = listEntryGroupID, group(id) == nil { resetListEntryGroup() }
             preferencesChanged(document.preferences)
             return true
-        } catch { saveState = .failed; errorMessage = error.localizedDescription; return false }
+        } catch { saveState = .failed; notice = .failure(error); return false }
     }
 
     func updateNote(_ id: UUID, text: String) {
         guard task(id)?.note != text else { return }
         do { try repository.stageNote(taskID: id, text: text); document = repository.document; saveState = .saving }
-        catch { errorMessage = error.localizedDescription; return }
+        catch { notice = .failure(error); return }
         noteSave?.cancel()
         noteSave = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: 600_000_000) } catch { return }
@@ -107,7 +126,7 @@ enum SaveState { case saved, saving, failed }
     @discardableResult func flush() -> Bool {
         noteSave?.cancel(); persistDrafts()
         do { try repository.flush(); saveState = .saved; return true }
-        catch { saveState = .failed; errorMessage = error.localizedDescription; return false }
+        catch { saveState = .failed; notice = .failure(error); return false }
     }
     func scheduleDraftSave() {
         draftSave?.cancel(); draftSave = Task { [weak self] in
@@ -117,7 +136,6 @@ enum SaveState { case saved, saving, failed }
     }
     func persistDrafts() {
         draftSave?.cancel()
-        let defaults = UserDefaults.standard
         defaults.set(quickTitle, forKey: "quickTitle"); defaults.set(quickNote, forKey: "quickNote"); defaults.set(listEntry, forKey: "listEntry")
     }
     func leaveNote() { _ = flush(); noteID = nil }
@@ -164,7 +182,7 @@ enum SaveState { case saved, saving, failed }
 
     func copyTask(_ task: TodoItem) -> Bool {
         let text = task.title + (task.note.isEmpty ? "" : "\n\n" + task.note)
-        guard writeClipboard(text) else { errorMessage = "未能复制待办内容。"; return false }
+        guard writeClipboard(text) else { notice = .text("未能复制待办内容。"); return false }
         return true
     }
 
@@ -180,14 +198,14 @@ enum SaveState { case saved, saving, failed }
             try configureHotkeys?(next)
             if commit({ $0.preferences = next }) { return true }
             try? configureHotkeys?(previous); return false
-        } catch { errorMessage = error.localizedDescription; return false }
+        } catch { notice = .failure(error); return false }
     }
     func setLogin(_ enabled: Bool) {
         do {
             try configureLogin?(enabled)
             let previous = document.preferences.launchAtLogin
             if !commit({ $0.preferences.launchAtLogin = enabled }) { try? configureLogin?(previous) }
-        } catch { errorMessage = "登录启动未能更新：\(error.localizedDescription)" }
+        } catch { notice = .failure(error, context: "登录启动未能更新：%@") }
     }
     func saveGroup(id: UUID, name: String? = nil, color: String? = nil) {
         _ = commit { doc in
@@ -205,15 +223,14 @@ enum SaveState { case saved, saving, failed }
         let newToday = DayKey()
         if today != newToday { if selectedDay == today { selectedDay = newToday }; today = newToday }
         guard flush() else { return }
-        do { _ = try repository.captureIfChanged() }
-        catch { backupWarning = error.localizedDescription }
+        do { _ = try repository.captureIfChanged(); snapshotFailure = nil }
+        catch { snapshotFailure = error }
         refreshSnapshots()
         preferencesChanged(document.preferences)
     }
     func refreshSnapshots() {
         snapshotRecords = repository.archive.records.reversed()
         snapshotBytes = (try? DocumentCodec.encode(repository.archive).count) ?? 0
-        backupWarning = repository.backupWarning
     }
     func restore(_ id: UUID) {
         guard flush() else { return }
@@ -224,17 +241,18 @@ enum SaveState { case saved, saving, failed }
             resetListEntryGroup()
             if case .group(let groupID) = groupFilter, group(groupID) == nil { groupFilter = .all }
             preferencesChanged(document.preferences); refreshSnapshots()
-            if oldLogin != document.preferences.launchAtLogin { do { try configureLogin?(document.preferences.launchAtLogin) } catch { errorMessage = "资料已恢复，但登录启动未更新：\(error.localizedDescription)" } }
-        } catch { errorMessage = error.localizedDescription; refreshSnapshots() }
+            if oldLogin != document.preferences.launchAtLogin { do { try configureLogin?(document.preferences.launchAtLogin) } catch { notice = .failure(error, context: "资料已恢复，但登录启动未更新：%@") } }
+        } catch { notice = .failure(error); refreshSnapshots() }
     }
     func retryRecovery() {
         do {
-            repository = try PindoRepository(directory: repository.directory)
+            repository = try PindoRepository(directory: repository.directory, initialDocument: localization.initialDocument)
+            snapshotFailure = nil
             let oldLogin = document.preferences.launchAtLogin
             document = repository.document; noteID = nil; editingID = nil; groupFilter = .all; saveState = .saved
-            preferencesChanged(document.preferences); refreshSnapshots(); errorMessage = nil
+            preferencesChanged(document.preferences); refreshSnapshots(); notice = nil
             if oldLogin != document.preferences.launchAtLogin { try configureLogin?(document.preferences.launchAtLogin) }
-        } catch { errorMessage = error.localizedDescription }
+        } catch { notice = .failure(error) }
     }
     func export(backup: Bool) {
         guard flush() else { return }
@@ -242,18 +260,23 @@ enum SaveState { case saved, saving, failed }
         panel.allowedContentTypes = [.json]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do { let bytes = try backup ? repository.exportSnapshots() : repository.exportDocument(); try bytes.write(to: url, options: .atomic) }
-        catch { errorMessage = error.localizedDescription }
+        catch { notice = .failure(error) }
     }
     func importData() {
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.json]; panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let alert = NSAlert(); alert.messageText = "导入并替换当前资料？"; alert.informativeText = "当前资料会先建立保护快照。"; alert.addButton(withTitle: "导入"); alert.addButton(withTitle: "取消")
+        let l10n = localization
+        let alert = NSAlert()
+        alert.messageText = l10n("导入并替换当前资料？")
+        alert.informativeText = l10n("当前资料会先建立保护快照。")
+        alert.addButton(withTitle: l10n("导入"))
+        alert.addButton(withTitle: l10n("取消"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
             let oldLogin = document.preferences.launchAtLogin
             try repository.importDocument(Data(contentsOf: url)); document = repository.document; noteID = nil; editingID = nil; groupFilter = .all
             preferencesChanged(document.preferences); refreshSnapshots()
             if oldLogin != document.preferences.launchAtLogin { try configureLogin?(document.preferences.launchAtLogin) }
-        } catch { errorMessage = error.localizedDescription }
+        } catch { notice = .failure(error) }
     }
 }

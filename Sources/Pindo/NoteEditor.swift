@@ -3,8 +3,9 @@ import SwiftUI
 
 /// Keeps the native text view and its input-method session alive across SwiftUI updates.
 struct NoteEditor: NSViewRepresentable {
+    @Environment(\.pindoLocalization) private var l10n
     @Binding var text: String
-    var accessibilityName = "待办备注内容"
+    var accessibilityName: String? = nil
     var onOutsideClick: (() -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -22,7 +23,7 @@ struct NoteEditor: NSViewRepresentable {
         view.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         view.textContainerInset = NSSize(width: 14, height: 14)
         view.string = text; view.delegate = context.coordinator
-        view.setAccessibilityLabel(accessibilityName)
+        view.setAccessibilityLabel(accessibilityName ?? l10n("待办备注内容"))
         view.didCommitText = { [weak coordinator = context.coordinator, weak view] in
             if let view { coordinator?.publish(view) }
         }
@@ -33,7 +34,11 @@ struct NoteEditor: NSViewRepresentable {
     }
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
-        if let view = scroll.documentView as? ComposingTextView { context.coordinator.synchronize(view, text: text) }
+        if let view = scroll.documentView as? ComposingTextView {
+            let label = accessibilityName ?? l10n("待办备注内容")
+            if view.accessibilityLabel() != label { view.setAccessibilityLabel(label) }
+            context.coordinator.synchronize(view, text: text)
+        }
     }
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) { coordinator.removeOutsideMonitor() }
 

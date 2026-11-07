@@ -8,8 +8,8 @@ var targets: [Target] = [
 ]
 #if os(macOS)
 products.append(.executable(name: "Pindo", targets: ["Pindo"]))
-targets.append(.executableTarget(name: "Pindo", dependencies: ["PindoCore"]))
+targets.append(.executableTarget(name: "Pindo", dependencies: ["PindoCore"], resources: [.process("Resources")]))
 targets.append(.testTarget(name: "PindoMacTests", dependencies: ["Pindo", "PindoCore"]))
 #endif
 
-let package = Package(name: "Pindo", platforms: [.macOS(.v14)], products: products, targets: targets)
+let package = Package(name: "Pindo", defaultLocalization: "en", platforms: [.macOS(.v14)], products: products, targets: targets)

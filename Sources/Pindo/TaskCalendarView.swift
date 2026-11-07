@@ -2,6 +2,7 @@ import SwiftUI
 import PindoCore
 
 struct TaskCalendarView: View {
+    @Environment(\.pindoLocalization) private var l10n
     @ObservedObject var model: AppModel
     let dismiss: () -> Void
     @State private var month: DayKey
@@ -11,28 +12,36 @@ struct TaskCalendarView: View {
         _month = State(initialValue: model.selectedDay)
     }
 
+    private var weekdayTitles: [String] {
+        let formatter = DateFormatter()
+        formatter.locale = l10n.locale
+        formatter.calendar = Calendar(identifier: .gregorian)
+        let symbols = formatter.shortStandaloneWeekdaySymbols ?? []
+        return Array(symbols.dropFirst()) + symbols.prefix(1)
+    }
+
     var body: some View {
         let counts = DayTaskCount.grouped(model.document.tasks.filter(model.matches))
         VStack(spacing: 14) {
             HStack(spacing: 12) {
-                Text(month.date().formatted(.dateTime.year().month(.wide))).font(.system(size: 16, weight: .semibold))
+                Text(month.date().formatted(.dateTime.year().month(.wide).locale(l10n.locale))).font(.system(size: 16, weight: .semibold))
                 Spacer()
-                Button("今天") { model.selectedDay = model.today; dismiss() }.controlSize(.small)
-                Button { month = CalendarMonth.shifting(month, months: -1) } label: { Image(systemName: "chevron.left").frame(width: 24, height: 26) }.accessibilityLabel("上个月")
-                Button { month = CalendarMonth.shifting(month, months: 1) } label: { Image(systemName: "chevron.right").frame(width: 24, height: 26) }.accessibilityLabel("下个月")
+                Button(l10n("今天")) { model.selectedDay = model.today; dismiss() }.controlSize(.small)
+                Button { month = CalendarMonth.shifting(month, months: -1) } label: { Image(systemName: "chevron.left").frame(width: 24, height: 26) }.accessibilityLabel(l10n("上个月"))
+                Button { month = CalendarMonth.shifting(month, months: 1) } label: { Image(systemName: "chevron.right").frame(width: 24, height: 26) }.accessibilityLabel(l10n("下个月"))
             }.buttonStyle(.borderless)
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 7), spacing: 5) {
-                ForEach(["一", "二", "三", "四", "五", "六", "日"], id: \.self) { Text($0).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary).frame(height: 20) }
+                ForEach(weekdayTitles, id: \.self) { Text($0).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary).frame(height: 20) }
                 ForEach(CalendarMonth.days(containing: month), id: \.self) { day in
                     dayCell(day, count: counts[day] ?? DayTaskCount())
                 }
             }
             Divider()
             HStack(spacing: 16) {
-                Label("未完成", systemImage: "circle.fill").foregroundStyle(.orange)
-                Label("已完成", systemImage: "circle.fill").foregroundStyle(.green)
+                Label(l10n("未完成"), systemImage: "circle.fill").foregroundStyle(.orange)
+                Label(l10n("已完成"), systemImage: "circle.fill").foregroundStyle(.green)
                 Spacer()
-                Text("按计划日期统计").foregroundStyle(.secondary)
+                Text(l10n("按计划日期统计")).foregroundStyle(.secondary)
             }.font(.system(size: 10))
         }.padding(18).frame(width: 354)
     }
@@ -52,7 +61,7 @@ struct TaskCalendarView: View {
                 .overlay(RoundedRectangle(cornerRadius: 9).stroke(day == model.today && !selected ? Color.accentColor.opacity(0.65) : .clear))
                 .contentShape(Rectangle())
         }.buttonStyle(.plain)
-            .accessibilityLabel("\(day.description)，未完成 \(count.unfinished)，已完成 \(count.completed)")
+            .accessibilityLabel(l10n("%@，未完成 %ld，已完成 %ld", day.description, count.unfinished, count.completed))
             .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 
