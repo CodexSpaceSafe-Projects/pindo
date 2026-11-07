@@ -12,9 +12,22 @@ import PindoCore
     }
 }
 
-final class QuickPanel: NSPanel {
+@MainActor final class QuickPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    func configurePin(_ pinned: Bool) {
+        // Transient panels must also sit above the active application's normal windows.
+        level = .floating
+        collectionBehavior = pinned ? [.canJoinAllSpaces, .fullScreenAuxiliary] : [.moveToActiveSpace, .fullScreenAuxiliary]
+    }
+
+    func showInFront() {
+        level = .floating
+        makeKeyAndOrderFront(nil)
+        // The app remains inactive, so explicitly order the panel across applications.
+        orderFrontRegardless()
+    }
 }
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
@@ -90,10 +103,13 @@ final class QuickPanel: NSPanel {
     @objc private func statusClicked() { toggleList(fromStatus: true) }
     @objc private func didWake() { model?.captureSnapshot() }
     private func toggleList(fromStatus: Bool = false) {
-        if listPanel?.isVisible == true { closeList(restoreFocus: true); return }
+        if let panel = listPanel, panel.isVisible, panel.occlusionState.contains(.visible) {
+            closeList(restoreFocus: true); return
+        }
         closeQuick()
         guard let model else { return }
-        rememberPreviousApplication(); model.leaveNote()
+        rememberPreviousApplication()
+        if listPanel?.isVisible != true { model.leaveNote() }
         if listPanel == nil {
             let panel = makePanel(width: 390, height: 610)
             panel.contentView = glassHost(TaskPanelView(model: model))
@@ -102,7 +118,7 @@ final class QuickPanel: NSPanel {
         guard let panel = listPanel else { return }
         applyPin(model.isPinned); position(panel, fromStatus: fromStatus)
         // A nonactivating panel accepts typing without holding the auto-hidden menu bar open.
-        panel.makeKeyAndOrderFront(nil)
+        panel.showInFront()
         listShownAt = ProcessInfo.processInfo.systemUptime
         statusItem?.button?.highlight(false)
     }
@@ -113,8 +129,7 @@ final class QuickPanel: NSPanel {
         if restoreFocus { previousApplication?.activate(options: [.activateIgnoringOtherApps]) }
     }
     private func applyPin(_ pinned: Bool) {
-        listPanel?.level = pinned ? .floating : .normal
-        listPanel?.collectionBehavior = pinned ? [.canJoinAllSpaces, .fullScreenAuxiliary] : [.moveToActiveSpace, .fullScreenAuxiliary]
+        listPanel?.configurePin(pinned)
     }
     private func position(_ panel: NSPanel, fromStatus: Bool = false) {
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
@@ -133,7 +148,7 @@ final class QuickPanel: NSPanel {
         rememberPreviousApplication()
         guard let model else { return }
         model.quickInvocationID = UUID()
-        if quickPanel == nil { quickPanel = makePanel(width: 470, height: 260); quickPanel?.level = .floating }
+        if quickPanel == nil { quickPanel = makePanel(width: 470, height: 260) }
         guard let panel = quickPanel else { return }
         panel.contentView = glassHost(QuickAddView(model: model, sizeChanged: { [weak panel] height in
             guard let panel, abs((panel.contentView?.frame.height ?? 0) - height) > 1 else { return }
@@ -141,7 +156,7 @@ final class QuickPanel: NSPanel {
             panel.setContentSize(NSSize(width: 470, height: min(max(height, 180), 520)))
             panel.setFrameOrigin(NSPoint(x: panel.frame.minX, y: top - panel.frame.height))
         }).id(model.quickInvocationID))
-        position(panel); panel.makeKeyAndOrderFront(nil)
+        position(panel); panel.showInFront()
         quickShownAt = ProcessInfo.processInfo.systemUptime
     }
     private func closeQuick(restoreFocus: Bool = false) {

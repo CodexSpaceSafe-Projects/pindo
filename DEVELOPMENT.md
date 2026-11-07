@@ -8,7 +8,7 @@
 - `data.json` and the bounded archive are separate files. Do not encode the archive into primary data on each keystroke.
 - Recovery and import write a durable redo journal before replacing both files. A pending journal blocks further updates until replay succeeds. Do not delete a pending journal as a workaround for an error.
 - Corrupt current data fails closed. Corrupt backup data is preserved and does not prevent saving the valid current document.
-- The list uses a nonactivating NSPanel, with explicit outside-click and app-switch dismissal. Pin changes its window level; avoid reintroducing an attached NSPopover or activating the app just to show the list.
+- The list uses a nonactivating NSPanel, with explicit outside-click and app-switch dismissal. Both pinned and transient panels use floating level and orderFrontRegardless when shown; never downgrade an unpinned panel to normal level. Pin controls dismissal and Spaces behavior. Avoid reintroducing an attached NSPopover or activating the app just to show the list.
 - NoteEditor owns a stable NSTextView. Never replace its text or attributes while hasMarkedText() is true, and publish only committed text. Saving-state updates must not reset the selection or input method.
 - Markdown is a local text preview. Keep raw source in storage; do not execute HTML or load remote images while parsing.
 - Source design and implementation are independent of the MIT reference projects. No source files or dependencies from those projects are bundled.

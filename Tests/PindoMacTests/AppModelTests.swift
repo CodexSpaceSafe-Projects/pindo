@@ -160,6 +160,38 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(levels, [true, false])
     }
 
+    @MainActor func testUnpinnedPanelRetainsFloatingLevelAfterPinChanges() async throws {
+        _ = NSApplication.shared
+        let panel = QuickPanel(contentRect: NSRect(x: 0, y: 0, width: 390, height: 610),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.configurePin(false)
+        XCTAssertEqual(panel.level, .floating)
+        XCTAssertTrue(panel.collectionBehavior.contains(.moveToActiveSpace))
+        panel.configurePin(true)
+        XCTAssertEqual(panel.level, .floating)
+        XCTAssertTrue(panel.collectionBehavior.contains(.canJoinAllSpaces))
+        panel.configurePin(false)
+        XCTAssertEqual(panel.level, .floating)
+        XCTAssertFalse(panel.collectionBehavior.contains(.canJoinAllSpaces))
+        XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
+    }
+
+    @MainActor func testPanelPresentationRaisesItsLevelAndShowsItWithoutAppActivation() async throws {
+        let app = NSApplication.shared
+        let wasActive = app.isActive
+        let panel = QuickPanel(contentRect: NSRect(x: 0, y: 0, width: 390, height: 610),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        defer { panel.orderOut(nil) }
+        panel.hidesOnDeactivate = false
+        panel.level = .normal
+
+        panel.showInFront()
+
+        XCTAssertTrue(panel.isVisible)
+        XCTAssertEqual(panel.level, .floating)
+        XCTAssertEqual(app.isActive, wasActive)
+    }
+
     @MainActor func testManagementSearchesAllDatesAndNotesAndCanEditAndDelete() async throws {
         let model = try makeModel()
         let group = model.document.groups[0].id
