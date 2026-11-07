@@ -184,18 +184,22 @@ final class AppModelTests: XCTestCase {
         // startup before measuring activation, rather than measuring the test host's launch.
         app.finishLaunching()
         defer { app.setActivationPolicy(previousPolicy) }
-        let wasActive = app.isActive
         let panel = QuickPanel(contentRect: NSRect(x: 0, y: 0, width: 390, height: 610),
                                styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         defer { panel.orderOut(nil) }
         panel.hidesOnDeactivate = false
         panel.level = .normal
+        let frontmostBefore = NSWorkspace.shared.frontmostApplication?.processIdentifier
 
         panel.showInFront()
+        // Let WindowServer activation notifications settle before checking foreground ownership.
+        try await Task.sleep(nanoseconds: 150_000_000)
 
         XCTAssertTrue(panel.isVisible)
         XCTAssertEqual(panel.level, .floating)
-        XCTAssertEqual(app.isActive, wasActive)
+        XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
+        // A key nonactivating panel can change NSApp.isActive without taking the foreground app.
+        XCTAssertEqual(NSWorkspace.shared.frontmostApplication?.processIdentifier, frontmostBefore)
     }
 
     @MainActor func testManagementSearchesAllDatesAndNotesAndCanEditAndDelete() async throws {
