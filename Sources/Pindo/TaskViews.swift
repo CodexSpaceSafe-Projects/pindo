@@ -43,7 +43,9 @@ struct TaskDisclosure<Content: View>: View {
             Button { expanded.toggle() } label: {
                 HStack(spacing: 7) {
                     Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 9, weight: .semibold))
-                    Text("\(title) · \(count)")
+                    Text(title)
+                    Text("\(count)").font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .padding(.horizontal, 6).padding(.vertical, 2).background(.quaternary, in: Capsule())
                     Spacer(minLength: 0)
                 }.font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
                     .padding(.horizontal, 8).padding(.vertical, 10).frame(maxWidth: .infinity).contentShape(Rectangle())
@@ -63,23 +65,19 @@ struct TaskPanelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Label("Pindo", systemImage: "checklist").font(.system(size: 12, weight: .semibold))
-                Spacer(minLength: 0)
-                if model.noteID == nil {
-                    Picker("筛选分组", selection: $model.groupFilter) {
-                        Text("全部分组").tag(GroupFilter.all)
-                        Text("未分组").tag(GroupFilter.ungrouped)
-                        ForEach(model.document.groups) { Text($0.name).tag(GroupFilter.group($0.id)) }
-                    }.labelsHidden().frame(maxWidth: 125).controlSize(.mini)
+            HStack(spacing: 12) {
+                HStack(spacing: 9) {
+                    Image(systemName: "checklist").font(.system(size: 20, weight: .medium)).foregroundStyle(Color.accentColor)
+                    Text("Pindo").font(.system(size: 17, weight: .semibold))
                 }
+                Spacer(minLength: 0)
                 Button { model.togglePin() } label: {
                     Image(systemName: model.isPinned ? "pin.fill" : "pin").foregroundStyle(model.isPinned ? Color.accentColor : Color.secondary)
-                        .frame(width: 25, height: 28).contentShape(Rectangle())
+                        .frame(width: 30, height: 30).background(model.isPinned ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 7)).contentShape(Rectangle())
                 }.help(model.isPinned ? "取消置顶，失焦后收起" : "固定面板并保持在前台").accessibilityLabel(model.isPinned ? "取消置顶" : "固定在前台")
-                Button { model.openSettings() } label: { Image(systemName: "gearshape").frame(width: 25, height: 28).contentShape(Rectangle()) }
+                Button { model.openSettings() } label: { Image(systemName: "gearshape").foregroundStyle(.secondary).frame(width: 30, height: 30).contentShape(Rectangle()) }
                     .help("设置").accessibilityLabel("打开设置")
-            }.buttonStyle(.plain).padding(.horizontal, 14).frame(height: 37)
+            }.buttonStyle(.plain).padding(.horizontal, 18).frame(height: 54)
             Divider()
             ErrorBanner(model: model)
             if let id = model.noteID, let task = model.task(id) {
@@ -90,7 +88,7 @@ struct TaskPanelView: View {
                 Divider()
                 dateBar
             }
-        }.frame(width: 390, height: 610)
+        }.frame(minWidth: 360, maxWidth: .infinity, minHeight: 420, maxHeight: .infinity)
             .sheet(isPresented: Binding(get: { model.editingID != nil }, set: { if !$0 { model.editingID = nil } })) {
                 if let id = model.editingID, let task = model.task(id) { EditTaskView(model: model, task: task) }
             }
@@ -124,8 +122,8 @@ struct TaskPanelView: View {
                         ForEach(model.completed) { TaskRow(model: model, task: $0) }
                     }
                 }
-            }.padding(.horizontal, 10).padding(.vertical, 6)
-        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }.padding(.horizontal, 12).padding(.vertical, 8)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(nsColor: .textBackgroundColor).opacity(0.45))
     }
     private var composer: some View {
         HStack(spacing: 8) {
@@ -139,23 +137,39 @@ struct TaskPanelView: View {
             Button { if model.submitListEntry() { entryFocused = true } } label: { Image(systemName: "return").frame(width: 24, height: 25).contentShape(Rectangle()) }
                 .buttonStyle(.plain).help("添加待办").accessibilityLabel("添加待办")
                 .disabled(model.listEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        }.font(.system(size: 12)).padding(10)
-            .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(.primary.opacity(0.07))).padding(.horizontal, 12).padding(.vertical, 9)
+        }.font(.system(size: 13)).padding(12)
+            .background(Color(nsColor: .textBackgroundColor).opacity(0.75), in: RoundedRectangle(cornerRadius: 11))
+            .overlay(RoundedRectangle(cornerRadius: 11).stroke(.primary.opacity(0.08))).padding(.horizontal, 14).padding(.vertical, 12)
     }
     private var dateBar: some View {
-        HStack(spacing: 8) {
-            Button { model.selectedDay = model.selectedDay.adding(days: -1) } label: { Image(systemName: "chevron.left").frame(width: 24, height: 30) }.accessibilityLabel("前一天")
+        HStack(spacing: 3) {
+            Button { model.selectedDay = model.selectedDay.adding(days: -1) } label: { Image(systemName: "chevron.left").frame(width: 22, height: 32) }.accessibilityLabel("前一天")
             Button { datePickerOpen.toggle() } label: {
-                HStack(spacing: 5) { Image(systemName: "calendar"); Text(dayTitle); Text(model.selectedDay.date().formatted(.dateTime.month().day())).foregroundStyle(.secondary) }
-                    .frame(height: 30).contentShape(Rectangle())
-            }.popover(isPresented: $datePickerOpen) { datePicker }
-            Button { model.selectedDay = model.selectedDay.adding(days: 1) } label: { Image(systemName: "chevron.right").frame(width: 24, height: 30) }.accessibilityLabel("后一天")
-            Spacer(minLength: 0)
-            if model.selectedDay != model.today { Button("今天") { model.selectedDay = model.today } }
-            Image(systemName: model.saveState == .failed ? "exclamationmark.triangle" : "lock").foregroundStyle(.secondary)
-                .help(model.saveState == .failed ? "保存失败" : "仅保存在本机")
-        }.font(.system(size: 11)).buttonStyle(.plain).padding(.horizontal, 12).frame(height: 35)
+                HStack(spacing: 5) {
+                    Image(systemName: "calendar").foregroundStyle(Color.accentColor)
+                    Text(model.selectedDay.date().formatted(.dateTime.month().day()))
+                    Text(dayTitle).foregroundStyle(.secondary)
+                }.lineLimit(1).frame(height: 32).contentShape(Rectangle())
+            }.popover(isPresented: $datePickerOpen) { TaskCalendarView(model: model) { datePickerOpen = false } }
+            Button { model.selectedDay = model.selectedDay.adding(days: 1) } label: { Image(systemName: "chevron.right").frame(width: 22, height: 32) }.accessibilityLabel("后一天")
+            Spacer(minLength: 8)
+            Menu {
+                Picker("筛选分组", selection: $model.groupFilter) {
+                    Text("全部分组").tag(GroupFilter.all)
+                    Text("未分组").tag(GroupFilter.ungrouped)
+                    ForEach(model.document.groups) { Text($0.name).tag(GroupFilter.group($0.id)) }
+                }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "line.3.horizontal.decrease")
+                    Text(groupTitle).lineLimit(1).truncationMode(.middle)
+                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+                }.padding(.horizontal, 10).frame(height: 30)
+                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(.primary.opacity(0.12)))
+            }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize(horizontal: false, vertical: true).frame(maxWidth: 155)
+                .help("筛选待办分组").accessibilityLabel("筛选分组：\(groupTitle)")
+        }.font(.system(size: 11)).buttonStyle(.plain).padding(.horizontal, 12).frame(height: 50)
             .background(DayScrollMonitor { model.selectedDay = model.selectedDay.adding(days: $0) })
     }
     private var dayTitle: String {
@@ -164,39 +178,43 @@ struct TaskPanelView: View {
         if model.selectedDay == model.today.adding(days: 1) { return "明天" }
         return model.selectedDay.date().formatted(.dateTime.weekday())
     }
-    private var datePicker: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Button("今天") { model.selectedDay = model.today; datePickerOpen = false }
-                Button("明天") { model.selectedDay = model.today.adding(days: 1); datePickerOpen = false }
-            }.buttonStyle(.borderless)
-            DatePicker("跳转日期", selection: Binding(get: { model.selectedDay.date() }, set: { model.selectedDay = DayKey($0) }), displayedComponents: .date).datePickerStyle(.graphical)
-        }.padding(12).frame(width: 270)
+    private var groupTitle: String {
+        switch model.groupFilter {
+        case .all: return "全部分组"
+        case .ungrouped: return "未分组"
+        case .group(let id): return model.group(id)?.name ?? "全部分组"
+        }
     }
 }
 
 struct TaskRow: View {
     @ObservedObject var model: AppModel
     let task: TodoItem
+    @State private var hovered = false
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
-            RoundedRectangle(cornerRadius: 2).fill(Color(hex: model.group(task.groupID)?.colorHex ?? "#9AA9AF")).frame(width: 3, height: 32)
             Button { model.setPhase(task, task.phase == .completed ? .pending : .completed) } label: {
-                Image(systemName: task.phase == .completed ? "checkmark.circle.fill" : "circle").font(.system(size: 17)).foregroundStyle(task.phase == .completed ? Color.accentColor : Color.secondary)
+                Image(systemName: task.phase == .completed ? "checkmark.circle.fill" : "circle").font(.system(size: 19, weight: .light)).foregroundStyle(task.phase == .completed ? Color.green : Color.secondary)
+                    .frame(width: 25, height: 26)
             }.buttonStyle(.plain).accessibilityLabel(task.phase == .completed ? "恢复未完成：\(task.title)" : "完成：\(task.title)")
             Button { model.noteID = task.id } label: {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 5) {
-                        Text(task.title).font(.system(size: 13)).strikethrough(task.phase == .completed).fixedSize(horizontal: false, vertical: true)
+                        Text(task.title).font(.system(size: 14)).strikethrough(task.phase == .completed).fixedSize(horizontal: false, vertical: true)
                         if !task.note.isEmpty { Image(systemName: "note.text").font(.system(size: 9)).foregroundStyle(.secondary) }
                     }
-                    Text(model.group(task.groupID)?.name ?? "未分组").font(.system(size: 10)).foregroundStyle(.secondary)
+                    HStack(spacing: 5) {
+                        Circle().fill(Color(hex: model.group(task.groupID)?.colorHex ?? "#9AA9AF")).frame(width: 5, height: 5)
+                        Text(model.group(task.groupID)?.name ?? "未分组").font(.system(size: 10)).foregroundStyle(.secondary)
+                    }
                 }.foregroundStyle(task.phase == .completed ? Color.secondary : Color.primary)
                     .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel("打开备注：\(task.title)")
             Button { model.editingID = task.id } label: { Image(systemName: "pencil").frame(width: 20, height: 25) }
                 .buttonStyle(.borderless).help("修改待办")
-        }.padding(.horizontal, 6).padding(.vertical, 8)
+        }.padding(.horizontal, 10).padding(.vertical, 10)
+            .background(hovered ? Color.primary.opacity(0.045) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
+            .onHover { hovered = $0 }
             .contextMenu {
                 Button("打开备注") { model.noteID = task.id }
                 Button("复制内容") { _ = model.copyTask(task) }
@@ -214,29 +232,24 @@ struct NoteView: View {
     @ObservedObject var model: AppModel
     let task: TodoItem
     var onBack: (() -> Void)? = nil
-    @State private var preview = false
     private var note: Binding<String> { Binding(get: { model.task(task.id)?.note ?? "" }, set: { model.updateNote(task.id, text: $0) }) }
     private func finishEditing() { NSApp.keyWindow?.makeFirstResponder(nil); model.flush() }
     private func back() { finishEditing(); if let onBack { onBack() } else { model.leaveNote() } }
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Button(action: back) { Label("返回", systemImage: "chevron.left") }
-                    .buttonStyle(.plain)
-                Spacer()
-                Picker("备注模式", selection: Binding(get: { preview }, set: { value in finishEditing(); preview = value })) { Text("编辑").tag(false); Text("预览").tag(true) }
-                    .pickerStyle(.segmented).frame(width: 120)
-            }.font(.system(size: 12)).padding(12)
-            Text(task.title).font(.system(size: 16, weight: .semibold)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.bottom, 10)
-            Divider()
-            if preview { MarkdownPreview(source: note.wrappedValue) }
-            else { NoteEditor(text: note).id(task.id) }
-            Divider()
+            VStack(alignment: .leading, spacing: 5) {
+                Text(task.title).font(.system(size: 20, weight: .semibold)).lineLimit(2)
+                Text("\(model.group(task.groupID)?.name ?? "未分组") · \(task.plannedDay.date().formatted(.dateTime.month().day()))")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(18)
+            NoteEditor(text: note, onOutsideClick: back).id(task.id)
+                .background(Color(nsColor: .textBackgroundColor).opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(.primary.opacity(0.06)))
+                .padding(.horizontal, 14)
             HStack {
                 Text(model.saveState == .saving ? "保存中…" : model.saveState == .failed ? "未保存" : "已保存")
-                Spacer(); Text("Markdown"); Text("\(note.wrappedValue.count) 字")
-                Button("清空") { finishEditing(); note.wrappedValue = "" }.buttonStyle(.plain)
-            }.font(.system(size: 10)).foregroundStyle(.secondary).padding(12)
+                Spacer(); Text("点击编辑区外返回 · Esc"); Text("\(note.wrappedValue.count) 字")
+            }.font(.system(size: 10)).foregroundStyle(.secondary).padding(16)
         }.frame(maxWidth: .infinity, maxHeight: .infinity).onDisappear { model.flush() }
     }
 }

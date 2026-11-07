@@ -63,7 +63,11 @@ final class AppModelTests: XCTestCase {
         let panel = NSHostingView(rootView: TaskPanelView(model: model))
         panel.frame = NSRect(x: 0, y: 0, width: 390, height: 610)
         panel.layoutSubtreeIfNeeded()
-        XCTAssertGreaterThanOrEqual(panel.fittingSize.width, 390)
+        XCTAssertGreaterThanOrEqual(panel.fittingSize.width, 360)
+        XCTAssertLessThanOrEqual(panel.fittingSize.width, 390)
+        panel.frame.size = NSSize(width: 720, height: 850)
+        panel.layoutSubtreeIfNeeded()
+        XCTAssertEqual(panel.frame.size, NSSize(width: 720, height: 850))
         let settings = NSHostingView(rootView: SettingsView(model: model))
         settings.frame = NSRect(x: 0, y: 0, width: 740, height: 570)
         settings.layoutSubtreeIfNeeded()
@@ -230,12 +234,15 @@ final class AppModelTests: XCTestCase {
         view.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
         XCTAssertTrue(view.hasMarkedText())
         let composingText = view.string, selection = view.selectedRange()
+        let composingAttributes = NSAttributedString(attributedString: view.textStorage!)
         coordinator.publish(view)
+        coordinator.render(view)
         XCTAssertEqual(stored, "已有")
         coordinator.synchronize(view, text: stored)
         XCTAssertEqual(view.string, composingText)
         XCTAssertEqual(view.selectedRange(), selection)
         XCTAssertTrue(view.hasMarkedText())
+        XCTAssertTrue(view.textStorage!.isEqual(to: composingAttributes))
         view.insertText("中文", replacementRange: NSRange(location: NSNotFound, length: 0))
         view.unmarkText()
         coordinator.publish(view)
@@ -243,5 +250,87 @@ final class AppModelTests: XCTestCase {
         view.setSelectedRange(NSRange(location: 1, length: 1))
         coordinator.synchronize(view, text: stored)
         XCTAssertEqual(view.selectedRange(), NSRange(location: 1, length: 1))
+    }
+
+    @MainActor func testTaskPanelSupportsNativeResizingAndRetainsItsSizeWhenShown() async throws {
+        _ = NSApplication.shared
+        let panel = QuickPanel.taskPanel()
+        defer { panel.orderOut(nil) }
+        XCTAssertTrue(panel.styleMask.contains(.resizable))
+        XCTAssertTrue(panel.styleMask.contains(.titled))
+        XCTAssertTrue(panel.styleMask.contains(.fullSizeContentView))
+        XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
+        XCTAssertEqual(panel.contentMinSize, NSSize(width: 360, height: 420))
+        panel.setContentSize(NSSize(width: 620, height: 780))
+        let frame = panel.frame
+        panel.configurePin(false); panel.showInFront(); panel.orderOut(nil); panel.showInFront()
+        XCTAssertEqual(panel.frame.size, frame.size)
+        XCTAssertEqual(panel.level, .floating)
+    }
+
+    @MainActor func testLiveMarkdownChangesAppearanceWithoutChangingSourceSelectionOrUndo() async throws {
+        _ = NSApplication.shared
+        var stored = "# 标题\n**粗体** 和 `代码`\n最后一行"
+        let editor = NoteEditor(text: Binding(get: { stored }, set: { stored = $0 }))
+        let coordinator = editor.makeCoordinator()
+        let view = ComposingTextView()
+        view.allowsUndo = true; view.string = stored; view.delegate = coordinator
+        let source = stored as NSString
+        view.setSelectedRange(NSRange(location: source.length, length: 0))
+        let selection = view.selectedRange()
+        coordinator.render(view)
+        XCTAssertEqual(view.string, stored)
+        XCTAssertEqual(view.selectedRange(), selection)
+        let titleFont = try XCTUnwrap(view.textStorage?.attribute(.font, at: source.range(of: "标题").location, effectiveRange: nil) as? NSFont)
+        XCTAssertGreaterThan(titleFont.pointSize, 14)
+        let bold = try XCTUnwrap(view.textStorage?.attribute(.font, at: source.range(of: "粗体").location, effectiveRange: nil) as? NSFont)
+        XCTAssertTrue(NSFontManager.shared.traits(of: bold).contains(.boldFontMask))
+        let hidden = try XCTUnwrap(view.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+        XCTAssertLessThan(hidden.pointSize, 1)
+        // Entering a formatted paragraph reveals its Markdown delimiters.
+        view.setSelectedRange(NSRange(location: 2, length: 1)); coordinator.render(view)
+        let visible = try XCTUnwrap(view.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+        XCTAssertGreaterThan(visible.pointSize, 1)
+        XCTAssertEqual(view.selectedRange(), NSRange(location: 2, length: 1))
+        XCTAssertEqual(view.string, stored)
+        view.setSelectedRange(NSRange(location: source.length, length: 0))
+        view.insertText("新", replacementRange: NSRange(location: NSNotFound, length: 0))
+        coordinator.publish(view)
+        XCTAssertTrue(stored.hasSuffix("新"))
+        view.undoManager?.undo()
+        coordinator.publish(view)
+        XCTAssertEqual(view.string, source as String)
+        XCTAssertEqual(stored, source as String)
+    }
+
+    @MainActor func testNoteOutsideHitTestingIgnoresEditorResizeBorderAndOtherWindows() async throws {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 600), styleMask: .borderless, backing: .buffered, defer: false)
+        let other = NSWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: false)
+        let scroll = NSScrollView(frame: NSRect(x: 20, y: 60, width: 460, height: 440))
+        window.contentView?.addSubview(scroll)
+        let coordinator = NoteEditor(text: .constant("")).makeCoordinator()
+        func click(_ point: NSPoint, windowNumber: Int? = nil) -> NSEvent {
+            NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
+                              windowNumber: windowNumber ?? window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+        }
+        XCTAssertFalse(coordinator.isOutsideEditor(click(NSPoint(x: 200, y: 250)), scroll: scroll))
+        XCTAssertTrue(coordinator.isOutsideEditor(click(NSPoint(x: 200, y: 550)), scroll: scroll))
+        XCTAssertTrue(coordinator.isOutsideEditor(click(NSPoint(x: 200, y: 30)), scroll: scroll))
+        XCTAssertFalse(coordinator.isOutsideEditor(click(NSPoint(x: 2, y: 250)), scroll: scroll))
+        XCTAssertFalse(coordinator.isOutsideEditor(click(NSPoint(x: 200, y: 550), windowNumber: other.windowNumber), scroll: scroll))
+    }
+
+    @MainActor func testCalendarCountsRespectGroupAndIncludeCompletedTasks() async throws {
+        let model = try makeModel(), day = DayKey()
+        let group = model.document.groups[0].id
+        XCTAssertTrue(model.addTask(title: "待完成", day: day, groupID: group))
+        XCTAssertTrue(model.addTask(title: "已完成", day: day, groupID: group))
+        XCTAssertTrue(model.addTask(title: "其他分组", day: day, groupID: nil))
+        model.setPhase(model.document.tasks[1], .completed)
+        model.groupFilter = .group(group)
+        let counts = DayTaskCount.grouped(model.document.tasks.filter(model.matches))
+        XCTAssertEqual(counts[day]?.unfinished, 1)
+        XCTAssertEqual(counts[day]?.completed, 1)
     }
 }

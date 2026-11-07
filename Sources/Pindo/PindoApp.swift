@@ -16,6 +16,23 @@ import PindoCore
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
+    static func taskPanel() -> QuickPanel {
+        // Let WindowServer own the rounded frame and resize handles. Clipping a
+        // second rounded hosting layer produces a light fringe at the corners.
+        let panel = QuickPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 640),
+                               styleMask: [.titled, .resizable, .fullSizeContentView, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.titleVisibility = .hidden; panel.titlebarAppearsTransparent = true
+        panel.titlebarSeparatorStyle = .none
+        for kind: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] { panel.standardWindowButton(kind)?.isHidden = true }
+        panel.contentMinSize = NSSize(width: 360, height: 420)
+        panel.isMovableByWindowBackground = true; panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false; panel.isOpaque = false
+        panel.backgroundColor = .clear; panel.hasShadow = true
+        panel.setFrameAutosaveName("PindoTaskPanel")
+        panel.setFrameUsingName("PindoTaskPanel")
+        return panel
+    }
+
     func configurePin(_ pinned: Bool) {
         // Transient panels must also sit above the active application's normal windows.
         level = .floating
@@ -111,8 +128,9 @@ import PindoCore
         rememberPreviousApplication()
         if listPanel?.isVisible != true { model.leaveNote() }
         if listPanel == nil {
-            let panel = makePanel(width: 390, height: 610)
-            panel.contentView = glassHost(TaskPanelView(model: model))
+            let panel = QuickPanel.taskPanel()
+            panel.delegate = self
+            panel.contentView = glassHost(TaskPanelView(model: model).ignoresSafeArea(), rounded: false)
             listPanel = panel
         }
         guard let panel = listPanel else { return }
@@ -134,6 +152,12 @@ import PindoCore
     private func position(_ panel: NSPanel, fromStatus: Bool = false) {
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
         let area = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1000, height: 800)
+        if panel.styleMask.contains(.resizable) {
+            var frame = panel.frame
+            frame.size.width = min(frame.width, area.width)
+            frame.size.height = min(frame.height, area.height - 10)
+            panel.setFrame(frame, display: false)
+        }
         var x = area.midX - panel.frame.width / 2
         if fromStatus, let button = statusItem?.button, let window = button.window {
             x = window.convertToScreen(button.convert(button.bounds, to: nil)).midX - panel.frame.width / 2
@@ -232,11 +256,11 @@ import PindoCore
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
-    private func glassHost<V: View>(_ root: V) -> NSView {
+    private func glassHost<V: View>(_ root: V, rounded: Bool = true) -> NSView {
         let effect = NSVisualEffectView()
-        effect.wantsLayer = true; effect.layer?.cornerRadius = 12; effect.layer?.masksToBounds = true
+        if rounded { effect.wantsLayer = true; effect.layer?.cornerRadius = 12; effect.layer?.masksToBounds = true }
         effect.material = .popover; effect.blendingMode = .behindWindow; effect.state = .active
-        let host = NSHostingView(rootView: root)
+        let host = TransparentHostingView(rootView: root)
         host.translatesAutoresizingMaskIntoConstraints = false
         effect.addSubview(host)
         NSLayoutConstraint.activate([host.leadingAnchor.constraint(equalTo: effect.leadingAnchor), host.trailingAnchor.constraint(equalTo: effect.trailingAnchor), host.topAnchor.constraint(equalTo: effect.topAnchor), host.bottomAnchor.constraint(equalTo: effect.bottomAnchor)])
@@ -255,4 +279,8 @@ import PindoCore
         let redo = NSMenuItem(title: "重做", action: Selector("redo:"), keyEquivalent: "z"); redo.keyEquivalentModifierMask = [.command, .shift]; edit.insertItem(redo, at: 1)
         editItem.submenu = edit; main.addItem(editItem); NSApp.mainMenu = main
     }
+}
+
+private final class TransparentHostingView<Content: View>: NSHostingView<Content> {
+    override var isOpaque: Bool { false }
 }
