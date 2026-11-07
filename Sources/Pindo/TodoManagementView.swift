@@ -34,12 +34,16 @@ struct TodoManagementView: View {
                             Button { noteID = task.id } label: {
                                 VStack(alignment: .leading, spacing: 5) {
                                     Text(task.title).strikethrough(task.phase == .completed).lineLimit(2)
-                                    Text("\(task.plannedDay.description) · \(model.group(task.groupID)?.name ?? "未分组")").font(.system(size: 10)).foregroundStyle(.secondary)
+                                    HStack(spacing: 4) {
+                                        Text("\(task.plannedDay.description) ·").foregroundStyle(.secondary)
+                                        Text(model.group(task.groupID)?.name ?? "未分组").foregroundStyle(Color(hex: model.group(task.groupID)?.colorHex ?? "#9AA9AF"))
+                                    }.font(.system(size: 10))
                                 }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                             }
                             Button { editingTask = task } label: { Image(systemName: "pencil") }.help("修改标题、日期和分组")
                             Button(role: .destructive) { model.delete(task) } label: { Image(systemName: "trash") }.help("删除待办")
-                        }.buttonStyle(.plain).font(.system(size: 12)).padding(.vertical, 12)
+                        }.buttonStyle(.plain).font(.system(size: 12)).padding(.vertical, 12).padding(.leading, 16)
+                            .modifier(GroupStripe(color: Color(hex: model.group(task.groupID)?.colorHex ?? "#9AA9AF")))
                         Divider()
                     }
                     if tasks.isEmpty { Text("没有符合条件的待办").foregroundStyle(.secondary).padding(24) }

@@ -19,17 +19,28 @@ import PindoCore
     static func taskPanel() -> QuickPanel {
         // Let WindowServer own the rounded frame and resize handles. Clipping a
         // second rounded hosting layer produces a light fringe at the corners.
-        let panel = QuickPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 640),
-                               styleMask: [.titled, .resizable, .fullSizeContentView, .nonactivatingPanel], backing: .buffered, defer: false)
+        let panel = nativePanel(size: NSSize(width: 420, height: 640), resizable: true)
+        panel.contentMinSize = NSSize(width: 360, height: 420)
+        panel.setFrameAutosaveName("PindoTaskPanel")
+        panel.setFrameUsingName("PindoTaskPanel")
+        return panel
+    }
+
+    static func quickAddPanel() -> QuickPanel {
+        nativePanel(size: NSSize(width: 470, height: 260), resizable: false)
+    }
+
+    private static func nativePanel(size: NSSize, resizable: Bool) -> QuickPanel {
+        var style: NSWindow.StyleMask = [.titled, .fullSizeContentView, .nonactivatingPanel]
+        if resizable { style.insert(.resizable) }
+        let panel = QuickPanel(contentRect: NSRect(origin: .zero, size: size), styleMask: style, backing: .buffered, defer: false)
         panel.titleVisibility = .hidden; panel.titlebarAppearsTransparent = true
         panel.titlebarSeparatorStyle = .none
         for kind: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] { panel.standardWindowButton(kind)?.isHidden = true }
-        panel.contentMinSize = NSSize(width: 360, height: 420)
         panel.isMovableByWindowBackground = true; panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false; panel.isOpaque = false
         panel.backgroundColor = .clear; panel.hasShadow = true
-        panel.setFrameAutosaveName("PindoTaskPanel")
-        panel.setFrameUsingName("PindoTaskPanel")
+        panel.configurePin(false)
         return panel
     }
 
@@ -50,16 +61,23 @@ import PindoCore
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var model: AppModel?
     private var statusItem: NSStatusItem?
-    private var listPanel: QuickPanel?
-    private var quickPanel: QuickPanel?
+    private(set) var listPanel: QuickPanel?
+    private(set) var quickPanel: QuickPanel?
     private var settingsWindow: NSWindow?
     private var previousApplication: NSRunningApplication?
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
     private var listShownAt: TimeInterval = 0
     private var quickShownAt: TimeInterval = 0
+    private var lastStatusClickAt: TimeInterval = -.infinity
     private let hotkeys = GlobalHotkeys()
     private var lastPreferences: Preferences?
+    private let quickPosition: QuickPanelPosition
+
+    init(model: AppModel? = nil, quickPosition: QuickPanelPosition = QuickPanelPosition()) {
+        self.model = model; self.quickPosition = quickPosition
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let existing = NSRunningApplication.runningApplications(withBundleIdentifier: "com.pindo.Pindo").first(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
@@ -84,6 +102,7 @@ import PindoCore
                 button.image = NSImage(systemSymbolName: "checklist", accessibilityDescription: "Pindo")
                 button.image?.isTemplate = true; button.imagePosition = .imageLeading
                 button.target = self; button.action = #selector(statusClicked)
+                button.sendAction(on: .leftMouseDown)
                 button.toolTip = "Pindo · 待办清单"
             }
             installMenu(); apply(model.document.preferences); installDismissalObservers()
@@ -106,21 +125,13 @@ import PindoCore
         lastPreferences = preferences
     }
 
-    private func makePanel(width: CGFloat, height: CGFloat) -> QuickPanel {
-        let panel = QuickPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
-                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.titleVisibility = .hidden; panel.titlebarAppearsTransparent = true
-        for kind: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] { panel.standardWindowButton(kind)?.isHidden = true }
-        panel.isMovableByWindowBackground = true; panel.isReleasedWhenClosed = false
-        panel.hidesOnDeactivate = false; panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-        panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true; panel.delegate = self
-        return panel
+    @objc private func statusClicked() {
+        if let event = NSApp.currentEvent { lastStatusClickAt = event.timestamp }
+        toggleList(fromStatus: true)
     }
-
-    @objc private func statusClicked() { toggleList(fromStatus: true) }
     @objc private func didWake() { model?.captureSnapshot() }
-    private func toggleList(fromStatus: Bool = false) {
-        if let panel = listPanel, panel.isVisible, panel.occlusionState.contains(.visible) {
+    func toggleList(fromStatus: Bool = false) {
+        if listPanel?.isVisible == true {
             closeList(restoreFocus: true); return
         }
         closeQuick()
@@ -130,7 +141,7 @@ import PindoCore
         if listPanel == nil {
             let panel = QuickPanel.taskPanel()
             panel.delegate = self
-            panel.contentView = glassHost(TaskPanelView(model: model).ignoresSafeArea(), rounded: false)
+            panel.contentView = glassHost(TaskPanelView(model: model).ignoresSafeArea())
             listPanel = panel
         }
         guard let panel = listPanel else { return }
@@ -166,25 +177,30 @@ import PindoCore
                                      y: max(area.minY, area.maxY - panel.frame.height - 10)))
     }
 
-    private func toggleQuick() {
+    func toggleQuick() {
         if quickPanel?.isVisible == true { closeQuick(restoreFocus: true); return }
         if model?.isPinned != true { closeList() }
         rememberPreviousApplication()
         guard let model else { return }
         model.quickInvocationID = UUID()
-        if quickPanel == nil { quickPanel = makePanel(width: 470, height: 260) }
+        if quickPanel == nil { quickPanel = QuickPanel.quickAddPanel(); quickPanel?.delegate = self }
         guard let panel = quickPanel else { return }
-        panel.contentView = glassHost(QuickAddView(model: model, sizeChanged: { [weak panel] height in
+        panel.contentView = glassHost(QuickAddView(model: model, sizeChanged: { [weak self, weak panel] height in
             guard let panel, abs((panel.contentView?.frame.height ?? 0) - height) > 1 else { return }
             let top = panel.frame.maxY
             panel.setContentSize(NSSize(width: 470, height: min(max(height, 180), 520)))
             panel.setFrameOrigin(NSPoint(x: panel.frame.minX, y: top - panel.frame.height))
-        }).id(model.quickInvocationID))
-        position(panel); panel.showInFront()
+            self?.keepQuickOnScreen(panel)
+        }).id(model.quickInvocationID).ignoresSafeArea())
+        if let origin = quickPosition.restoredOrigin(size: panel.frame.size, visibleFrames: NSScreen.screens.map(\.visibleFrame)) {
+            panel.setFrameOrigin(origin)
+        } else { position(panel) }
+        panel.showInFront()
         quickShownAt = ProcessInfo.processInfo.systemUptime
     }
     private func closeQuick(restoreFocus: Bool = false) {
         guard quickPanel?.isVisible == true else { return }
+        if let panel = quickPanel { quickPosition.save(frame: panel.frame) }
         quickPanel?.makeFirstResponder(nil)
         model?.persistDrafts(); quickPanel?.orderOut(nil)
         if restoreFocus { previousApplication?.activate(options: [.activateIgnoringOtherApps]) }
@@ -196,7 +212,13 @@ import PindoCore
     private func installDismissalObservers() {
         globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
             let timestamp = event.timestamp
-            Task { @MainActor in self?.dismissTransientPanels(eventTime: timestamp) }
+            // Status-item clicks can arrive through the system's menu-bar process.
+            // They belong to the toggle action, not the outside-dismiss monitor.
+            let point = NSEvent.mouseLocation
+            Task { @MainActor in
+                guard let self, timestamp != self.lastStatusClickAt, !self.isOverStatusItem(point) else { return }
+                self.dismissTransientPanels(eventTime: timestamp)
+            }
         }
         localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
             guard let self, event.window != nil else { return event }
@@ -204,6 +226,15 @@ import PindoCore
             if event.window === self.settingsWindow || self.belongs(event.window, to: self.listPanel) || event.window === self.statusItem?.button?.window { self.closeQuick() }
             if self.model?.isPinned != true && (event.window === self.settingsWindow || self.belongs(event.window, to: self.quickPanel)) { self.closeList() }
             return event
+        }
+    }
+    private func isOverStatusItem(_ point: NSPoint) -> Bool {
+        guard let button = statusItem?.button, let window = button.window else { return false }
+        return window.convertToScreen(button.convert(button.bounds, to: nil)).contains(point)
+    }
+    private func keepQuickOnScreen(_ panel: QuickPanel) {
+        if let origin = quickPosition.clampedOrigin(frame: panel.frame, visibleFrames: NSScreen.screens.map(\.visibleFrame)), origin != panel.frame.origin {
+            panel.setFrameOrigin(origin)
         }
     }
     private func belongs(_ window: NSWindow?, to panel: NSPanel?) -> Bool {
@@ -235,12 +266,16 @@ import PindoCore
             window.title = "Pindo 设置"; window.minSize = NSSize(width: 740, height: 550)
             window.isReleasedWhenClosed = false; window.delegate = self
             window.isOpaque = false; window.backgroundColor = .clear
+            // The rectangular content meets the native title bar without cutouts.
             window.contentView = glassHost(SettingsView(model: model))
             settingsWindow = window; window.center()
         }
         NSApp.activate(ignoringOtherApps: true); settingsWindow?.makeKeyAndOrderFront(nil)
     }
     func windowWillClose(_ notification: Notification) { model?.flush() }
+    func windowDidMove(_ notification: Notification) {
+        if let panel = notification.object as? QuickPanel, panel === quickPanel, panel.isVisible { quickPosition.save(frame: panel.frame) }
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         listPanel?.makeFirstResponder(nil); quickPanel?.makeFirstResponder(nil)
@@ -256,9 +291,8 @@ import PindoCore
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
-    private func glassHost<V: View>(_ root: V, rounded: Bool = true) -> NSView {
+    private func glassHost<V: View>(_ root: V) -> NSView {
         let effect = NSVisualEffectView()
-        if rounded { effect.wantsLayer = true; effect.layer?.cornerRadius = 12; effect.layer?.masksToBounds = true }
         effect.material = .popover; effect.blendingMode = .behindWindow; effect.state = .active
         let host = TransparentHostingView(rootView: root)
         host.translatesAutoresizingMaskIntoConstraints = false

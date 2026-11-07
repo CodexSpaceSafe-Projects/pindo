@@ -84,7 +84,7 @@ struct GroupsSettings: View {
     @State private var newColor = Color(hex: "#86A49C")
     var body: some View {
         VStack(alignment: .leading, spacing: 15) {
-            Text("每条待办左侧用 3px 色条区分分组。").font(.system(size: 12)).foregroundStyle(.secondary)
+            Text("每条待办左侧用 6px 色条区分分组，分组名称也使用对应颜色。").font(.system(size: 12)).foregroundStyle(.secondary)
             ForEach(model.document.groups) { group in GroupSettingsRow(model: model, group: group) }
             HStack {
                 ColorPicker("新分组颜色", selection: $newColor, supportsOpacity: false).labelsHidden().fixedSize()

@@ -130,10 +130,7 @@ struct TaskPanelView: View {
             TextField("添加一件要做的事…", text: $model.listEntry).textFieldStyle(.plain).focused($entryFocused)
                 .onChange(of: model.listEntry) { _, _ in model.scheduleDraftSave() }
                 .onSubmit { if model.submitListEntry() { entryFocused = true } }
-            Picker("新待办分组", selection: $model.listEntryGroupID) {
-                Text("未分组").tag(UUID?.none)
-                ForEach(model.document.groups) { Text($0.name).tag(Optional($0.id)) }
-            }.labelsHidden().frame(width: 105).controlSize(.small)
+            GroupSelectionMenu(groups: model.document.groups, selection: $model.listEntryGroupID)
             Button { if model.submitListEntry() { entryFocused = true } } label: { Image(systemName: "return").frame(width: 24, height: 25).contentShape(Rectangle()) }
                 .buttonStyle(.plain).help("添加待办").accessibilityLabel("添加待办")
                 .disabled(model.listEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -154,10 +151,10 @@ struct TaskPanelView: View {
             Button { model.selectedDay = model.selectedDay.adding(days: 1) } label: { Image(systemName: "chevron.right").frame(width: 22, height: 32) }.accessibilityLabel("后一天")
             Spacer(minLength: 8)
             Menu {
-                Picker("筛选分组", selection: $model.groupFilter) {
-                    Text("全部分组").tag(GroupFilter.all)
-                    Text("未分组").tag(GroupFilter.ungrouped)
-                    ForEach(model.document.groups) { Text($0.name).tag(GroupFilter.group($0.id)) }
+                GroupMenuChoice(title: "全部分组", selected: model.groupFilter == .all) { model.groupFilter = .all }
+                GroupMenuChoice(title: "未分组", selected: model.groupFilter == .ungrouped) { model.groupFilter = .ungrouped }
+                ForEach(model.document.groups) { group in
+                    GroupMenuChoice(title: group.name, selected: model.groupFilter == .group(group.id)) { model.groupFilter = .group(group.id) }
                 }
             } label: {
                 HStack(spacing: 7) {
@@ -191,6 +188,7 @@ struct TaskRow: View {
     @ObservedObject var model: AppModel
     let task: TodoItem
     @State private var hovered = false
+    private var groupColor: Color { Color(hex: model.group(task.groupID)?.colorHex ?? "#9AA9AF") }
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
             Button { model.setPhase(task, task.phase == .completed ? .pending : .completed) } label: {
@@ -203,16 +201,14 @@ struct TaskRow: View {
                         Text(task.title).font(.system(size: 14)).strikethrough(task.phase == .completed).fixedSize(horizontal: false, vertical: true)
                         if !task.note.isEmpty { Image(systemName: "note.text").font(.system(size: 9)).foregroundStyle(.secondary) }
                     }
-                    HStack(spacing: 5) {
-                        Circle().fill(Color(hex: model.group(task.groupID)?.colorHex ?? "#9AA9AF")).frame(width: 5, height: 5)
-                        Text(model.group(task.groupID)?.name ?? "未分组").font(.system(size: 10)).foregroundStyle(.secondary)
-                    }
+                    Text(model.group(task.groupID)?.name ?? "未分组").font(.system(size: 11)).foregroundStyle(groupColor)
                 }.foregroundStyle(task.phase == .completed ? Color.secondary : Color.primary)
                     .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel("打开备注：\(task.title)")
             Button { model.editingID = task.id } label: { Image(systemName: "pencil").frame(width: 20, height: 25) }
                 .buttonStyle(.borderless).help("修改待办")
-        }.padding(.horizontal, 10).padding(.vertical, 10)
+        }.padding(.leading, 16).padding(.trailing, 10).padding(.vertical, 10)
+            .modifier(GroupStripe(color: groupColor))
             .background(hovered ? Color.primary.opacity(0.045) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
             .onHover { hovered = $0 }
             .contextMenu {
@@ -291,7 +287,7 @@ struct QuickAddView: View {
             HStack { Label("Pindo", systemImage: "checklist").fontWeight(.semibold); Text("快速记录待办").foregroundStyle(.secondary); Spacer(); Button("esc") { model.hideQuickAdd() }.buttonStyle(.plain).foregroundStyle(.secondary) }.font(.system(size: 12))
             HStack(spacing: 10) {
                 TextField("有什么要做的？", text: $model.quickTitle).font(.system(size: 19)).textFieldStyle(.plain).focused($titleFocused).onSubmit(save).onChange(of: model.quickTitle) { _, _ in model.scheduleDraftSave() }
-                Picker("分组", selection: $groupID) { Text("未分组").tag(UUID?.none); ForEach(model.document.groups) { Text($0.name).tag(Optional($0.id)) } }.labelsHidden().frame(width: 110).controlSize(.small)
+                GroupSelectionMenu(groups: model.document.groups, selection: $groupID)
             }
             HStack {
                 DatePicker("日期", selection: $date, displayedComponents: .date).labelsHidden().fixedSize()

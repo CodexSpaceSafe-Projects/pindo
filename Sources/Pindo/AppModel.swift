@@ -31,6 +31,7 @@ enum SaveState { case saved, saving, failed }
     var configureHotkeys: ((Preferences) throws -> Void)?
     var configureLogin: ((Bool) throws -> Void)?
     var pinChanged: (Bool) -> Void = { _ in }
+    var playFeedback: (TaskFeedback) -> Void = { $0.play() }
     var writeClipboard: (String) -> Bool = { text in
         let pasteboard = NSPasteboard.general; pasteboard.clearContents()
         return pasteboard.setString(text, forType: .string)
@@ -124,9 +125,14 @@ enum SaveState { case saved, saving, failed }
     @discardableResult func addTask(title: String, note: String = "", day: DayKey, groupID: UUID?) -> Bool {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return false }
-        return commit { doc in doc.tasks.append(TodoItem(title: title, note: note, plannedDay: day, groupID: groupID, order: (doc.tasks.map(\.order).max() ?? -1) + 1)) }
+        let saved = commit { doc in doc.tasks.append(TodoItem(title: title, note: note, plannedDay: day, groupID: groupID, order: (doc.tasks.map(\.order).max() ?? -1) + 1)) }
+        if saved { playFeedback(.added) }
+        return saved
     }
-    func setPhase(_ task: TodoItem, _ phase: TaskPhase) { _ = commit { try $0.setPhase(phase, for: task.id) } }
+    func setPhase(_ task: TodoItem, _ phase: TaskPhase) {
+        guard let current = self.task(task.id), current.phase != phase else { return }
+        if commit({ try $0.setPhase(phase, for: task.id) }), phase == .completed { playFeedback(.completed) }
+    }
     func delete(_ task: TodoItem) { _ = commit { $0.tasks.removeAll { $0.id == task.id } } }
     func edit(_ id: UUID, title: String, day: DayKey, groupID: UUID?) -> Bool {
         commit { doc in

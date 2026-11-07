@@ -7,7 +7,9 @@ import PindoCore
 final class AppModelTests: XCTestCase {
     @MainActor private func makeModel() throws -> AppModel {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("PindoMacTests-\(UUID().uuidString)")
-        return try AppModel(directory: path)
+        let model = try AppModel(directory: path)
+        model.playFeedback = { _ in }
+        return model
     }
 
     @MainActor func testCopyingTaskPreservesStatusAndCopiesPlainContent() async throws {
@@ -342,5 +344,84 @@ final class AppModelTests: XCTestCase {
         let counts = DayTaskCount.grouped(model.document.tasks.filter(model.matches))
         XCTAssertEqual(counts[day]?.unfinished, 1)
         XCTAssertEqual(counts[day]?.completed, 1)
+    }
+
+    @MainActor func testFeedbackPlaysOnlyForSuccessfulAddsAndCompletionTransitions() async throws {
+        let model = try makeModel()
+        var feedback: [TaskFeedback] = []
+        model.playFeedback = { feedback.append($0) }
+        XCTAssertFalse(model.addTask(title: "  ", day: DayKey(), groupID: nil))
+        XCTAssertTrue(feedback.isEmpty)
+        XCTAssertTrue(model.addTask(title: "事项", day: DayKey(), groupID: nil))
+        let task = model.document.tasks[0]
+        model.setPhase(task, .completed)
+        model.setPhase(task, .completed) // Stale row callbacks must not play twice.
+        XCTAssertEqual(feedback, [.added, .completed])
+        model.setPhase(task, .pending)
+        XCTAssertEqual(feedback, [.added, .completed])
+        // A failed disk write must never sound like a successful action.
+        try FileManager.default.removeItem(at: model.repository.dataURL)
+        try FileManager.default.createDirectory(at: model.repository.dataURL, withIntermediateDirectories: false)
+        XCTAssertFalse(model.addTask(title: "写入失败", day: DayKey(), groupID: nil))
+        model.setPhase(task, .completed)
+        XCTAssertEqual(feedback, [.added, .completed])
+        XCTAssertEqual(model.task(task.id)?.phase, .pending)
+    }
+
+    @MainActor func testQuickPositionPersistsTopLeftAndRecoversAfterDisplayRemoval() async throws {
+        let suite = "PindoPositionTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = QuickPanelPosition(defaults: defaults)
+        let main = NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let second = NSRect(x: -1440, y: 0, width: 1440, height: 900)
+        XCTAssertNil(store.restoredOrigin(size: NSSize(width: 470, height: 260), visibleFrames: [main]))
+        store.save(frame: NSRect(x: -1000, y: 540, width: 470, height: 260))
+        let reopened = QuickPanelPosition(defaults: defaults)
+        XCTAssertEqual(reopened.restoredOrigin(size: NSSize(width: 470, height: 400), visibleFrames: [main, second]), NSPoint(x: -1000, y: 400))
+        XCTAssertEqual(reopened.restoredOrigin(size: NSSize(width: 470, height: 400), visibleFrames: [main]), NSPoint(x: 0, y: 400))
+        store.save(frame: NSRect(x: 1430, y: 880, width: 470, height: 260))
+        XCTAssertEqual(reopened.restoredOrigin(size: NSSize(width: 470, height: 260), visibleFrames: [main]), NSPoint(x: 970, y: 640))
+    }
+
+    @MainActor func testStatusToggleHidesVisiblePanelEvenWhenOcclusionInformationIsStale() async throws {
+        _ = NSApplication.shared
+        let model = try makeModel()
+        let delegate = AppDelegate(model: model)
+        delegate.toggleList(fromStatus: true)
+        let panel = try XCTUnwrap(delegate.listPanel)
+        defer { panel.orderOut(nil) }
+        XCTAssertTrue(panel.isVisible)
+        // Toggle immediately, without waiting for WindowServer occlusion updates.
+        delegate.toggleList(fromStatus: true)
+        XCTAssertFalse(panel.isVisible)
+        delegate.toggleList(fromStatus: true)
+        XCTAssertTrue(panel.isVisible)
+        XCTAssertTrue(delegate.listPanel === panel)
+    }
+
+    @MainActor func testQuickAddUsesNativeCornersAndRestoresDraggedPosition() async throws {
+        _ = NSApplication.shared
+        let suite = "PindoQuickPanelTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = try makeModel()
+        let delegate = AppDelegate(model: model, quickPosition: QuickPanelPosition(defaults: defaults))
+        delegate.toggleQuick()
+        let panel = try XCTUnwrap(delegate.quickPanel)
+        defer { panel.orderOut(nil) }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertTrue(panel.styleMask.contains(.titled))
+        XCTAssertTrue(panel.styleMask.contains(.fullSizeContentView))
+        XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
+        let screen = try XCTUnwrap(panel.screen).visibleFrame
+        panel.setFrameOrigin(NSPoint(x: screen.minX + 30, y: screen.minY + 40))
+        let topLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
+        delegate.toggleQuick()
+        XCTAssertFalse(panel.isVisible)
+        delegate.toggleQuick()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(panel.frame.minX, topLeft.x, accuracy: 1)
+        XCTAssertEqual(panel.frame.maxY, topLeft.y, accuracy: 1)
     }
 }
