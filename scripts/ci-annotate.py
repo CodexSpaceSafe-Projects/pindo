@@ -10,7 +10,7 @@ def escape(value: str) -> str:
 
 
 workspace = os.environ.get("GITHUB_WORKSPACE", "")
-pattern = re.compile(r"^(.+?\.swift):(\d+):(\d+): error: (.+)$")
+pattern = re.compile(r"^(.+?\.swift):(\d+)(?::(\d+))?: error: (.+)$")
 diagnostics = set()
 summary = []
 tails = []
@@ -29,8 +29,10 @@ for argument in sys.argv[1:]:
         if workspace and filename.startswith(workspace + "/"):
             filename = filename[len(workspace) + 1:]
         property_path = escape(filename).replace(",", "%2C").replace(":", "%3A")
-        print(f"::error file={property_path},line={row},col={column}::{escape(message)}")
-        summary.append(f"{filename}:{row}:{column}: {message}")
+        location = f"{filename}:{row}" + (f":{column}" if column else "")
+        properties = f"file={property_path},line={row}" + (f",col={column}" if column else "")
+        print(f"::error {properties}::{escape(message)}")
+        summary.append(f"{location}: {message}")
 
 if not summary and tails:
     message = tails[-1][-6000:]

@@ -178,6 +178,12 @@ final class AppModelTests: XCTestCase {
 
     @MainActor func testPanelPresentationRaisesItsLevelAndShowsItWithoutAppActivation() async throws {
         let app = NSApplication.shared
+        let previousPolicy = app.activationPolicy()
+        XCTAssertTrue(app.setActivationPolicy(.accessory))
+        // XCTest is not launched through PindoApp.main. Complete the same accessory-app
+        // startup before measuring activation, rather than measuring the test host's launch.
+        app.finishLaunching()
+        defer { app.setActivationPolicy(previousPolicy) }
         let wasActive = app.isActive
         let panel = QuickPanel(contentRect: NSRect(x: 0, y: 0, width: 390, height: 610),
                                styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
