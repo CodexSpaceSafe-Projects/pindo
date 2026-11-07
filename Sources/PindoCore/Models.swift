@@ -61,10 +61,6 @@ public struct TodoItem: Codable, Identifiable, Equatable, Sendable {
         createdAt = now; updatedAt = now
     }
 
-    public var handoffText: String {
-        let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        return "任务：\(title)" + (trimmedNote.isEmpty ? "" : "\n\n说明：\n\(trimmedNote)")
-    }
 }
 
 public struct TaskGroup: Codable, Identifiable, Equatable, Sendable {
@@ -118,6 +114,7 @@ public struct Preferences: Codable, Equatable, Sendable {
     public var showTodayCount = true
     public var expandCompleted = false
     public var launchAtLogin = false
+    public var defaultGroupID: UUID? = nil
     public var quickAddHotkey = HotkeyBinding.quickAdd
     public var listHotkey = HotkeyBinding.showList
     public init() {}
@@ -134,6 +131,7 @@ public struct PindoDocument: Codable, Equatable, Sendable {
         guard schemaVersion == 1 else { throw PindoError.unsupportedVersion }
         guard Set(tasks.map(\.id)).count == tasks.count, Set(groups.map(\.id)).count == groups.count else { throw PindoError.invalidData("存在重复标识") }
         let groupIDs = Set(groups.map(\.id))
+        if let id = preferences.defaultGroupID, !groupIDs.contains(id) { throw PindoError.invalidData("默认分组不存在") }
         for task in tasks {
             guard !task.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw PindoError.emptyTitle }
             _ = try DayKey(year: task.plannedDay.year, month: task.plannedDay.month, day: task.plannedDay.day)
@@ -155,6 +153,7 @@ public struct PindoDocument: Codable, Equatable, Sendable {
 
     public mutating func removeGroup(_ id: UUID) {
         groups.removeAll { $0.id == id }
+        if preferences.defaultGroupID == id { preferences.defaultGroupID = nil }
         for index in tasks.indices where tasks[index].groupID == id { tasks[index].groupID = nil }
     }
 

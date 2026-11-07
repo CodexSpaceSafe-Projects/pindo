@@ -13,10 +13,12 @@ import PindoCore
     private var registrations: [Registration] = []
     private var actions: [UInt32: Action] = [:]
     private var nextID: UInt32 = 1
+    private var pressTracker = HotkeyPressTracker()
     var perform: (Action) -> Void = { _ in }
 
     init() {
-        var type = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        var types = [EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+                     EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))]
         InstallEventHandler(GetApplicationEventTarget(), { _, event, context in
             guard let event, let context else { return OSStatus(eventNotHandledErr) }
             var key = EventHotKeyID()
@@ -25,9 +27,12 @@ import PindoCore
             guard key.signature == 0x50494E44 else { return OSStatus(eventNotHandledErr) }
             let manager = Unmanaged<GlobalHotkeys>.fromOpaque(context).takeUnretainedValue()
             let identifier = key.id
-            Task { @MainActor in if let action = manager.actions[identifier] { manager.perform(action) } }
+            let isDown = GetEventKind(event) == UInt32(kEventHotKeyPressed)
+            Task { @MainActor in
+                if manager.pressTracker.update(id: identifier, isDown: isDown), let action = manager.actions[identifier] { manager.perform(action) }
+            }
             return noErr
-        }, 1, &type, Unmanaged.passUnretained(self).toOpaque(), &handler)
+        }, 2, &types, Unmanaged.passUnretained(self).toOpaque(), &handler)
     }
 
     func configure(_ preferences: Preferences) throws {
@@ -60,11 +65,13 @@ import PindoCore
         let retained = Set(next.map(\.id))
         for item in registrations where !retained.contains(item.id) { UnregisterEventHotKey(item.reference) }
         registrations = next; actions = nextActions
+        pressTracker.reset()
     }
 
     func stop() {
         for item in registrations { UnregisterEventHotKey(item.reference) }
         registrations.removeAll(); actions.removeAll()
+        pressTracker.reset()
         if let handler { RemoveEventHandler(handler); self.handler = nil }
     }
 }

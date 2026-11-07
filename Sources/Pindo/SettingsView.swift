@@ -3,7 +3,7 @@ import AppKit
 import PindoCore
 import ServiceManagement
 
-enum SettingsSection: String, CaseIterable { case general = "通用", groups = "分组", shortcuts = "快捷记录", backup = "备份与恢复" }
+enum SettingsSection: String, CaseIterable { case general = "通用", todos = "管理待办", groups = "分组", shortcuts = "快捷记录", backup = "备份与恢复" }
 
 struct SettingsView: View {
     @ObservedObject var model: AppModel
@@ -15,6 +15,7 @@ struct SettingsView: View {
                     Button { model.flush(); section = item } label: {
                         Text(item.rawValue).font(.system(size: 12)).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 13).padding(.vertical, 11)
                             .background(section == item ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 7)).foregroundStyle(section == item ? Color.white : Color.primary)
+                            .contentShape(Rectangle())
                     }.buttonStyle(.plain)
                 }
                 Spacer()
@@ -26,6 +27,7 @@ struct SettingsView: View {
                     ErrorBanner(model: model)
                     switch section {
                     case .general: general
+                    case .todos: TodoManagementView(model: model)
                     case .groups: GroupsSettings(model: model)
                     case .shortcuts: ShortcutSettings(model: model)
                     case .backup: BackupSettings(model: model)
@@ -43,6 +45,19 @@ struct SettingsView: View {
                     HStack { Text("外观"); Spacer(); Picker("外观", selection: Binding(get: { model.document.preferences.appearance }, set: { value in model.setPreferences { $0.appearance = value } })) { Text("跟随系统").tag(Appearance.system); Text("浅色").tag(Appearance.light); Text("深色").tag(Appearance.dark) }.labelsHidden().frame(width: 130) }
                     Divider()
                     Toggle("登录时启动", isOn: Binding(get: { model.document.preferences.launchAtLogin }, set: model.setLogin))
+                }.padding(9)
+            }
+            GroupBox {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("新待办默认分组")
+                        Spacer()
+                        Picker("新待办默认分组", selection: Binding(get: { model.document.preferences.defaultGroupID }, set: { value in model.setPreferences { $0.defaultGroupID = value } })) {
+                            Text("未分组").tag(UUID?.none)
+                            ForEach(model.document.groups) { Text($0.name).tag(Optional($0.id)) }
+                        }.labelsHidden().frame(width: 130)
+                    }
+                    Text("快速记录与“全部分组”下新建的待办使用此分组；在分组清单中添加时，沿用当前分组。").font(.system(size: 11)).foregroundStyle(.secondary)
                 }.padding(9)
             }
             GroupBox {
@@ -112,7 +127,7 @@ struct ShortcutSettings: View {
     @State private var message = "点击组合键进行录制；需要 Control、Option 或 Command。"
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("记录新想法，或在 Codex 运行时挑选下一条待办。").font(.system(size: 12)).foregroundStyle(.secondary)
+            Text("随时记录新想法，或唤出待办清单。").font(.system(size: 12)).foregroundStyle(.secondary)
             recorder(title: "快速记录", value: $quick, id: 1)
             recorder(title: "唤出待办清单", value: $list, id: 2)
             Text(message).font(.system(size: 11)).foregroundStyle(.secondary)

@@ -9,7 +9,9 @@ enum SaveState { case saved, saving, failed }
 @MainActor final class AppModel: ObservableObject {
     @Published private(set) var document: PindoDocument
     @Published var selectedDay = DayKey()
-    @Published var groupFilter = GroupFilter.all
+    @Published var groupFilter = GroupFilter.all { didSet { resetListEntryGroup() } }
+    @Published var isPinned = false
+    @Published var listEntryGroupID: UUID?
     @Published var noteID: UUID?
     @Published var editingID: UUID?
     @Published var errorMessage: String?
@@ -23,20 +25,15 @@ enum SaveState { case saved, saving, failed }
     @Published var quickInvocationID = UUID()
     @Published var today = DayKey()
     var openSettings: () -> Void = {}
-    var hideList: () -> Void = {}
     var dismissList: () -> Void = {}
     var hideQuickAdd: () -> Void = {}
     var preferencesChanged: (Preferences) -> Void = { _ in }
     var configureHotkeys: ((Preferences) throws -> Void)?
     var configureLogin: ((Bool) throws -> Void)?
+    var pinChanged: (Bool) -> Void = { _ in }
     var writeClipboard: (String) -> Bool = { text in
         let pasteboard = NSPasteboard.general; pasteboard.clearContents()
         return pasteboard.setString(text, forType: .string)
-    }
-    var codexApplicationURL: () -> URL? = { NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex") }
-    var launchCodex: (URL, @escaping (Error?) -> Void) -> Void = { url, completion in
-        let config = NSWorkspace.OpenConfiguration(); config.activates = true
-        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in completion(error) }
     }
     private(set) var repository: PindoRepository
     private var noteSave: Task<Void, Never>?
@@ -46,6 +43,7 @@ enum SaveState { case saved, saving, failed }
     init(directory: URL) throws {
         repository = try PindoRepository(directory: directory)
         document = repository.document
+        listEntryGroupID = repository.document.preferences.defaultGroupID
         quickTitle = UserDefaults.standard.string(forKey: "quickTitle") ?? ""
         quickNote = UserDefaults.standard.string(forKey: "quickNote") ?? ""
         listEntry = UserDefaults.standard.string(forKey: "listEntry") ?? ""
@@ -68,12 +66,28 @@ enum SaveState { case saved, saving, failed }
     var completed: [TodoItem] { ordered(document.tasks.filter { $0.phase == .completed && $0.plannedDay == selectedDay && matches($0) }) }
     var todayCount: Int { document.tasks.filter { $0.plannedDay == today && $0.phase != .completed }.count }
     var selectedGroup: UUID? { if case .group(let id) = groupFilter { return id }; return nil }
+    func resetListEntryGroup() {
+        switch groupFilter {
+        case .all: listEntryGroupID = document.preferences.defaultGroupID
+        case .ungrouped: listEntryGroupID = nil
+        case .group(let id): listEntryGroupID = id
+        }
+    }
+    func togglePin() { isPinned.toggle(); pinChanged(isPinned) }
+
+    @discardableResult func submitListEntry() -> Bool {
+        guard addTask(title: listEntry, day: selectedDay, groupID: listEntryGroupID) else { return false }
+        listEntry = ""; persistDrafts(); return true
+    }
 
     @discardableResult func commit(_ change: (inout PindoDocument) throws -> Void) -> Bool {
         noteSave?.cancel()
         do {
+            let previousDefault = document.preferences.defaultGroupID
             try repository.update(change)
             document = repository.document; saveState = .saved
+            if groupFilter == .all && listEntryGroupID == previousDefault { listEntryGroupID = document.preferences.defaultGroupID }
+            if let id = listEntryGroupID, group(id) == nil { resetListEntryGroup() }
             preferencesChanged(document.preferences)
             return true
         } catch { saveState = .failed; errorMessage = error.localizedDescription; return false }
@@ -143,26 +157,9 @@ enum SaveState { case saved, saving, failed }
     }
 
     func copyTask(_ task: TodoItem) -> Bool {
-        guard writeClipboard(task.handoffText) else { errorMessage = "未能复制任务，事项状态未改变。"; return false }
+        let text = task.title + (task.note.isEmpty ? "" : "\n\n" + task.note)
+        guard writeClipboard(text) else { errorMessage = "未能复制待办内容。"; return false }
         return true
-    }
-    func startInCodex(_ task: TodoItem) {
-        guard copyTask(task) else { return }
-        guard let appURL = codexApplicationURL() else {
-            errorMessage = "内容已复制，但未找到 Codex 桌面应用。事项状态未改变。"; return
-        }
-        guard commit({ try $0.setPhase(.inProgress, for: task.id) }) else { return }
-        hideList(); hideQuickAdd()
-        activateCodex(at: appURL)
-    }
-    func returnToCodex() {
-        guard let url = codexApplicationURL() else { errorMessage = "未找到 Codex 桌面应用。"; return }
-        hideList(); hideQuickAdd(); activateCodex(at: url)
-    }
-    private func activateCodex(at url: URL) {
-        launchCodex(url) { [weak self] error in
-            if let error { Task { @MainActor in self?.errorMessage = "任务内容已复制，未能打开 Codex：\(error.localizedDescription)" } }
-        }
     }
 
     func setPreferences(_ change: (inout Preferences) -> Void) {
@@ -218,6 +215,7 @@ enum SaveState { case saved, saving, failed }
             let oldLogin = document.preferences.launchAtLogin
             try repository.restore(snapshotID: id)
             document = repository.document; noteID = nil; editingID = nil
+            resetListEntryGroup()
             if case .group(let groupID) = groupFilter, group(groupID) == nil { groupFilter = .all }
             preferencesChanged(document.preferences); refreshSnapshots()
             if oldLogin != document.preferences.launchAtLogin { do { try configureLogin?(document.preferences.launchAtLogin) } catch { errorMessage = "资料已恢复，但登录启动未更新：\(error.localizedDescription)" } }

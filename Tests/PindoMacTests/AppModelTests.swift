@@ -10,38 +10,18 @@ final class AppModelTests: XCTestCase {
         return try AppModel(directory: path)
     }
 
-    @MainActor func testHandoffCopiesFullNotePersistsProgressAndActivatesOnlyAfterSave() async throws {
+    @MainActor func testCopyingTaskPreservesStatusAndCopiesPlainContent() async throws {
         let model = try makeModel()
         XCTAssertTrue(model.addTask(title: "确认首页方案", note: "先给两个方向", day: DayKey(), groupID: nil))
         let item = model.document.tasks[0]
-        var steps: [String] = []
-        model.writeClipboard = { text in XCTAssertEqual(text, "任务：确认首页方案\n\n说明：\n先给两个方向"); steps.append("copy"); return true }
-        model.codexApplicationURL = { URL(fileURLWithPath: "/Applications/Codex.app") }
-        model.hideList = { steps.append("hide") }
-        model.launchCodex = { _, completion in
-            XCTAssertEqual(model.document.tasks[0].phase, .inProgress)
-            steps.append("activate"); completion(nil)
-        }
-        model.startInCodex(item)
-        XCTAssertEqual(steps, ["copy", "hide", "activate"])
-        let reopened = try PindoRepository(directory: model.repository.directory)
-        XCTAssertEqual(reopened.document.tasks[0].phase, .inProgress)
-    }
-
-    @MainActor func testCopyFailureAndMissingCodexDoNotStartTask() async throws {
-        let model = try makeModel()
-        XCTAssertTrue(model.addTask(title: "任务", day: DayKey(), groupID: nil))
-        let item = model.document.tasks[0]
-        var launched = false
-        model.launchCodex = { _, _ in launched = true }
+        var copied = ""
+        model.writeClipboard = { copied = $0; return true }
+        XCTAssertTrue(model.copyTask(item))
+        XCTAssertEqual(copied, "确认首页方案\n\n先给两个方向")
+        XCTAssertEqual(model.document.tasks[0], item)
         model.writeClipboard = { _ in false }
-        model.startInCodex(item)
-        XCTAssertEqual(model.document.tasks[0].phase, .pending)
+        XCTAssertFalse(model.copyTask(item))
         XCTAssertNotNil(model.errorMessage)
-        model.writeClipboard = { _ in true }; model.codexApplicationURL = { nil }
-        model.startInCodex(item)
-        XCTAssertEqual(model.document.tasks[0].phase, .pending)
-        XCTAssertFalse(launched)
     }
 
     @MainActor func testNoteAutosavesAfterDebounceWithoutTakingSnapshot() async throws {
@@ -81,9 +61,9 @@ final class AppModelTests: XCTestCase {
         _ = NSApplication.shared
         let model = try makeModel()
         let panel = NSHostingView(rootView: TaskPanelView(model: model))
-        panel.frame = NSRect(x: 0, y: 0, width: 370, height: 610)
+        panel.frame = NSRect(x: 0, y: 0, width: 390, height: 610)
         panel.layoutSubtreeIfNeeded()
-        XCTAssertGreaterThanOrEqual(panel.fittingSize.width, 370)
+        XCTAssertGreaterThanOrEqual(panel.fittingSize.width, 390)
         let settings = NSHostingView(rootView: SettingsView(model: model))
         settings.frame = NSRect(x: 0, y: 0, width: 740, height: 570)
         settings.layoutSubtreeIfNeeded()
@@ -134,5 +114,92 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.document.tasks[1], original.tasks[1])
         model.move(second, offset: 1)
         XCTAssertEqual(model.document, original)
+    }
+
+    @MainActor func testNewListTasksUseDefaultGroupAndRespectExplicitFilters() async throws {
+        let model = try makeModel(), today = DayKey()
+        let defaultGroup = model.document.groups[0].id, otherGroup = model.document.groups[1].id
+        model.setPreferences { $0.defaultGroupID = defaultGroup }
+
+        model.groupFilter = .all
+        XCTAssertTrue(model.addTask(title: "默认分组", day: today, groupID: model.listEntryGroupID))
+        model.groupFilter = .group(otherGroup)
+        XCTAssertTrue(model.addTask(title: "当前分组", day: today, groupID: model.listEntryGroupID))
+        model.groupFilter = .ungrouped
+        XCTAssertTrue(model.addTask(title: "明确未分组", day: today, groupID: model.listEntryGroupID))
+        model.setPreferences { $0.defaultGroupID = nil }
+        model.groupFilter = .all
+        XCTAssertTrue(model.addTask(title: "默认未分组", day: today, groupID: model.listEntryGroupID))
+
+        XCTAssertEqual(model.document.tasks.map(\.groupID), [Optional(defaultGroup), Optional(otherGroup), nil, nil])
+    }
+
+    @MainActor func testComposerSelectionCanOverrideDefaultAndUseUngrouped() async throws {
+        let model = try makeModel()
+        let group = model.document.groups[0].id
+        model.setPreferences { $0.defaultGroupID = group }
+        model.listEntry = "使用默认分组"
+        XCTAssertTrue(model.submitListEntry())
+        XCTAssertEqual(model.document.tasks.last?.groupID, group)
+        model.listEntryGroupID = nil
+        model.listEntry = "手动未分组"
+        XCTAssertTrue(model.submitListEntry())
+        XCTAssertNil(model.document.tasks.last?.groupID)
+        XCTAssertEqual(model.listEntry, "")
+        model.listEntryGroupID = group
+        model.removeGroup(group)
+        XCTAssertNil(model.listEntryGroupID)
+    }
+
+    @MainActor func testPinChangesAreExplicitAndReversible() async throws {
+        let model = try makeModel()
+        var levels: [Bool] = []
+        model.pinChanged = { levels.append($0) }
+        model.togglePin(); XCTAssertTrue(model.isPinned)
+        model.togglePin(); XCTAssertFalse(model.isPinned)
+        XCTAssertEqual(levels, [true, false])
+    }
+
+    @MainActor func testManagementSearchesAllDatesAndNotesAndCanEditAndDelete() async throws {
+        let model = try makeModel()
+        let group = model.document.groups[0].id
+        XCTAssertTrue(model.addTask(title: "过去的事项", note: "搜索关键字", day: DayKey().adding(days: -20), groupID: group))
+        XCTAssertTrue(model.addTask(title: "未来的事项", day: DayKey().adding(days: 20), groupID: nil))
+        let past = model.document.tasks[0], future = model.document.tasks[1]
+        model.setPhase(past, .completed)
+        XCTAssertEqual(model.managedTasks(query: "", status: .all, group: .all).count, 2)
+        XCTAssertEqual(model.managedTasks(query: "关键字", status: .completed, group: .group(group)).map(\.id), [past.id])
+        XCTAssertEqual(model.managedTasks(query: "", status: .unfinished, group: .ungrouped).map(\.id), [future.id])
+        XCTAssertTrue(model.edit(future.id, title: "修改后", day: DayKey(), groupID: group))
+        XCTAssertEqual(model.task(future.id)?.title, "修改后")
+        model.delete(past)
+        XCTAssertEqual(model.managedTasks(query: "", status: .all, group: .all).map(\.id), [future.id])
+    }
+
+    @MainActor func testSavingDoesNotReplaceMarkedChineseInput() async throws {
+        _ = NSApplication.shared
+        var stored = "已有"
+        let editor = NoteEditor(text: Binding(get: { stored }, set: { stored = $0 }))
+        let coordinator = editor.makeCoordinator()
+        let view = ComposingTextView()
+        view.string = stored; view.delegate = coordinator
+        view.didCommitText = { [weak view] in if let view { coordinator.publish(view) } }
+        view.setSelectedRange(NSRange(location: (stored as NSString).length, length: 0))
+        view.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(view.hasMarkedText())
+        let composingText = view.string, selection = view.selectedRange()
+        coordinator.publish(view)
+        XCTAssertEqual(stored, "已有")
+        coordinator.synchronize(view, text: stored)
+        XCTAssertEqual(view.string, composingText)
+        XCTAssertEqual(view.selectedRange(), selection)
+        XCTAssertTrue(view.hasMarkedText())
+        view.insertText("中文", replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.unmarkText()
+        coordinator.publish(view)
+        XCTAssertEqual(stored, "已有中文")
+        view.setSelectedRange(NSRange(location: 1, length: 1))
+        coordinator.synchronize(view, text: stored)
+        XCTAssertEqual(view.selectedRange(), NSRange(location: 1, length: 1))
     }
 }

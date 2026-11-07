@@ -17,14 +17,17 @@ final class QuickPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSWindowDelegate {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var model: AppModel?
     private var statusItem: NSStatusItem?
-    private let popover = NSPopover()
+    private var listPanel: QuickPanel?
     private var quickPanel: QuickPanel?
     private var settingsWindow: NSWindow?
     private var previousApplication: NSRunningApplication?
-    private var outsideMonitor: Any?
+    private var globalMouseMonitor: Any?
+    private var localMouseMonitor: Any?
+    private var listShownAt: TimeInterval = 0
+    private var quickShownAt: TimeInterval = 0
     private let hotkeys = GlobalHotkeys()
     private var lastPreferences: Preferences?
 
@@ -36,13 +39,15 @@ final class QuickPanel: NSPanel {
             let model = try AppModel(directory: PindoRepository.defaultDirectory())
             self.model = model
             model.openSettings = { [weak self] in self?.showSettings() }
-            model.hideList = { [weak self] in self?.closeList() }
             model.dismissList = { [weak self] in self?.closeList(restoreFocus: true) }
             model.hideQuickAdd = { [weak self] in self?.closeQuick() }
             model.preferencesChanged = { [weak self] in self?.apply($0) }
+            model.pinChanged = { [weak self] pinned in self?.applyPin(pinned) }
             model.configureHotkeys = { [weak self] in try self?.hotkeys.configure($0) }
             model.configureLogin = { enabled in if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() } }
-            hotkeys.perform = { [weak self] action in switch action { case .quickAdd: self?.toggleQuick(); case .showList: self?.toggleList() } }
+            hotkeys.perform = { [weak self] action in
+                switch action { case .quickAdd: self?.toggleQuick(); case .showList: self?.toggleList() }
+            }
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
             statusItem = item
             if let button = item.button {
@@ -51,14 +56,9 @@ final class QuickPanel: NSPanel {
                 button.target = self; button.action = #selector(statusClicked)
                 button.toolTip = "Pindo · 待办清单"
             }
-            popover.behavior = .transient; popover.delegate = self
-            let controller = NSViewController()
-            controller.view = glassHost(TaskPanelView(model: model))
-            controller.view.frame = NSRect(x: 0, y: 0, width: 370, height: 610)
-            popover.contentViewController = controller
-            popover.contentSize = NSSize(width: 370, height: 610)
-            installMenu(); apply(model.document.preferences)
+            installMenu(); apply(model.document.preferences); installDismissalObservers()
             NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didWake), name: NSWorkspace.didWakeNotification, object: nil)
+            NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didActivateApplication(_:)), name: NSWorkspace.didActivateApplicationNotification, object: nil)
         } catch {
             let alert = NSAlert(); alert.messageText = "Pindo 未能读取资料"; alert.informativeText = error.localizedDescription + "\n原文件不会被覆盖。"
             alert.addButton(withTitle: "显示资料目录"); alert.addButton(withTitle: "退出")
@@ -76,61 +76,124 @@ final class QuickPanel: NSPanel {
         lastPreferences = preferences
     }
 
-    @objc private func statusClicked() { toggleList() }
-    @objc private func didWake() { model?.captureSnapshot(); if let model { apply(model.document.preferences) } }
-    private func toggleList() {
-        if popover.isShown { closeList(restoreFocus: true); return }
+    private func makePanel(width: CGFloat, height: CGFloat) -> QuickPanel {
+        let panel = QuickPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.titleVisibility = .hidden; panel.titlebarAppearsTransparent = true
+        for kind: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] { panel.standardWindowButton(kind)?.isHidden = true }
+        panel.isMovableByWindowBackground = true; panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false; panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true; panel.delegate = self
+        return panel
+    }
+
+    @objc private func statusClicked() { toggleList(fromStatus: true) }
+    @objc private func didWake() { model?.captureSnapshot() }
+    private func toggleList(fromStatus: Bool = false) {
+        if listPanel?.isVisible == true { closeList(restoreFocus: true); return }
         closeQuick()
-        guard let model, let button = statusItem?.button else { return }
+        guard let model else { return }
         rememberPreviousApplication(); model.leaveNote()
-        NSApp.activate(ignoringOtherApps: true)
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        if listPanel == nil {
+            let panel = makePanel(width: 390, height: 610)
+            panel.contentView = glassHost(TaskPanelView(model: model))
+            listPanel = panel
+        }
+        guard let panel = listPanel else { return }
+        applyPin(model.isPinned); position(panel, fromStatus: fromStatus)
+        // A nonactivating panel accepts typing without holding the auto-hidden menu bar open.
+        panel.makeKeyAndOrderFront(nil)
+        listShownAt = ProcessInfo.processInfo.systemUptime
+        statusItem?.button?.highlight(false)
     }
     private func closeList(restoreFocus: Bool = false) {
-        model?.flush(); popover.performClose(nil)
+        guard listPanel?.isVisible == true else { return }
+        listPanel?.makeFirstResponder(nil)
+        model?.flush(); listPanel?.orderOut(nil); statusItem?.button?.highlight(false)
         if restoreFocus { previousApplication?.activate(options: [.activateIgnoringOtherApps]) }
     }
-    func popoverDidClose(_ notification: Notification) { model?.flush() }
-
-    private func toggleQuick() {
-        if quickPanel?.isVisible == true { closeQuick(); return }
-        closeList(); rememberPreviousApplication()
-        guard let model else { return }
-        model.quickInvocationID = UUID()
-        if quickPanel == nil {
-            let panel = QuickPanel(contentRect: NSRect(x: 0, y: 0, width: 470, height: 260), styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel], backing: .buffered, defer: false)
-            panel.titleVisibility = .hidden; panel.titlebarAppearsTransparent = true
-            panel.standardWindowButton(.closeButton)?.isHidden = true; panel.standardWindowButton(.miniaturizeButton)?.isHidden = true; panel.standardWindowButton(.zoomButton)?.isHidden = true
-            panel.level = .floating; panel.hidesOnDeactivate = false; panel.isReleasedWhenClosed = false
-            panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-            panel.isOpaque = false; panel.backgroundColor = .clear; panel.delegate = self
-            quickPanel = panel
-        }
-        guard let panel = quickPanel else { return }
-        panel.contentView = glassHost(QuickAddView(model: model, sizeChanged: { [weak panel] height in
-            guard let panel, let content = panel.contentView, abs(content.frame.height - height) > 1 else { return }
-            panel.setContentSize(NSSize(width: 470, height: min(max(height, 180), 520)))
-        }).id(model.quickInvocationID))
+    private func applyPin(_ pinned: Bool) {
+        listPanel?.level = pinned ? .floating : .normal
+        listPanel?.collectionBehavior = pinned ? [.canJoinAllSpaces, .fullScreenAuxiliary] : [.moveToActiveSpace, .fullScreenAuxiliary]
+    }
+    private func position(_ panel: NSPanel, fromStatus: Bool = false) {
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
         let area = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1000, height: 800)
-        panel.setFrameOrigin(NSPoint(x: area.midX - 235, y: area.midY - 130))
-        panel.makeKeyAndOrderFront(nil)
-        outsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in Task { @MainActor in self?.closeQuick() } }
+        var x = area.midX - panel.frame.width / 2
+        if fromStatus, let button = statusItem?.button, let window = button.window {
+            x = window.convertToScreen(button.convert(button.bounds, to: nil)).midX - panel.frame.width / 2
+        }
+        panel.setFrameOrigin(NSPoint(x: max(area.minX, min(x, area.maxX - panel.frame.width)),
+                                     y: max(area.minY, area.maxY - panel.frame.height - 10)))
     }
-    private func closeQuick() {
+
+    private func toggleQuick() {
+        if quickPanel?.isVisible == true { closeQuick(restoreFocus: true); return }
+        if model?.isPinned != true { closeList() }
+        rememberPreviousApplication()
+        guard let model else { return }
+        model.quickInvocationID = UUID()
+        if quickPanel == nil { quickPanel = makePanel(width: 470, height: 260); quickPanel?.level = .floating }
+        guard let panel = quickPanel else { return }
+        panel.contentView = glassHost(QuickAddView(model: model, sizeChanged: { [weak panel] height in
+            guard let panel, abs((panel.contentView?.frame.height ?? 0) - height) > 1 else { return }
+            let top = panel.frame.maxY
+            panel.setContentSize(NSSize(width: 470, height: min(max(height, 180), 520)))
+            panel.setFrameOrigin(NSPoint(x: panel.frame.minX, y: top - panel.frame.height))
+        }).id(model.quickInvocationID))
+        position(panel); panel.makeKeyAndOrderFront(nil)
+        quickShownAt = ProcessInfo.processInfo.systemUptime
+    }
+    private func closeQuick(restoreFocus: Bool = false) {
+        guard quickPanel?.isVisible == true else { return }
+        quickPanel?.makeFirstResponder(nil)
         model?.persistDrafts(); quickPanel?.orderOut(nil)
-        if let outsideMonitor { NSEvent.removeMonitor(outsideMonitor); self.outsideMonitor = nil }
+        if restoreFocus { previousApplication?.activate(options: [.activateIgnoringOtherApps]) }
     }
     private func rememberPreviousApplication() {
         let app = NSWorkspace.shared.frontmostApplication
         previousApplication = app?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : app
     }
-
+    private func installDismissalObservers() {
+        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            let timestamp = event.timestamp
+            Task { @MainActor in self?.dismissTransientPanels(eventTime: timestamp) }
+        }
+        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self, event.window != nil else { return event }
+            // Leave auxiliary windows (date picker, context menus, IME candidates) alone.
+            if event.window === self.settingsWindow || self.belongs(event.window, to: self.listPanel) || event.window === self.statusItem?.button?.window { self.closeQuick() }
+            if self.model?.isPinned != true && (event.window === self.settingsWindow || self.belongs(event.window, to: self.quickPanel)) { self.closeList() }
+            return event
+        }
+    }
+    private func belongs(_ window: NSWindow?, to panel: NSPanel?) -> Bool {
+        guard let panel, var current = window else { return false }
+        while true {
+            if current === panel { return true }
+            guard let parent = current.parent ?? current.sheetParent else { return false }
+            current = parent
+        }
+    }
+    private func dismissTransientPanels(eventTime: TimeInterval = .greatestFiniteMagnitude, respectComposition: Bool = true) {
+        // Clicking an input-method candidate is not an outside-dismiss gesture.
+        if respectComposition && ((listPanel?.firstResponder as? NSTextView)?.hasMarkedText() == true ||
+            (quickPanel?.firstResponder as? NSTextView)?.hasMarkedText() == true) { return }
+        // Delayed outside-click callbacks must not close a newly opened panel.
+        if eventTime >= quickShownAt { closeQuick() }
+        if model?.isPinned != true && eventTime >= listShownAt { closeList() }
+    }
+    @objc private func didActivateApplication(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier, app.activationPolicy != .prohibited else { return }
+        dismissTransientPanels(respectComposition: false)
+    }
     @objc private func showSettings() {
-        closeList(); closeQuick(); guard let model else { return }
+        if model?.isPinned != true { closeList() }
+        closeQuick(); guard let model else { return }
         if settingsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 740, height: 570), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-            window.title = "Pindo 设置"; window.minSize = NSSize(width: 690, height: 530)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 620), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+            window.title = "Pindo 设置"; window.minSize = NSSize(width: 740, height: 550)
             window.isReleasedWhenClosed = false; window.delegate = self
             window.isOpaque = false; window.backgroundColor = .clear
             window.contentView = glassHost(SettingsView(model: model))
@@ -141,15 +204,22 @@ final class QuickPanel: NSPanel {
     func windowWillClose(_ notification: Notification) { model?.flush() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        listPanel?.makeFirstResponder(nil); quickPanel?.makeFirstResponder(nil)
         guard model?.flush() == false else { return .terminateNow }
         let alert = NSAlert(); alert.messageText = "还有内容未能保存"; alert.informativeText = "请保留当前文字，修复保存问题后再退出。"; alert.addButton(withTitle: "重试保存"); alert.addButton(withTitle: "取消退出")
         if alert.runModal() == .alertFirstButtonReturn, model?.flush() == true { return .terminateNow }
         return .terminateCancel
     }
-    func applicationWillTerminate(_ notification: Notification) { hotkeys.stop(); closeQuick(); NSWorkspace.shared.notificationCenter.removeObserver(self) }
+    func applicationWillTerminate(_ notification: Notification) {
+        hotkeys.stop()
+        if let globalMouseMonitor { NSEvent.removeMonitor(globalMouseMonitor) }
+        if let localMouseMonitor { NSEvent.removeMonitor(localMouseMonitor) }
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
 
     private func glassHost<V: View>(_ root: V) -> NSView {
         let effect = NSVisualEffectView()
+        effect.wantsLayer = true; effect.layer?.cornerRadius = 12; effect.layer?.masksToBounds = true
         effect.material = .popover; effect.blendingMode = .behindWindow; effect.state = .active
         let host = NSHostingView(rootView: root)
         host.translatesAutoresizingMaskIntoConstraints = false

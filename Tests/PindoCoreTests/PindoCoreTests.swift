@@ -224,12 +224,6 @@ final class PindoCoreTests: XCTestCase {
         XCTAssertEqual(day.adding(days: 2, calendar: calendar).description, "2026-03-09")
     }
 
-    func testHandoffIncludesAttachedNoteWithoutInventingExecution() {
-        var item = task("优化导航"); item.note = "先给两版方案\n保留登录入口"
-        XCTAssertEqual(item.handoffText, "任务：优化导航\n\n说明：\n先给两版方案\n保留登录入口")
-        XCTAssertEqual(item.phase, .pending)
-    }
-
     func testImportValidatesBeforeReplacingAndAddsProtection() throws {
         let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
         let original = task(); try repo.update { $0.tasks.append(original) }
@@ -299,5 +293,69 @@ final class PindoCoreTests: XCTestCase {
         XCTAssertTrue(HotkeyBinding.showList.isValid)
         var doc = document(); doc.preferences.listHotkey = .quickAdd
         XCTAssertThrowsError(try doc.validated())
+    }
+
+    func testDefaultGroupPersistsAndRestoresWithSnapshots() throws {
+        let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
+        let firstGroup = repo.document.groups[0].id, secondGroup = repo.document.groups[1].id
+        try repo.update { $0.preferences.defaultGroupID = firstGroup }
+        _ = try repo.captureIfChanged(now: now)
+        let target = repo.archive.records.last!.id
+        try repo.update { $0.preferences.defaultGroupID = secondGroup }
+        _ = try repo.captureIfChanged(now: now.addingTimeInterval(30))
+        XCTAssertEqual(try PindoRepository(directory: directory, io: io).document.preferences.defaultGroupID, secondGroup)
+
+        try repo.restore(snapshotID: target, now: now)
+
+        XCTAssertEqual(repo.document.preferences.defaultGroupID, firstGroup)
+        XCTAssertEqual(try PindoRepository(directory: directory, io: io).document.preferences.defaultGroupID, firstGroup)
+    }
+
+    func testLegacyDocumentAndSnapshotsWithoutDefaultGroupStillLoad() throws {
+        var original = document(); original.preferences.appearance = .dark
+        original.preferences.defaultGroupID = original.groups[0].id
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: DocumentCodec.encode(original)) as? [String: Any])
+        var preferences = try XCTUnwrap(json["preferences"] as? [String: Any])
+        preferences.removeValue(forKey: "defaultGroupID"); json["preferences"] = preferences
+        let legacyData = try JSONSerialization.data(withJSONObject: json)
+        let legacy = try DocumentCodec.decode(PindoDocument.self, from: legacyData).validated()
+        let io = MemoryStorage()
+        io.files[directory.appendingPathComponent("data.json")] = legacyData
+        io.files[directory.appendingPathComponent("Backups/snapshots.json")] = try DocumentCodec.encode(SnapshotArchive(document: legacy, now: now))
+
+        let repo = try PindoRepository(directory: directory, io: io, now: now)
+
+        XCTAssertNil(repo.document.preferences.defaultGroupID)
+        XCTAssertEqual(repo.document.preferences.appearance, .dark)
+        XCTAssertEqual(repo.document.tasks, original.tasks)
+        XCTAssertNil(repo.backupWarning)
+        XCTAssertEqual(try PindoDocument.fromSnapshot(repo.archive.state()), legacy)
+    }
+
+    func testRemovingDefaultGroupClearsPreferenceAndPreservesTaskContent() throws {
+        var doc = document(); let group = doc.groups[0].id
+        doc.preferences.defaultGroupID = group
+        doc.tasks[0].groupID = group; doc.tasks[0].note = "保留的备注"
+        doc.removeGroup(doc.groups[1].id)
+        XCTAssertEqual(doc.preferences.defaultGroupID, group)
+
+        doc.removeGroup(group)
+
+        XCTAssertNil(doc.preferences.defaultGroupID)
+        XCTAssertNil(doc.tasks[0].groupID)
+        XCTAssertEqual(doc.tasks[0].title, "事项")
+        XCTAssertEqual(doc.tasks[0].note, "保留的备注")
+        XCTAssertEqual(try doc.validated(), doc)
+    }
+
+    func testImportRejectsMissingDefaultGroupWithoutReplacingData() throws {
+        let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
+        var imported = document(); imported.preferences.defaultGroupID = UUID()
+        let documentBefore = repo.document, filesBefore = io.files
+
+        XCTAssertThrowsError(try repo.importDocument(DocumentCodec.encode(imported)))
+
+        XCTAssertEqual(repo.document, documentBefore)
+        XCTAssertEqual(io.files, filesBefore)
     }
 }
