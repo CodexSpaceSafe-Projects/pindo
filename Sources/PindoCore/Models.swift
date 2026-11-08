@@ -183,7 +183,7 @@ public struct PindoDocument: Codable, Equatable, Sendable {
 
 public enum PindoError: LocalizedError {
     case invalidDay, emptyTitle, missingTask, invalidHotkey, unsupportedVersion
-    case missingParent, hierarchyCycle, hierarchyDepth, incompleteChildren
+    case missingParent, hierarchyCycle, hierarchyDepth, incompleteChildren, dragCompletionBoundary
     case invalidData(String), corruptFile(String), snapshotTooLarge, protectionSnapshotTooLarge, missingSnapshot, recoveryRequired
     public var errorDescription: String? {
         switch self {
@@ -194,6 +194,7 @@ public enum PindoError: LocalizedError {
         case .hierarchyCycle: return "不能把事项移到自己或其子项下。"
         case .hierarchyDepth: return "待办层级最多为三级。"
         case .incompleteChildren: return "请先完成所有子项。"
+        case .dragCompletionBoundary: return "未完成与已完成事项不能相互拖动。"
         case .invalidHotkey: return "快捷键需要修饰键，且两个快捷键不能相同。"
         case .unsupportedVersion: return "资料来自不支持的版本，原文件已保留。"
         case .invalidData(let reason): return "资料无效：\(reason)。"

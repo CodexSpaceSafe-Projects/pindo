@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import QuartzCore
 import PindoCore
 
 struct TaskOutlineSection: Equatable {
@@ -10,6 +11,7 @@ struct TaskOutlineSection: Equatable {
     var rows: [TaskOutlineRow]
     var emptyText: String? = nil
     var footer: String? = nil
+    var completed: Bool? = nil
 }
 
 /// A native tree owns mouse tracking, disclosure controls and the dragging session.
@@ -76,6 +78,7 @@ struct TaskOutlineList: NSViewRepresentable {
     var label = ""
     var isSection = false
     var isFooter = false
+    var completed: Bool?
     var children: [TaskOutlineNode] = []
     init(_ key: String) { self.key = key }
 }
@@ -142,6 +145,14 @@ struct TaskOutlineList: NSViewRepresentable {
     private var collapsedBeforeDrag: Set<String>?
     private var pendingPreview: DispatchWorkItem?
     private var proposal: TaskOutlineDrop?
+    private var proposalReadyAt: TimeInterval = 0
+    private var previewScheduledAt: TimeInterval = 0
+    private var lastPreviewAt: TimeInterval = 0
+    private var dragGeneration = 0
+    private var lastDragItemID: String?
+    private var structure: TaskOutlineStructure?
+    private var disclosureNeedsRestore = false
+    private var heightCache: [String: TaskOutlineHeight] = [:]
     private var lastCompletedPreference: Bool?
     private var menuActions: [TaskOutlineMenuAction] = []
 
@@ -157,7 +168,10 @@ struct TaskOutlineList: NSViewRepresentable {
     func update(_ content: TaskOutlineList) {
         self.content = content
         guard let outline else { return }
+        let previousPreviewID = lastPreviewID
         let previewID = content.model.taskDragPreview == nil ? nil : content.model.draggedTaskID
+        let rowSizingChanged = lastBatch != content.batchMode
+        let refreshAllVisible = lastGroups != content.model.document.groups || lastSelected != content.selectedIDs || lastBatch != content.batchMode || lastLanguage != content.model.interfaceLanguage
         let completedPreference = content.model.document.preferences.expandCompleted
         if let old = lastCompletedPreference, old != completedPreference {
             if completedPreference { collapsed.remove("section.completed") } else { collapsed.insert("section.completed") }
@@ -167,8 +181,10 @@ struct TaskOutlineList: NSViewRepresentable {
             collapsed = original
             collapsedBeforeDrag = nil
             pendingPreview?.cancel(); pendingPreview = nil; proposal = nil
+            disclosureNeedsRestore = true
         }
-        guard lastSections != content.sections || lastGroups != content.model.document.groups || lastSelected != content.selectedIDs || lastBatch != content.batchMode || lastLanguage != content.model.interfaceLanguage || lastPreviewID != previewID else { return }
+        guard lastSections != content.sections || refreshAllVisible || lastPreviewID != previewID || disclosureNeedsRestore else { return }
+        let oldRows = cache.compactMapValues { $0.row }, oldLabels = cache.mapValues(\.label)
         lastSections = content.sections; lastSelected = content.selectedIDs
         lastGroups = content.model.document.groups
         lastBatch = content.batchMode; lastLanguage = content.model.interfaceLanguage; lastPreviewID = previewID
@@ -178,6 +194,7 @@ struct TaskOutlineList: NSViewRepresentable {
         for section in content.sections {
             let header = node("section." + section.id)
             header.isSection = true; header.label = (section.title ?? "") + "  \(section.count)"
+            header.completed = section.completed
             used.insert(header.key)
             if knownSections.insert(header.key).inserted, !section.initiallyExpanded { collapsed.insert(header.key) }
             for row in section.rows {
@@ -198,15 +215,72 @@ struct TaskOutlineList: NSViewRepresentable {
             }
             if section.title == nil { roots.append(contentsOf: header.children) } else { roots.append(header) }
         }
-        // Stable NSObject identities retain AppKit's item tracking through each preview.
-        cache = cache.filter { used.contains($0.key) }
-        let origin = scroll?.contentView.bounds.origin ?? .zero
+        var children: [String: [String]] = [TaskOutlineStructure.root: roots.map(\.key)]
+        func index(_ nodes: [TaskOutlineNode]) {
+            for node in nodes { children[node.key] = node.children.map(\.key); index(node.children) }
+        }
+        index(roots)
+        let next = TaskOutlineStructure(children: children)
+        let move = structure?.singleMove(to: next, preferredID: content.model.draggedTaskID?.uuidString ?? lastDragItemID)
+        let sameStructure = structure == next
+        let titleChanges = Set(cache.keys.filter { oldRows[$0]?.task.title != cache[$0]?.row?.task.title })
+        let changedRows = Set(cache.keys.filter { key in
+            guard let old = oldRows[key], let new = cache[key]?.row else { return oldLabels[key] != cache[key]?.label }
+            let a = old.task, b = new.task
+            return a.title != b.title || a.phase != b.phase || a.note.isEmpty != b.note.isEmpty || a.groupID != b.groupID || a.plannedDay != b.plannedDay || old.isContext != new.isContext
+        })
         restoringExpansion = true
-        outline.reloadData()
-        restoreDisclosure(in: roots)
+        if let move {
+            // Preserve cells, disclosure and the clip position. Native item moves
+            // animate the whole branch; unrelated rows are never reconstructed.
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.14
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                outline.beginUpdates()
+                outline.moveItem(at: move.oldIndex, inParent: cache[move.oldParent], to: move.newIndex, inParent: cache[move.newParent])
+                outline.endUpdates()
+            }
+            for key in Set([move.oldParent, move.newParent]) {
+                if let parent = cache[key] { outline.reloadItem(parent, reloadChildren: false) }
+            }
+            restoreDisclosure(in: roots)
+        } else if !sameStructure {
+            let origin = scroll?.contentView.bounds.origin ?? .zero
+            outline.reloadData()
+            restoreDisclosure(in: roots)
+            if let scroll { scroll.contentView.scroll(to: origin); scroll.reflectScrolledClipView(scroll.contentView) }
+        } else if disclosureNeedsRestore {
+            restoreDisclosure(in: roots)
+        }
         restoringExpansion = false
-        if let scroll { scroll.contentView.scroll(to: origin); scroll.reflectScrolledClipView(scroll.contentView) }
-        updateRowHeights()
+        structure = next; disclosureNeedsRestore = false
+        cache = cache.filter { used.contains($0.key) }
+        heightCache = heightCache.filter { used.contains($0.key) }
+        let previewKeys = Set([previousPreviewID?.uuidString, previewID?.uuidString].compactMap { $0 })
+        refreshVisibleCells(changed: refreshAllVisible ? nil : changedRows.union(previewKeys))
+        if (!sameStructure && move == nil) || rowSizingChanged { updateRowHeights() }
+        else {
+            var changed = titleChanges
+            if let move {
+                func invalidate(_ node: TaskOutlineNode) { changed.insert(node.key); node.children.forEach(invalidate) }
+                if let item = cache[move.id] { invalidate(item) }
+            }
+            let rows = changed.compactMap { cache[$0].map { outline.row(forItem: $0) } }.filter { $0 >= 0 }
+            if !rows.isEmpty { invalidateHeights(IndexSet(rows)) }
+        }
+        if content.model.draggedTaskID == nil { lastDragItemID = nil }
+    }
+
+    private func refreshVisibleCells(changed: Set<String>?) {
+        guard let outline else { return }
+        let visible = outline.rows(in: outline.visibleRect)
+        guard visible.location != NSNotFound else { return }
+        for row in visible.location..<min(NSMaxRange(visible), outline.numberOfRows) {
+            guard let node = outline.item(atRow: row) as? TaskOutlineNode,
+                  changed == nil || changed!.contains(node.key),
+                  let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? TaskOutlineCell else { continue }
+            cell.configure(node: node, content: content)
+        }
     }
 
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int { (item as? TaskOutlineNode)?.children.count ?? roots.count }
@@ -216,8 +290,11 @@ struct TaskOutlineList: NSViewRepresentable {
 
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
         guard let node = item as? TaskOutlineNode, let row = node.row else { return 36 }
-        return TaskOutlineCell.rowHeight(title: row.task.title, width: outlineView.bounds.width - CGFloat(outlineView.level(forItem: node) + 1) * 16,
-                                         management: content.management, batch: content.batchMode)
+        let width = outlineView.bounds.width - CGFloat(outlineView.level(forItem: node) + 1) * 16
+        if let cached = heightCache[node.key], cached.title == row.task.title, cached.width == width, cached.management == content.management, cached.batch == content.batchMode { return cached.height }
+        let height = TaskOutlineCell.rowHeight(title: row.task.title, width: width, management: content.management, batch: content.batchMode)
+        heightCache[node.key] = TaskOutlineHeight(title: row.task.title, width: width, management: content.management, batch: content.batchMode, height: height)
+        return height
     }
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
@@ -276,15 +353,23 @@ struct TaskOutlineList: NSViewRepresentable {
         for node in nodes where !node.children.isEmpty {
             let isPreviewParent = proposal?.parent?.uuidString == node.key && content.model.taskDragPreview != nil
             if !collapsed.contains(node.key) || isPreviewParent {
-                outline.expandItem(node)
+                if !outline.isItemExpanded(node) { outline.expandItem(node) }
                 restoreDisclosure(in: node.children)
-            } else { outline.collapseItem(node) }
+            } else if outline.isItemExpanded(node) { outline.collapseItem(node) }
         }
     }
 
     func updateRowHeights() {
         guard let outline else { return }
-        outline.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<outline.numberOfRows))
+        invalidateHeights(IndexSet(integersIn: 0..<outline.numberOfRows))
+    }
+
+    private func invalidateHeights(_ rows: IndexSet) {
+        // Height notifications otherwise create their own competing default animation.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            outline?.noteHeightOfRows(withIndexesChanged: rows)
+        }
     }
 
     // Same native pasteboard/validate/accept separation as FSNotes' SidebarOutlineView.
@@ -299,10 +384,11 @@ struct TaskOutlineList: NSViewRepresentable {
     func outlineView(_ outlineView: NSOutlineView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint, forItems draggedItems: [Any]) {
         guard draggedItems.count == 1, let id = (draggedItems.first as? TaskOutlineNode)?.row?.id else { return }
         beginDrag(id)
-        session.animatesToStartingPositionsOnCancelOrFail = true
+        session.animatesToStartingPositionsOnCancelOrFail = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     }
 
     func beginDrag(_ id: UUID) {
+        dragGeneration += 1; lastDragItemID = id.uuidString; lastPreviewAt = 0
         collapsedBeforeDrag = collapsed
         _ = content.model.beginTaskDrag(id)
     }
@@ -319,34 +405,63 @@ struct TaskOutlineList: NSViewRepresentable {
     /// A child index is an insertion boundary in the *currently displayed* tree.
     /// Convert it to a stable sibling ID before projecting onto the unchanged base.
     func drop(item: TaskOutlineNode?, index: Int) -> TaskOutlineDrop? {
-        guard let source = content.model.draggedTaskID else { return nil }
+        guard let source = content.model.draggedTaskID, let sourceTask = content.model.task(source) else { return nil }
         if item?.row?.id == source { return proposal } // Cursor now overlaps the projected row.
         if let row = item?.row {
             let children = item!.children.compactMap(\.row)
             let before = index < 0 ? nil : children.dropFirst(index).first { $0.id != source }?.id
-            return TaskOutlineDrop(parent: row.id, before: before)
+            let completed = index < 0 ? content.model.task(row.id)?.phase == .completed : insertionClass(children, index: index, source: sourceTask)
+            return TaskOutlineDrop(parent: row.id, before: before, completed: completed)
         }
         guard item?.isSection == true || (item == nil && content.management) else { return nil }
         let children = (item?.children ?? roots).compactMap(\.row)
-        return TaskOutlineDrop(parent: nil, before: index < 0 ? nil : children.dropFirst(index).first { $0.id != source }?.id)
+        let completed = item?.completed ?? insertionClass(children, index: index, source: sourceTask)
+        return TaskOutlineDrop(parent: nil, before: index < 0 ? nil : children.dropFirst(index).first { $0.id != source }?.id, completed: completed)
+    }
+
+    private func insertionClass(_ rows: [TaskOutlineRow], index: Int, source: TodoItem) -> Bool {
+        let isCompleted = source.phase == .completed
+        let boundary = index < 0 ? rows.count : min(index, rows.count)
+        let adjacent = [rows.prefix(boundary).last { $0.id != source.id }, rows.dropFirst(boundary).first { $0.id != source.id }].compactMap { $0 }
+        // A line between the two classes belongs to either adjoining region. Lines
+        // surrounded by the opposite class are forbidden, including in management.
+        return adjacent.isEmpty || adjacent.contains { (content.model.task($0.id)?.phase == .completed) == isCompleted } ? isCompleted : !isCompleted
     }
 
     @discardableResult func validate(item: TaskOutlineNode?, index: Int) -> Bool {
-        guard let next = drop(item: item, index: index), let source = content.model.draggedTaskID else { exitDestination(); return false }
-        do { try content.model.document.validateTaskMove(source, toParent: next.parent) }
-        catch { exitDestination(); return false }
+        guard let next = drop(item: item, index: index) else { exitDestination(); return false }
+        if proposal == next { return true }
+        guard content.model.canPreviewTaskDrag(parent: next.parent, before: next.before, completed: next.completed) else { exitDestination(); return false }
         if proposal != next {
-            pendingPreview?.cancel(); proposal = next
-            // Coalesce hover changes rather than reloading inside AppKit's validation.
-            // Once settled the real rows, indentation and parent phases update together.
-            let work = DispatchWorkItem { [weak self] in
-                guard let self, self.proposal == next else { return }
-                _ = self.content.model.previewTaskDrag(parent: next.parent, before: next.before)
-            }
-            pendingPreview = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+            proposal = next
+            let currentParent = content.model.draggedTaskID.flatMap { content.model.task($0)?.parentID }
+            let nestsUnderNewParent = index < 0 && next.parent != nil && next.parent != currentParent
+            proposalReadyAt = ProcessInfo.processInfo.systemUptime + (nestsUnderNewParent ? 0.18 : 0)
+            schedulePreview()
         }
         return true
+    }
+
+    private func schedulePreview() {
+        let now = ProcessInfo.processInfo.systemUptime
+        let deadline = max(proposalReadyAt, lastPreviewAt + 1.0 / 30.0)
+        if pendingPreview != nil {
+            if deadline >= previewScheduledAt { return }
+            pendingPreview?.cancel()
+        }
+        let generation = dragGeneration
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.dragGeneration == generation else { return }
+            self.pendingPreview = nil
+            guard let next = self.proposal else { return }
+            if ProcessInfo.processInfo.systemUptime + 0.001 < self.proposalReadyAt { self.schedulePreview(); return }
+            self.lastPreviewAt = ProcessInfo.processInfo.systemUptime
+            _ = self.content.model.previewTaskDrag(parent: next.parent, before: next.before, completed: next.completed)
+        }
+        pendingPreview = work; previewScheduledAt = deadline
+        // One pending frame consumes the latest target. Continuous movement cannot
+        // starve the preview, unlike cancel-and-restart debouncing on every event.
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, deadline - now), execute: work)
     }
 
     func outlineView(_ outlineView: NSOutlineView, acceptDrop info: NSDraggingInfo, item: Any?, childIndex index: Int) -> Bool {
@@ -359,7 +474,7 @@ struct TaskOutlineList: NSViewRepresentable {
     @discardableResult func accept(item: TaskOutlineNode?, index: Int) -> Bool {
         pendingPreview?.cancel(); pendingPreview = nil
         guard let next = drop(item: item, index: index) else { cancelDrag(); return false }
-        let saved = content.model.acceptTaskDrag(parent: next.parent, before: next.before)
+        let saved = content.model.acceptTaskDrag(parent: next.parent, before: next.before, completed: next.completed)
         if saved, let parent = next.parent { collapsedBeforeDrag?.remove(parent.uuidString) }
         restoreExpansionAfterDrag()
         proposal = nil
@@ -367,6 +482,7 @@ struct TaskOutlineList: NSViewRepresentable {
     }
 
     func exitDestination() {
+        dragGeneration += 1
         pendingPreview?.cancel(); pendingPreview = nil; proposal = nil
         // Never publish from a synchronous AppKit validation callback.
         DispatchQueue.main.async { [weak self] in
@@ -376,13 +492,14 @@ struct TaskOutlineList: NSViewRepresentable {
     }
 
     func cancelDrag() {
+        dragGeneration += 1
         pendingPreview?.cancel(); pendingPreview = nil; proposal = nil
         content.model.endTaskDrag(); restoreExpansionAfterDrag()
     }
 
     private func restoreExpansionAfterDrag() {
         if let original = collapsedBeforeDrag { collapsed = original; collapsedBeforeDrag = nil }
-        lastSections = nil // Restore spring-loaded branches even if task data is unchanged.
+        disclosureNeedsRestore = true
     }
 
     func menu(for node: TaskOutlineNode) -> NSMenu? {
@@ -407,7 +524,14 @@ struct TaskOutlineList: NSViewRepresentable {
     }
 }
 
-struct TaskOutlineDrop: Equatable { let parent: UUID?; let before: UUID? }
+struct TaskOutlineDrop: Equatable { let parent: UUID?; let before: UUID?; let completed: Bool }
+private struct TaskOutlineHeight {
+    let title: String
+    let width: CGFloat
+    let management: Bool
+    let batch: Bool
+    let height: CGFloat
+}
 
 @MainActor final class TaskOutlineMenuAction: NSObject {
     let action: () -> Void
@@ -549,6 +673,7 @@ struct TaskOutlineDrop: Equatable { let parent: UUID?; let before: UUID? }
     override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
 
     static func statusImage(_ phase: TaskPhase) -> NSImage {
+        if let image = statusImages[phase] { return image }
         let image = NSImage(size: NSSize(width: 20, height: 20), flipped: true) { rect in
             let circle = NSRect(x: 1, y: 1, width: 18, height: 18)
             if phase == .completed {
@@ -566,6 +691,8 @@ struct TaskOutlineDrop: Equatable { let parent: UUID?; let before: UUID? }
             return true
         }
         image.isTemplate = false
+        statusImages[phase] = image
         return image
     }
+    private static var statusImages: [TaskPhase: NSImage] = [:]
 }

@@ -44,6 +44,17 @@ private struct TaskTreeIndex {
         }
         return result
     }
+
+    func validateMove(_ id: UUID, toParent parent: UUID?) throws {
+        guard positions[id] != nil else { throw PindoError.missingTask }
+        if let parent, positions[parent] == nil { throw PindoError.missingParent }
+        let movedIDs = subtree([id])
+        if let parent, movedIDs.contains(parent) { throw PindoError.hierarchyCycle }
+        let originalDepth = ancestors(of: id).count
+        let height = (movedIDs.map { ancestors(of: $0).count - originalDepth }.max() ?? 0) + 1
+        let newDepth = parent.map { ancestors(of: $0).count + 1 } ?? 0
+        guard newDepth + height <= PindoDocument.maximumTaskDepth else { throw PindoError.hierarchyDepth }
+    }
 }
 
 public extension PindoDocument {
@@ -120,21 +131,35 @@ public extension PindoDocument {
     }
 
     func validateTaskMove(_ id: UUID, toParent parent: UUID?) throws {
+        try TaskTreeIndex(tasks).validateMove(id, toParent: parent)
+    }
+
+    /// Dragging never crosses the completed/unfinished boundary. General tree edits
+    /// remain separate: explicitly adding a child can still reopen a completed parent.
+    func validateTaskDrag(_ id: UUID, toParent parent: UUID?, before sibling: UUID? = nil, completed: Bool? = nil) throws {
         let tree = TaskTreeIndex(tasks)
-        guard tree.positions[id] != nil else { throw PindoError.missingTask }
-        if let parent, tree.positions[parent] == nil { throw PindoError.missingParent }
-        let subtree = tree.subtree([id])
-        if let parent, subtree.contains(parent) { throw PindoError.hierarchyCycle }
-        let originalDepth = tree.ancestors(of: id).count
-        let height = (subtree.map { tree.ancestors(of: $0).count - originalDepth }.max() ?? 0) + 1
-        let newDepth = parent.map { tree.ancestors(of: $0).count + 1 } ?? 0
-        guard newDepth + height <= Self.maximumTaskDepth else { throw PindoError.hierarchyDepth }
+        guard let source = tree.positions[id] else { throw PindoError.missingTask }
+        let sourceCompleted = tasks[source].phase == .completed
+        if let completed, sourceCompleted != completed { throw PindoError.dragCompletionBoundary }
+        if let parent {
+            guard let target = tree.positions[parent] else { throw PindoError.missingParent }
+            // An existing mixed-status family may reorder its children. Nesting under
+            // another parent requires that parent's completion class to match.
+            if tasks[source].parentID != parent, sourceCompleted != (tasks[target].phase == .completed) {
+                throw PindoError.dragCompletionBoundary
+            }
+        }
+        if let sibling {
+            guard let target = tree.positions[sibling], tasks[target].parentID == parent else { throw PindoError.missingTask }
+            if completed == nil, sourceCompleted != (tasks[target].phase == .completed) { throw PindoError.dragCompletionBoundary }
+        }
+        try tree.validateMove(id, toParent: parent)
     }
 
     /// Moves one complete subtree. Dates, groups and notes stay attached to each task.
     mutating func moveTask(_ id: UUID, toParent parent: UUID?, before sibling: UUID? = nil, now: Date = Date()) throws {
-        try validateTaskMove(id, toParent: parent)
         let tree = TaskTreeIndex(tasks)
+        try tree.validateMove(id, toParent: parent)
         guard let source = tree.positions[id] else { throw PindoError.missingTask }
         if let sibling {
             guard let index = tree.positions[sibling], tasks[index].parentID == parent else { throw PindoError.missingTask }

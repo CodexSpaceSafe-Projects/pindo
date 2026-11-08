@@ -8,10 +8,16 @@ private struct OutlineFixture: View {
     @ObservedObject var model: AppModel
     var matching: Set<UUID>?
     var batch = false
+    var sectioned = false
     var body: some View {
         let document = model.taskDragPreview ?? model.document
+        let groups = model.outlineSections(in: document)
+        let sections = sectioned ? [
+            TaskOutlineSection(id: "unfinished", title: "未完成", rows: groups.unfinished, completed: false),
+            TaskOutlineSection(id: "completed", title: "已完成", rows: groups.completed, completed: true)
+        ] : [TaskOutlineSection(id: "test", rows: document.taskOutline(matching: matching ?? Set(document.tasks.map(\.id))))]
         TaskOutlineList(model: model,
-                        sections: [TaskOutlineSection(id: "test", rows: document.taskOutline(matching: matching ?? Set(document.tasks.map(\.id))))],
+                        sections: sections,
                         management: true, batchMode: batch, onSelect: { _ in }, onSelectNote: { _ in }, onEdit: { _ in },
                         onAddChild: { _ in }, onDelete: { _ in }, onMove: { _, _ in })
     }
@@ -24,11 +30,11 @@ final class TaskOutlineTests: XCTestCase {
         return model
     }
 
-    @MainActor private func host(_ model: AppModel, matching: Set<UUID>? = nil, batch: Bool = false) async throws -> (NSPanel, TaskNativeOutlineView, TaskOutlineCoordinator) {
+    @MainActor private func host(_ model: AppModel, matching: Set<UUID>? = nil, batch: Bool = false, sectioned: Bool = false) async throws -> (NSPanel, TaskNativeOutlineView, TaskOutlineCoordinator) {
         _ = NSApplication.shared
         let window = NSPanel(contentRect: NSRect(x: 200, y: 200, width: 420, height: 520), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false; window.isMovableByWindowBackground = true
-        window.contentView = NSHostingView(rootView: OutlineFixture(model: model, matching: matching, batch: batch))
+        window.contentView = NSHostingView(rootView: OutlineFixture(model: model, matching: matching, batch: batch, sectioned: sectioned))
         window.orderFrontRegardless()
         try await settle()
         func find(_ view: NSView) -> TaskNativeOutlineView? {
@@ -39,7 +45,7 @@ final class TaskOutlineTests: XCTestCase {
         return (window, outline, try XCTUnwrap(outline.dataSource as? TaskOutlineCoordinator))
     }
 
-    @MainActor private func settle() async throws { try await Task.sleep(nanoseconds: 180_000_000) }
+    @MainActor private func settle() async throws { try await Task.sleep(nanoseconds: 320_000_000) }
 
     @MainActor func testNativeTitleOwnsMouseTrackingAndPasteboardWriterExportsTaskID() async throws {
         let model = try model(), day = DayKey()
@@ -102,9 +108,9 @@ final class TaskOutlineTests: XCTestCase {
 
     @MainActor func testHoverShowsProjectedHierarchyAndParentStatusThenCancelRestoresWithoutWriting() async throws {
         let model = try model(), day = DayKey()
-        for title in ["已完成的目标", "拖动事项"] { XCTAssertTrue(model.addTask(title: title, day: day, groupID: nil)) }
+        for title in ["未完成的目标", "拖动事项"] { XCTAssertTrue(model.addTask(title: title, day: day, groupID: nil)) }
         let target = model.document.tasks[0], source = model.document.tasks[1]
-        model.setPhase(target, .completed)
+        model.setPhase(source, .inProgress)
         let original = model.document, bytes = try Data(contentsOf: model.repository.dataURL)
         let (window, outline, coordinator) = try await host(model)
         defer { window.orderOut(nil); window.contentView = nil }
@@ -114,7 +120,7 @@ final class TaskOutlineTests: XCTestCase {
         try await settle()
         let preview = try XCTUnwrap(model.taskDragPreview)
         XCTAssertEqual(preview.tasks.first { $0.id == source.id }?.parentID, target.id)
-        XCTAssertEqual(preview.tasks.first { $0.id == target.id }?.phase, .pending)
+        XCTAssertEqual(preview.tasks.first { $0.id == target.id }?.phase, .inProgress)
         XCTAssertEqual(outline.level(forItem: coordinator.taskNode(source.id)), 1)
         XCTAssertEqual(model.document, original)
         XCTAssertEqual(try Data(contentsOf: model.repository.dataURL), bytes)
@@ -197,5 +203,75 @@ final class TaskOutlineTests: XCTestCase {
         XCTAssertNil(model.draggedTaskID); XCTAssertNil(model.taskDragPreview)
         try FileManager.default.removeItem(at: model.repository.dataURL)
         try bytes.write(to: model.repository.dataURL, options: .atomic)
+    }
+
+    @MainActor func testNativeCompletedAndUnfinishedRegionsRejectCrossDropsAndAcceptRevalidates() async throws {
+        let model = try model(), day = DayKey()
+        for title in ["未完成", "进行中", "已完成 A", "已完成 B"] { XCTAssertTrue(model.addTask(title: title, day: day, groupID: nil)) }
+        let pending = model.document.tasks[0], running = model.document.tasks[1], doneA = model.document.tasks[2], doneB = model.document.tasks[3]
+        model.setPhase(running, .inProgress); model.setPhase(doneA, .completed); model.setPhase(doneB, .completed)
+        let original = model.document, bytes = try Data(contentsOf: model.repository.dataURL)
+        let (window, _, coordinator) = try await host(model, sectioned: true)
+        defer { window.orderOut(nil); window.contentView = nil }
+        let pendingHeader = try XCTUnwrap(coordinator.roots.first { $0.completed == false })
+        let doneHeader = try XCTUnwrap(coordinator.roots.first { $0.completed == true })
+        for source in [pending, running] {
+            coordinator.beginDrag(source.id)
+            for index in [-1, 0, doneHeader.children.count] { XCTAssertFalse(coordinator.validate(item: doneHeader, index: index)) }
+            XCTAssertFalse(coordinator.validate(item: coordinator.taskNode(doneA.id), index: -1))
+            XCTAssertFalse(coordinator.accept(item: doneHeader, index: -1))
+        }
+        coordinator.beginDrag(doneA.id)
+        for index in [-1, 0, pendingHeader.children.count] { XCTAssertFalse(coordinator.validate(item: pendingHeader, index: index)) }
+        XCTAssertFalse(coordinator.validate(item: coordinator.taskNode(pending.id), index: -1))
+        XCTAssertFalse(coordinator.accept(item: coordinator.taskNode(pending.id), index: -1))
+        try await settle()
+        XCTAssertEqual(model.document, original)
+        XCTAssertEqual(try Data(contentsOf: model.repository.dataURL), bytes)
+        XCTAssertNil(model.taskDragPreview)
+        // Same-class nesting is still available for completed tasks.
+        coordinator.beginDrag(doneB.id)
+        XCTAssertTrue(coordinator.validate(item: coordinator.taskNode(doneA.id), index: -1))
+        XCTAssertTrue(coordinator.accept(item: coordinator.taskNode(doneA.id), index: -1))
+        XCTAssertEqual(model.task(doneB.id)?.parentID, doneA.id)
+        XCTAssertEqual(model.task(doneA.id)?.phase, .completed)
+        XCTAssertEqual(model.task(doneB.id)?.phase, .completed)
+    }
+
+    @MainActor func testRapidReorderPreviewsKeepCellsAndScrollPositionAndDoNotStarve() async throws {
+        let model = try model(), day = DayKey()
+        XCTAssertTrue(model.commit { document in
+            for index in 0..<50 { try document.insertTask(TodoItem(title: "事项 \(index)", plannedDay: day, order: index)) }
+        })
+        let tasks = model.document.tasks, source = tasks[16], unchanged = tasks[14]
+        let (window, outline, coordinator) = try await host(model)
+        defer { window.orderOut(nil); window.contentView = nil }
+        let clip = try XCTUnwrap(outline.enclosingScrollView?.contentView)
+        clip.scroll(to: NSPoint(x: 0, y: 600))
+        outline.enclosingScrollView?.reflectScrolledClipView(clip)
+        outline.layoutSubtreeIfNeeded()
+        let stableNode = try XCTUnwrap(coordinator.taskNode(unchanged.id))
+        let stableCell = try XCTUnwrap(outline.view(atColumn: 0, row: outline.row(forItem: stableNode), makeIfNecessary: true))
+        let origin = clip.bounds.origin
+        coordinator.beginDrag(source.id)
+        var sawPreviewDuringMovement = false
+        for index in 0..<20 {
+            XCTAssertTrue(coordinator.validate(item: nil, index: 14 + index % 5))
+            try await Task.sleep(nanoseconds: 15_000_000)
+            sawPreviewDuringMovement = sawPreviewDuringMovement || model.taskDragPreview != nil
+        }
+        let final = try XCTUnwrap(coordinator.drop(item: nil, index: 15))
+        XCTAssertTrue(coordinator.validate(item: nil, index: 15))
+        try await settle()
+        XCTAssertTrue(sawPreviewDuringMovement, "A continuously changing target must not defer every preview until the pointer stops")
+        let order = try XCTUnwrap(model.taskDragPreview).siblingTasks(of: source.id).map(\.id)
+        if let before = final.before { XCTAssertEqual(order.firstIndex(of: source.id)! + 1, order.firstIndex(of: before)) }
+        XCTAssertTrue(outline.view(atColumn: 0, row: outline.row(forItem: stableNode), makeIfNecessary: true) === stableCell)
+        XCTAssertEqual(clip.bounds.origin.y, origin.y, accuracy: 1)
+        coordinator.cancelDrag()
+        try await settle()
+        XCTAssertEqual(model.document.tasks, tasks)
+        XCTAssertEqual(outline.numberOfRows, tasks.count)
+        XCTAssertEqual(clip.bounds.origin.y, origin.y, accuracy: 1)
     }
 }

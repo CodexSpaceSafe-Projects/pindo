@@ -215,3 +215,4 @@
 "将删除这些事项、全部子项及其备注。" = "These tasks, all their subtasks, and their notes will be deleted.";
 "拖动排序，放到事项上可作为子项" = "Drag to reorder; drop onto a task to nest it";
 "切换待办状态：%@" = "Change task status: %@";
+"未完成与已完成事项不能相互拖动。" = "Unfinished and completed tasks cannot be dragged into each other.";

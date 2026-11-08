@@ -85,13 +85,13 @@ struct TaskPanelView: View {
         var groups: [TaskOutlineSection] = []
         if model.selectedDay == model.today && !sections.previous.isEmpty {
             groups.append(TaskOutlineSection(id: "previous", title: l10n("之前未完成"), count: overdueIDs.count, initiallyExpanded: false,
-                                             rows: sections.previous, footer: l10n("将这 %ld 件移到今天", overdueIDs.count)))
+                                             rows: sections.previous, footer: l10n("将这 %ld 件移到今天", overdueIDs.count), completed: false))
         }
         groups.append(TaskOutlineSection(id: "unfinished", title: l10n("未完成"), count: sections.unfinished.filter { $0.task.phase != .completed }.count,
-                                         rows: sections.unfinished, emptyText: l10n("想到一件事，就在下方记下来。")))
+                                         rows: sections.unfinished, emptyText: l10n("想到一件事，就在下方记下来。"), completed: false))
         if !sections.completed.isEmpty {
             groups.append(TaskOutlineSection(id: "completed", title: l10n("已完成"), count: sections.completed.count,
-                                             initiallyExpanded: model.document.preferences.expandCompleted, rows: sections.completed))
+                                             initiallyExpanded: model.document.preferences.expandCompleted, rows: sections.completed, completed: true))
         }
         return VStack(spacing: 0) {
             TaskOutlineList(model: model, sections: groups,
@@ -100,8 +100,10 @@ struct TaskPanelView: View {
                             onDelete: { task in
                                 if model.document.descendantIDs(including: [task.id]).count > 1 { deletingTask = task } else { model.delete(task) }
                             }, onMove: { model.move($0, offset: $1) }, onFooter: { model.rollover(taskIDs: overdueIDs) })
+        }.overlay(alignment: .bottom) {
             if model.draggedTaskID != nil {
                 Text(l10n("拖动排序，放到事项上可作为子项")).font(.system(size: 11)).foregroundStyle(.secondary).padding(6)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7)).padding(6).allowsHitTesting(false)
             }
         }.padding(.horizontal, 12).padding(.vertical, 8).frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .textBackgroundColor).opacity(0.45))

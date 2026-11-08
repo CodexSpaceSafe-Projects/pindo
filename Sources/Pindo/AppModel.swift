@@ -235,12 +235,12 @@ enum SaveState { case saved, saving, failed }
 
     func canDropTask(_ id: UUID, onto target: UUID, position: TaskDropPosition) -> Bool {
         guard id != target, let targetTask = task(target) else { return false }
-        do { try document.validateTaskMove(id, toParent: position == .inside ? target : targetTask.parentID); return true }
+        do { try document.validateTaskDrag(id, toParent: position == .inside ? target : targetTask.parentID, completed: targetTask.phase == .completed); return true }
         catch { return false }
     }
 
     @discardableResult func dropTask(_ id: UUID, onto target: UUID, position: TaskDropPosition) -> Bool {
-        guard id != target, let targetTask = task(target) else { return false }
+        guard canDropTask(id, onto: target, position: position), let targetTask = task(target) else { return false }
         let parent = position == .inside ? target : targetTask.parentID
         let before: UUID?
         switch position {
@@ -273,10 +273,19 @@ enum SaveState { case saved, saving, failed }
         return true
     }
 
-    @discardableResult func previewTaskDrag(parent: UUID?, before: UUID?) -> Bool {
+    func canPreviewTaskDrag(parent: UUID?, before: UUID?, completed: Bool?) -> Bool {
+        guard let id = draggedTaskID, taskDragBase == document else { return false }
+        do { try document.validateTaskDrag(id, toParent: parent, before: before, completed: completed); return true }
+        catch { return false }
+    }
+
+    @discardableResult func previewTaskDrag(parent: UUID?, before: UUID?, completed: Bool? = nil) -> Bool {
         guard let id = draggedTaskID, let base = taskDragBase, base == document else { endTaskDrag(); return false }
         var next = base
-        do { try next.moveTask(id, toParent: parent, before: before, now: taskDragDate) }
+        do {
+            try next.validateTaskDrag(id, toParent: parent, before: before, completed: completed)
+            try next.moveTask(id, toParent: parent, before: before, now: taskDragDate)
+        }
         catch { clearTaskDragPreview(); return false }
         if taskDragPreview != next { taskDragPreview = next }
         return true
@@ -286,8 +295,8 @@ enum SaveState { case saved, saving, failed }
         if taskDragPreview != nil { taskDragPreview = nil }
     }
 
-    @discardableResult func acceptTaskDrag(parent: UUID?, before: UUID?) -> Bool {
-        guard previewTaskDrag(parent: parent, before: before), let next = taskDragPreview else { endTaskDrag(); return false }
+    @discardableResult func acceptTaskDrag(parent: UUID?, before: UUID?, completed: Bool? = nil) -> Bool {
+        guard previewTaskDrag(parent: parent, before: before, completed: completed), let next = taskDragPreview else { endTaskDrag(); return false }
         endTaskDrag()
         if next == document { return true }
         let saved = commit { $0 = next }
