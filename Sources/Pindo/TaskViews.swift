@@ -169,28 +169,93 @@ struct TaskPanelView: View {
     }
 }
 
-struct TaskComposer: View {
+@MainActor struct TaskComposer: View {
     @Environment(\.pindoLocalization) private var l10n
     @ObservedObject var model: AppModel
-    @FocusState private var entryFocused: Bool
+    @StateObject private var inputFocus = ComposerInputFocus()
 
     var body: some View {
         HStack(spacing: 8) {
-            TextField(l10n("添加一件要做的事…"), text: $model.listEntry).textFieldStyle(.plain).focused($entryFocused)
+            ComposerTextField(text: $model.listEntry, placeholder: l10n("添加一件要做的事…"), focus: inputFocus, submit: submit)
                 .onChange(of: model.listEntry) { _, _ in model.scheduleDraftSave() }
-                .onSubmit { if model.submitListEntry() { entryFocused = true } }
             GroupSelectionMenu(groups: model.document.groups, selection: $model.listEntryGroupID)
-            Button { if model.submitListEntry() { entryFocused = true } } label: { Image(systemName: "return").frame(width: 24, height: 25).contentShape(Rectangle()) }
+            Button(action: submit) { Image(systemName: "return").frame(width: 24, height: 25).contentShape(Rectangle()) }
                 .buttonStyle(.plain).help(l10n("添加待办")).accessibilityLabel(l10n("添加待办"))
                 .disabled(model.listEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }.font(.system(size: 13)).padding(12)
             .background {
-                ComposerFocusTarget { entryFocused = true }
+                ComposerFocusTarget { inputFocus.focus() }
                     .background(Color(nsColor: .textBackgroundColor).opacity(0.75))
                     .clipShape(RoundedRectangle(cornerRadius: 11))
             }
             .overlay(RoundedRectangle(cornerRadius: 11).stroke(.primary.opacity(0.08)).allowsHitTesting(false))
             .padding(.horizontal, 14).padding(.vertical, 12)
+    }
+    private func submit() { if model.submitListEntry() { inputFocus.focus() } }
+}
+
+@MainActor final class ComposerInputFocus: ObservableObject {
+    weak var field: NSTextField?
+    func focus() {
+        guard let field else { return }
+        field.window?.makeKey()
+        field.window?.makeFirstResponder(field)
+    }
+}
+
+/// A stable native field lets background clicks restore the real first responder every time.
+struct ComposerTextField: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    let focus: ComposerInputFocus
+    let submit: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField(string: text)
+        field.isBezeled = false; field.isBordered = false; field.drawsBackground = false
+        field.isEditable = true; field.isSelectable = true; field.focusRingType = .none
+        field.font = .systemFont(ofSize: 13); field.cell?.usesSingleLineMode = true
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        field.delegate = context.coordinator
+        focus.field = field
+        return field
+    }
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        focus.field = field
+        field.placeholderString = placeholder; field.setAccessibilityLabel(placeholder)
+        let editor = field.currentEditor() as? NSTextView
+        guard editor?.hasMarkedText() != true, field.stringValue != text else { return }
+        let selection = editor?.selectedRange()
+        field.stringValue = text
+        if let editor {
+            editor.string = text
+            if let selection {
+                let location = min(selection.location, (text as NSString).length)
+                editor.setSelectedRange(NSRange(location: location, length: min(selection.length, (text as NSString).length - location)))
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: ComposerTextField
+        init(_ parent: ComposerTextField) { self.parent = parent }
+        private func publish(_ field: NSTextField) {
+            guard (field.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return }
+            if parent.text != field.stringValue { parent.text = field.stringValue }
+        }
+        func controlTextDidChange(_ notification: Notification) {
+            if let field = notification.object as? NSTextField { publish(field) }
+        }
+        func controlTextDidEndEditing(_ notification: Notification) {
+            if let field = notification.object as? NSTextField { publish(field) }
+        }
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard commandSelector == #selector(NSResponder.insertNewline(_:)), !textView.hasMarkedText(), let field = control as? NSTextField else { return false }
+            publish(field); parent.submit(); return true
+        }
     }
 }
 

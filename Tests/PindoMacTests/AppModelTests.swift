@@ -497,4 +497,31 @@ final class AppModelTests: XCTestCase {
             XCTAssertTrue(model.document.tasks.isEmpty)
         }
     }
+
+    @MainActor func testComposerReturnSubmitsCommittedTextAndLeavesChineseCompositionAlone() async throws {
+        _ = NSApplication.shared
+        var draft = "已有", submitted: [String] = []
+        let input = ComposerTextField(text: Binding(get: { draft }, set: { draft = $0 }), placeholder: "",
+                                      focus: ComposerInputFocus(), submit: { submitted.append(draft) })
+        let coordinator = input.makeCoordinator()
+        let field = NSTextField(string: draft)
+        field.delegate = coordinator
+        let panel = QuickPanel.quickAddPanel()
+        defer { panel.orderOut(nil) }
+        panel.contentView = field
+        panel.showInFront(); panel.makeFirstResponder(field)
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        editor.setSelectedRange(NSRange(location: (draft as NSString).length, length: 0))
+        editor.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        coordinator.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        XCTAssertEqual(draft, "已有")
+        XCTAssertFalse(coordinator.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+        XCTAssertTrue(submitted.isEmpty)
+        editor.insertText("中", replacementRange: NSRange(location: NSNotFound, length: 0))
+        editor.unmarkText()
+        coordinator.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        XCTAssertEqual(draft, "已有中")
+        XCTAssertTrue(coordinator.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+        XCTAssertEqual(submitted, ["已有中"])
+    }
 }
