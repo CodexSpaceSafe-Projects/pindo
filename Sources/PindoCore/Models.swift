@@ -62,6 +62,7 @@ public struct TodoItem: Codable, Identifiable, Equatable, Sendable {
     public var note: String
     public var plannedDay: DayKey
     public var groupID: UUID?
+    public var parentID: UUID?
     public var phase: TaskPhase
     public var order: Int
     public var createdAt: Date
@@ -69,9 +70,9 @@ public struct TodoItem: Codable, Identifiable, Equatable, Sendable {
     public var startedAt: Date?
     public var completedAt: Date?
 
-    public init(id: UUID = UUID(), title: String, note: String = "", plannedDay: DayKey = DayKey(), groupID: UUID? = nil, order: Int = 0, now: Date = Date()) {
+    public init(id: UUID = UUID(), title: String, note: String = "", plannedDay: DayKey = DayKey(), groupID: UUID? = nil, parentID: UUID? = nil, order: Int = 0, now: Date = Date()) {
         self.id = id; self.title = title; self.note = note; self.plannedDay = plannedDay
-        self.groupID = groupID; phase = .pending; self.order = order
+        self.groupID = groupID; self.parentID = parentID; phase = .pending; self.order = order
         createdAt = now; updatedAt = now
     }
 
@@ -155,44 +156,13 @@ public struct PindoDocument: Codable, Equatable, Sendable {
               Set(groups.map(\.name)).count == groups.count else { throw PindoError.invalidData("分组名称或颜色无效") }
         guard preferences.quickAddHotkey.isValid, preferences.listHotkey.isValid,
               !preferences.quickAddHotkey.matches(preferences.listHotkey) else { throw PindoError.invalidHotkey }
+        try validateTaskHierarchy()
         return self
     }
 
     public mutating func setPhase(_ phase: TaskPhase, for id: UUID, now: Date = Date()) throws {
-        guard let index = tasks.firstIndex(where: { $0.id == id }) else { throw PindoError.missingTask }
-        setPhase(phase, at: index, now: now)
-    }
-
-    private mutating func setPhase(_ phase: TaskPhase, at index: Int, now: Date) {
-        tasks[index].phase = phase; tasks[index].updatedAt = now
-        tasks[index].completedAt = phase == .completed ? now : nil
-        if phase == .inProgress && tasks[index].startedAt == nil { tasks[index].startedAt = now }
-    }
-
-    /// Applies a batch to explicit IDs. Unknown IDs are ignored; unchanged tasks keep their timestamps.
-    @discardableResult public mutating func applyBatch(_ action: TaskBatchAction, to ids: Set<UUID>, now: Date = Date()) throws -> Int {
-        guard !ids.isEmpty else { return 0 }
-        if case .setGroup(let id) = action, let id, !groups.contains(where: { $0.id == id }) {
-            throw PindoError.invalidData("事项引用了不存在的分组")
-        }
-        var changed = 0
-        switch action {
-        case .delete:
-            let before = tasks.count
-            tasks.removeAll { ids.contains($0.id) }
-            changed = before - tasks.count
-        case .setPhase(let phase):
-            for index in tasks.indices where ids.contains(tasks[index].id) && tasks[index].phase != phase {
-                setPhase(phase, at: index, now: now)
-                changed += 1
-            }
-        case .setGroup(let id):
-            for index in tasks.indices where ids.contains(tasks[index].id) && tasks[index].groupID != id {
-                tasks[index].groupID = id; tasks[index].updatedAt = now
-                changed += 1
-            }
-        }
-        return changed
+        guard tasks.contains(where: { $0.id == id }) else { throw PindoError.missingTask }
+        _ = try applyBatch(.setPhase(phase), to: [id], now: now)
     }
 
     public mutating func removeGroup(_ id: UUID) {
@@ -201,8 +171,9 @@ public struct PindoDocument: Codable, Equatable, Sendable {
         for index in tasks.indices where tasks[index].groupID == id { tasks[index].groupID = nil }
     }
 
-    public mutating func rollover(to day: DayKey, groupID: UUID? = nil, ungroupedOnly: Bool = false) {
+    public mutating func rollover(to day: DayKey, groupID: UUID? = nil, ungroupedOnly: Bool = false, taskIDs: Set<UUID>? = nil) {
         for index in tasks.indices where tasks[index].phase == .pending && tasks[index].plannedDay < day {
+            if let taskIDs, !taskIDs.contains(tasks[index].id) { continue }
             if let groupID, tasks[index].groupID != groupID { continue }
             if ungroupedOnly && tasks[index].groupID != nil { continue }
             tasks[index].plannedDay = day
@@ -212,12 +183,17 @@ public struct PindoDocument: Codable, Equatable, Sendable {
 
 public enum PindoError: LocalizedError {
     case invalidDay, emptyTitle, missingTask, invalidHotkey, unsupportedVersion
+    case missingParent, hierarchyCycle, hierarchyDepth, incompleteChildren
     case invalidData(String), corruptFile(String), snapshotTooLarge, protectionSnapshotTooLarge, missingSnapshot, recoveryRequired
     public var errorDescription: String? {
         switch self {
         case .invalidDay: return "日期无效。"
         case .emptyTitle: return "请填写事项内容。"
         case .missingTask: return "找不到这条待办。"
+        case .missingParent: return "找不到父事项。"
+        case .hierarchyCycle: return "不能把事项移到自己或其子项下。"
+        case .hierarchyDepth: return "待办层级最多为三级。"
+        case .incompleteChildren: return "请先完成所有子项。"
         case .invalidHotkey: return "快捷键需要修饰键，且两个快捷键不能相同。"
         case .unsupportedVersion: return "资料来自不支持的版本，原文件已保留。"
         case .invalidData(let reason): return "资料无效：\(reason)。"

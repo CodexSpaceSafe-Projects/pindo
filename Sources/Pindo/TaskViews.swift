@@ -60,6 +60,7 @@ struct TaskPanelView: View {
     @State private var previousOpen = false
     @State private var pendingOpen = true
     @State private var completedOpen = false
+    @State private var addingParentID: UUID?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -90,34 +91,48 @@ struct TaskPanelView: View {
             .sheet(isPresented: Binding(get: { model.editingID != nil }, set: { if !$0 { model.editingID = nil } })) {
                 if let id = model.editingID, let task = model.task(id) { EditTaskView(model: model, task: task) }
             }
+            .sheet(isPresented: Binding(get: { addingParentID != nil }, set: { if !$0 { addingParentID = nil } })) {
+                if let id = addingParentID, let parent = model.task(id) { AddSubtaskView(model: model, parent: parent) { addingParentID = nil } }
+            }
+            .onChange(of: model.document.tasks.map(\.id)) { _, ids in
+                if let id = addingParentID, !ids.contains(id) { addingParentID = nil }
+            }
             .onExitCommand { if model.noteID != nil { model.leaveNote() } else { model.dismissList() } }
             .onAppear { completedOpen = model.document.preferences.expandCompleted }
             .onChange(of: model.document.preferences.expandCompleted) { _, value in completedOpen = value }
     }
 
     private var taskList: some View {
-        ScrollView {
+        let sections = model.outlineSections
+        let overdueIDs = Set(sections.previous.map(\.id)).intersection(Set(model.previous.map(\.id)))
+        return ScrollView {
             LazyVStack(alignment: .leading, spacing: 2) {
-                if model.selectedDay == model.today && !model.previous.isEmpty {
-                    TaskDisclosure(title: l10n("之前未完成"), count: model.previous.count, expanded: $previousOpen) {
-                        ForEach(model.previous) { TaskRow(model: model, task: $0) }
-                        Button(l10n("将这 %ld 件移到今天", model.previous.count)) { model.rollover() }.font(.system(size: 11)).buttonStyle(.borderless).padding(8)
+                if model.selectedDay == model.today && !sections.previous.isEmpty {
+                    TaskDisclosure(title: l10n("之前未完成"), count: overdueIDs.count, expanded: $previousOpen) {
+                        outlineRows(sections.previous)
+                        Button(l10n("将这 %ld 件移到今天", overdueIDs.count)) { model.rollover(taskIDs: overdueIDs) }.font(.system(size: 11)).buttonStyle(.borderless).padding(8)
                     }
                 }
-                TaskDisclosure(title: l10n("未完成"), count: model.unfinished.count, expanded: $pendingOpen) {
-                    ForEach(model.unfinished) { TaskRow(model: model, task: $0) }
-                    if model.unfinished.isEmpty {
+                TaskDisclosure(title: l10n("未完成"), count: sections.unfinished.filter { $0.task.phase != .completed }.count, expanded: $pendingOpen) {
+                    outlineRows(sections.unfinished)
+                    if sections.unfinished.isEmpty {
                         Text(l10n("想到一件事，就在下方记下来。")).font(.system(size: 12)).foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity).padding(.vertical, 28)
                     }
                 }
-                if !model.completed.isEmpty {
-                    TaskDisclosure(title: l10n("已完成"), count: model.completed.count, expanded: $completedOpen) {
-                        ForEach(model.completed) { TaskRow(model: model, task: $0) }
+                if !sections.completed.isEmpty {
+                    TaskDisclosure(title: l10n("已完成"), count: sections.completed.count, expanded: $completedOpen) {
+                        outlineRows(sections.completed)
                     }
                 }
             }.padding(.horizontal, 12).padding(.vertical, 8)
         }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(nsColor: .textBackgroundColor).opacity(0.45))
+    }
+    private func outlineRows(_ rows: [TaskOutlineRow]) -> some View {
+        ForEach(rows) { row in
+            TaskRow(model: model, task: row.task, onAddChild: { addingParentID = $0.id })
+                .padding(.leading, CGFloat(row.depth) * 16)
+        }
     }
     private var dateBar: some View {
         HStack(spacing: 3) {
@@ -254,9 +269,14 @@ struct TaskRowMenu: View {
     let openNote: () -> Void
     let move: (Int) -> Void
     let delete: () -> Void
+    var addChild: (() -> Void)? = nil
+    var makeRoot: (() -> Void)? = nil
+    var canAddChild = true
     var body: some View {
         Button(l10n("修改待办"), action: edit)
         Button(l10n("打开备注"), action: openNote)
+        if let addChild { Button(l10n("添加子项"), action: addChild).disabled(!canAddChild) }
+        if let makeRoot { Button(l10n("移为主待办"), action: makeRoot) }
         Divider()
         Button(l10n("上移")) { move(-1) }
         Button(l10n("下移")) { move(1) }
@@ -268,7 +288,9 @@ struct TaskRow: View {
     @Environment(\.pindoLocalization) private var l10n
     @ObservedObject var model: AppModel
     let task: TodoItem
+    var onAddChild: (TodoItem) -> Void = { _ in }
     @State private var hovered = false
+    @State private var confirmDelete = false
     private var groupColor: Color { Color(hex: model.group(task.groupID)?.colorHex ?? "#9AA9AF") }
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
@@ -286,10 +308,19 @@ struct TaskRow: View {
             .background(hovered ? Color.primary.opacity(0.045) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
             .modifier(GroupStripe(color: groupColor))
             .onHover { hovered = $0 }
+            .modifier(TaskDragAndDrop(model: model, task: task))
             .contextMenu {
                 TaskRowMenu(edit: { model.editingID = task.id }, openNote: { model.noteID = task.id },
-                            move: { model.move(task, offset: $0) }, delete: { model.delete(task) })
+                            move: { model.move(task, offset: $0) },
+                            delete: { if model.document.descendantIDs(including: [task.id]).count > 1 { confirmDelete = true } else { model.delete(task) } },
+                            addChild: { onAddChild(task) },
+                            makeRoot: task.parentID == nil ? nil : { _ = model.relocateTask(task.id, parent: nil) },
+                            canAddChild: (model.document.taskDepth(task.id) ?? 0) < 2)
             }
+            .alert(l10n("删除此事项及全部子项？"), isPresented: $confirmDelete) {
+                Button(l10n("取消"), role: .cancel) {}
+                Button(l10n("删除"), role: .destructive) { model.delete(task) }
+            } message: { Text(l10n("将删除 %ld 条待办及其备注。", model.document.descendantIDs(including: [task.id]).count)) }
     }
 }
 
@@ -327,6 +358,7 @@ struct EditTaskView: View {
     @State private var title: String
     @State private var day: Date
     @State private var groupID: UUID?
+    @State private var confirmDelete = false
     var dismiss: (() -> Void)? = nil
     init(model: AppModel, task: TodoItem, dismiss: (() -> Void)? = nil) { self.model = model; self.task = task; self.dismiss = dismiss; _title = State(initialValue: task.title); _day = State(initialValue: task.plannedDay.date()); _groupID = State(initialValue: task.groupID) }
     var body: some View {
@@ -335,11 +367,41 @@ struct EditTaskView: View {
             TextField(l10n("事项内容"), text: $title).onSubmit(save)
             DatePicker(l10n("计划日期"), selection: $day, displayedComponents: .date)
             Picker(l10n("分组"), selection: $groupID) { Text(l10n("未分组")).tag(UUID?.none); ForEach(model.document.groups) { Text($0.name).tag(Optional($0.id)) } }
-            HStack { Button(l10n("删除"), role: .destructive) { model.delete(task); close() }; Spacer(); Button(l10n("取消")) { close() }.keyboardShortcut(.cancelAction); Button(l10n("完成"), action: save).keyboardShortcut(.defaultAction).disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+            HStack { Button(l10n("删除"), role: .destructive) { if model.document.descendantIDs(including: [task.id]).count > 1 { confirmDelete = true } else { model.delete(task); close() } }; Spacer(); Button(l10n("取消")) { close() }.keyboardShortcut(.cancelAction); Button(l10n("完成"), action: save).keyboardShortcut(.defaultAction).disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
         }.padding(24).frame(width: 340)
+            .alert(l10n("删除此事项及全部子项？"), isPresented: $confirmDelete) {
+                Button(l10n("取消"), role: .cancel) {}
+                Button(l10n("删除"), role: .destructive) { model.delete(task); close() }
+            } message: { Text(l10n("将删除 %ld 条待办及其备注。", model.document.descendantIDs(including: [task.id]).count)) }
     }
     private func close() { if let dismiss { dismiss() } else { model.editingID = nil } }
     private func save() { if model.edit(task.id, title: title, day: DayKey(day), groupID: groupID) { close() } }
+}
+
+struct AddSubtaskView: View {
+    @Environment(\.pindoLocalization) private var l10n
+    @ObservedObject var model: AppModel
+    let parent: TodoItem
+    let close: () -> Void
+    @State private var title = ""
+    @FocusState private var focused: Bool
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(l10n("添加子项")).font(.headline)
+            Text(parent.title).foregroundStyle(.secondary).lineLimit(2)
+            TextField(l10n("事项内容"), text: $title).focused($focused).onSubmit(save)
+            ErrorBanner(model: model)
+            HStack {
+                Button(l10n("取消"), action: close).keyboardShortcut(.cancelAction)
+                Spacer()
+                Button(l10n("添加"), action: save).keyboardShortcut(.defaultAction).disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }.padding(24).frame(width: 340).onAppear { focused = true }
+    }
+    private func save() {
+        guard let current = model.task(parent.id) else { model.notice = .failure(PindoError.missingParent); return }
+        if model.addTask(title: title, day: current.plannedDay, groupID: current.groupID, parentID: current.id) { close() }
+    }
 }
 
 struct QuickAddView: View {

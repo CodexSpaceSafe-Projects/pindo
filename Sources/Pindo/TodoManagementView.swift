@@ -11,6 +11,7 @@ struct TodoManagementView: View {
     @State private var group = GroupFilter.all
     @State private var noteID: UUID?
     @State private var editingTask: TodoItem?
+    @State private var addingParentID: UUID?
     @State private var batchMode = false
     @State private var selectedIDs: Set<UUID> = []
     @State private var pendingDeletion: Set<UUID> = []
@@ -18,6 +19,7 @@ struct TodoManagementView: View {
     private var tasks: [TodoItem] { model.managedTasks(query: query, status: status, group: group) }
     private var visibleIDs: Set<UUID> { Set(tasks.map(\.id)) }
     private var selectedVisibleIDs: Set<UUID> { selectedIDs.intersection(visibleIDs) }
+    private var outline: [TaskOutlineRow] { model.document.taskOutline(matching: visibleIDs) }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let id = noteID, let task = model.task(id) {
@@ -41,6 +43,9 @@ struct TodoManagementView: View {
                 taskList
             }
         }.sheet(item: $editingTask) { task in EditTaskView(model: model, task: task, dismiss: { editingTask = nil }) }
+            .sheet(isPresented: Binding(get: { addingParentID != nil }, set: { if !$0 { addingParentID = nil } })) {
+                if let id = addingParentID, let parent = model.task(id) { AddSubtaskView(model: model, parent: parent) { addingParentID = nil } }
+            }
             .onChange(of: model.document.groups.map(\.id)) { _, ids in
                 if case .group(let id) = group, !ids.contains(id) { group = .all }
             }
@@ -48,14 +53,18 @@ struct TodoManagementView: View {
             .onChange(of: status) { _, _ in clearSelection() }
             .onChange(of: group) { _, _ in clearSelection() }
             .onChange(of: tasks.map(\.id)) { _, ids in selectedIDs.formIntersection(Set(ids)) }
-            .alert(l10n("删除选中的 %ld 条待办？", pendingDeletion.count), isPresented: $confirmDeletion) {
+            .onChange(of: model.document.tasks.map(\.id)) { _, ids in
+                if let id = addingParentID, !ids.contains(id) { addingParentID = nil }
+                if let task = editingTask, !ids.contains(task.id) { editingTask = nil }
+            }
+            .alert(l10n("删除选中的 %ld 条待办？", model.document.descendantIDs(including: pendingDeletion).count), isPresented: $confirmDeletion) {
                 Button(l10n("取消"), role: .cancel) { pendingDeletion = [] }
                 Button(l10n("删除"), role: .destructive) {
-                    let ids = pendingDeletion.intersection(selectedVisibleIDs)
+                    let ids = pendingDeletion.intersection(Set(model.document.tasks.map(\.id)))
                     if model.applyBatch(.delete, to: ids) { selectedIDs.subtract(ids) }
                     pendingDeletion = []
                 }
-            } message: { Text(l10n("所选待办及其备注将被删除。")) }
+            } message: { Text(l10n("将删除这些事项、全部子项及其备注。")) }
     }
 
     private var batchControls: some View {
@@ -85,25 +94,26 @@ struct TodoManagementView: View {
 
     private var taskList: some View {
         LazyVStack(spacing: 0) {
-            ForEach(tasks) { task in
-                taskRow(task)
+            ForEach(outline) { row in
+                taskRow(row).padding(.leading, CGFloat(row.depth) * 16)
                 Divider()
             }
             if tasks.isEmpty { Text(l10n("没有符合条件的待办")).foregroundStyle(.secondary).padding(24) }
         }
     }
 
-    private func taskRow(_ task: TodoItem) -> some View {
-        HStack(spacing: 10) {
+    private func taskRow(_ row: TaskOutlineRow) -> some View {
+        let task = row.task
+        return HStack(spacing: 10) {
             if batchMode {
                 Toggle(l10n("选择待办：%@", task.title), isOn: Binding(
                     get: { selectedIDs.contains(task.id) },
                     set: { if $0 { selectedIDs.insert(task.id) } else { selectedIDs.remove(task.id) } }
-                )).labelsHidden().toggleStyle(.checkbox).accessibilityLabel(l10n("选择待办：%@", task.title))
+                )).labelsHidden().toggleStyle(.checkbox).accessibilityLabel(l10n("选择待办：%@", task.title)).disabled(row.isContext)
                 TaskStatusIcon(phase: task.phase).frame(width: 25, height: 28).accessibilityHidden(true)
             } else { TaskStatusButton(model: model, task: task) }
             Button {
-                if batchMode {
+                if batchMode && !row.isContext {
                     if !selectedIDs.insert(task.id).inserted { selectedIDs.remove(task.id) }
                 } else { noteID = task.id }
             } label: {
@@ -118,10 +128,15 @@ struct TodoManagementView: View {
         }.buttonStyle(.plain).font(.system(size: 12)).padding(.vertical, 12).padding(.leading, 16).padding(.trailing, 8)
             .background(batchMode && selectedIDs.contains(task.id) ? Color.accentColor.opacity(0.1) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
             .modifier(GroupStripe(color: Color(hex: model.group(task.groupID)?.colorHex ?? "#9AA9AF")))
+            .opacity(row.isContext ? 0.65 : 1)
+            .modifier(TaskDragAndDrop(model: model, task: task))
             .contextMenu {
                 TaskRowMenu(edit: { editingTask = task }, openNote: { noteID = task.id },
                             move: { model.move(task, offset: $0, within: tasks.filter { $0.plannedDay == task.plannedDay }) },
-                            delete: { model.delete(task) })
+                            delete: { pendingDeletion = [task.id]; confirmDeletion = true },
+                            addChild: { addingParentID = task.id },
+                            makeRoot: task.parentID == nil ? nil : { _ = model.relocateTask(task.id, parent: nil) },
+                            canAddChild: row.depth < 2)
             }
     }
 

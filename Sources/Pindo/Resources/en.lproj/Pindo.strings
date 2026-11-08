@@ -204,3 +204,12 @@
 "标记未完成" = "Mark Unfinished";
 "删除选中的 %ld 条待办？" = "Delete %ld selected tasks?";
 "所选待办及其备注将被删除。" = "The selected tasks and their notes will be deleted.";
+"找不到父事项。" = "The parent task could not be found.";
+"不能把事项移到自己或其子项下。" = "A task cannot be moved under itself or its descendants.";
+"待办层级最多为三级。" = "Tasks can have at most three levels.";
+"请先完成所有子项。" = "Finish all subtasks first.";
+"添加子项" = "Add Subtask";
+"移为主待办" = "Move to Top Level";
+"删除此事项及全部子项？" = "Delete this task and all its subtasks?";
+"将删除 %ld 条待办及其备注。" = "%ld tasks and their notes will be deleted.";
+"将删除这些事项、全部子项及其备注。" = "These tasks, all their subtasks, and their notes will be deleted.";

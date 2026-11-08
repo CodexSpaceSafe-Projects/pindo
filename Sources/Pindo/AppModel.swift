@@ -14,6 +14,7 @@ enum SaveState { case saved, saving, failed }
     @Published var listEntryGroupID: UUID?
     @Published var noteID: UUID?
     @Published var editingID: UUID?
+    @Published var draggedTaskID: UUID?
     @Published var notice: PindoNotice?
     @Published private(set) var interfaceLanguage: InterfaceLanguage
     @Published var saveState = SaveState.saved
@@ -87,6 +88,14 @@ enum SaveState { case saved, saving, failed }
     }
     var previous: [TodoItem] { ordered(document.tasks.filter { $0.phase == .pending && $0.plannedDay < today && matches($0) }) }
     var completed: [TodoItem] { ordered(document.tasks.filter { $0.phase == .completed && $0.plannedDay == selectedDay && matches($0) }) }
+    var outlineSections: (unfinished: [TaskOutlineRow], previous: [TaskOutlineRow], completed: [TaskOutlineRow]) {
+        let active = document.rootTaskIDs(containing: Set(unfinished.map(\.id)))
+        let overdue = selectedDay == today ? document.rootTaskIDs(containing: Set(previous.map(\.id))).subtracting(active) : []
+        let done = document.rootTaskIDs(containing: Set(completed.map(\.id))).subtracting(active.union(overdue))
+        return (document.taskOutline(matching: active, expandingFamilies: true),
+                document.taskOutline(matching: overdue, expandingFamilies: true),
+                document.taskOutline(matching: done, expandingFamilies: true))
+    }
     var todayCount: Int { document.tasks.filter { $0.plannedDay == today && $0.phase != .completed }.count }
     var selectedGroup: UUID? { if case .group(let id) = groupFilter { return id }; return nil }
     func resetListEntryGroup() {
@@ -143,32 +152,41 @@ enum SaveState { case saved, saving, failed }
     }
     func leaveNote() { _ = flush(); noteID = nil }
 
-    @discardableResult func addTask(title: String, note: String = "", day: DayKey, groupID: UUID?) -> Bool {
+    @discardableResult func addTask(title: String, note: String = "", day: DayKey, groupID: UUID?, parentID: UUID? = nil) -> Bool {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return false }
-        let saved = commit { doc in doc.tasks.append(TodoItem(title: title, note: note, plannedDay: day, groupID: groupID, order: (doc.tasks.map(\.order).max() ?? -1) + 1)) }
-        if saved { playFeedback(.added) }
+        if let parentID {
+            guard task(parentID) != nil else { notice = .failure(PindoError.missingParent); return false }
+            guard (document.taskDepth(parentID) ?? 2) < 2 else { notice = .failure(PindoError.hierarchyDepth); return false }
+        }
+        let saved = commit { doc in try doc.insertTask(TodoItem(title: title, note: note, plannedDay: day, groupID: groupID, parentID: parentID, order: (doc.tasks.map(\.order).max() ?? -1) + 1)) }
+        if saved { notice = nil; playFeedback(.added) }
         return saved
     }
     func setPhase(_ task: TodoItem, _ phase: TaskPhase) {
         guard let current = self.task(task.id), current.phase != phase else { return }
-        if commit({ try $0.setPhase(phase, for: task.id) }), phase == .completed { playFeedback(.completed) }
+        if commit({ try $0.setPhase(phase, for: task.id) }) {
+            notice = nil
+            if phase == .completed { playFeedback(.completed) }
+        }
     }
     func advancePhase(_ task: TodoItem) {
         guard let current = self.task(task.id) else { return }
         setPhase(current, current.phase.next)
     }
-    func delete(_ task: TodoItem) { _ = commit { $0.tasks.removeAll { $0.id == task.id } } }
+    func delete(_ task: TodoItem) { _ = applyBatch(.delete, to: [task.id]) }
     @discardableResult func applyBatch(_ action: TaskBatchAction, to ids: Set<UUID>) -> Bool {
         var next = document
         do {
             guard try next.applyBatch(action, to: ids) > 0 else { return true }
         } catch { notice = .failure(error); return false }
         guard commit({ $0 = next }) else { return false }
+        notice = nil
         if case .setPhase(.completed) = action { playFeedback(.completed) }
         if case .delete = action {
-            if let noteID, ids.contains(noteID) { self.noteID = nil }
-            if let editingID, ids.contains(editingID) { self.editingID = nil }
+            if let noteID, task(noteID) == nil { self.noteID = nil }
+            if let editingID, task(editingID) == nil { self.editingID = nil }
+            if let draggedTaskID, task(draggedTaskID) == nil { self.draggedTaskID = nil }
         }
         return true
     }
@@ -179,9 +197,9 @@ enum SaveState { case saved, saving, failed }
             doc.tasks[i].plannedDay = day; doc.tasks[i].groupID = groupID; doc.tasks[i].updatedAt = Date()
         }
     }
-    func rollover() {
+    func rollover(taskIDs: Set<UUID>? = nil) {
         let groupID = selectedGroup, onlyUngrouped = groupFilter == .ungrouped
-        _ = commit { $0.rollover(to: today, groupID: groupID, ungroupedOnly: onlyUngrouped) }
+        _ = commit { $0.rollover(to: today, groupID: groupID, ungroupedOnly: onlyUngrouped, taskIDs: taskIDs) }
     }
     func move(_ task: TodoItem, offset: Int) {
         let visible: [TodoItem]
@@ -193,14 +211,50 @@ enum SaveState { case saved, saving, failed }
         move(task, offset: offset, within: visible)
     }
     func move(_ task: TodoItem, offset: Int, within visible: [TodoItem]) {
-        guard let i = visible.firstIndex(where: { $0.id == task.id }), visible.indices.contains(i + offset) else { return }
-        let other = visible[i + offset]
+        guard let current = self.task(task.id) else { return }
+        let siblings = visible.filter { $0.parentID == current.parentID }
+        guard let i = siblings.firstIndex(where: { $0.id == task.id }), siblings.indices.contains(i + offset) else { return }
+        let other = siblings[i + offset]
         _ = commit { doc in
-            let all = doc.tasks.sorted { $0.order == $1.order ? $0.createdAt < $1.createdAt : $0.order < $1.order }
-            for (index, item) in all.enumerated() { if let n = doc.tasks.firstIndex(where: { $0.id == item.id }) { doc.tasks[n].order = index } }
             guard let a = doc.tasks.firstIndex(where: { $0.id == task.id }), let b = doc.tasks.firstIndex(where: { $0.id == other.id }) else { return }
+            if doc.tasks[a].order == doc.tasks[b].order {
+                for (order, sibling) in doc.siblingTasks(of: task.id).enumerated() {
+                    if let index = doc.tasks.firstIndex(where: { $0.id == sibling.id }) { doc.tasks[index].order = order }
+                }
+            }
             let order = doc.tasks[a].order; doc.tasks[a].order = doc.tasks[b].order; doc.tasks[b].order = order
         }
+    }
+
+    func canDropTask(_ id: UUID, onto target: UUID, position: TaskDropPosition) -> Bool {
+        guard id != target, let targetTask = task(target) else { return false }
+        do { try document.validateTaskMove(id, toParent: position == .inside ? target : targetTask.parentID); return true }
+        catch { return false }
+    }
+
+    @discardableResult func dropTask(_ id: UUID, onto target: UUID, position: TaskDropPosition) -> Bool {
+        guard id != target, let targetTask = task(target) else { return false }
+        let parent = position == .inside ? target : targetTask.parentID
+        let before: UUID?
+        switch position {
+        case .inside: before = nil
+        case .before: before = target
+        case .after:
+            let siblings = document.siblingTasks(of: target).filter { $0.id != id }
+            let index = siblings.firstIndex(where: { $0.id == target })
+            before = index.flatMap { siblings.indices.contains($0 + 1) ? siblings[$0 + 1].id : nil }
+        }
+        return relocateTask(id, parent: parent, before: before)
+    }
+
+    @discardableResult func relocateTask(_ id: UUID, parent: UUID?, before: UUID? = nil) -> Bool {
+        var next = document
+        do { try next.moveTask(id, toParent: parent, before: before) }
+        catch { notice = .failure(error); return false }
+        guard next != document else { return true }
+        let saved = commit { $0 = next }
+        if saved { notice = nil }
+        return saved
     }
 
     func copyTask(_ task: TodoItem) -> Bool {

@@ -221,9 +221,102 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(try PindoRepository(directory: model.repository.directory).document, model.document)
     }
 
+    @MainActor func testDropPositionsReorderAndReparentSubtreesAndRejectCyclesAndFourthLevels() async throws {
+        let model = try makeModel(), day = DayKey()
+        for title in ["主项 A", "主项 B", "原有事项"] {
+            XCTAssertTrue(model.addTask(title: title, note: "保留说明", day: day, groupID: nil))
+        }
+        let a = model.document.tasks[0], b = model.document.tasks[1], source = model.document.tasks[2]
+        XCTAssertTrue(model.dropTask(source.id, onto: a.id, position: .before))
+        XCTAssertEqual(model.document.siblingTasks(of: a.id).map(\.id), [source.id, a.id, b.id])
+        XCTAssertTrue(model.dropTask(source.id, onto: b.id, position: .after))
+        XCTAssertEqual(model.document.siblingTasks(of: a.id).map(\.id), [a.id, b.id, source.id])
+        XCTAssertTrue(model.dropTask(source.id, onto: a.id, position: .inside))
+        XCTAssertTrue(model.addTask(title: "孙项", day: day.adding(days: 1), groupID: nil, parentID: source.id))
+        let grandchild = model.document.tasks.last!
+        let beforeInvalid = model.document
+        XCTAssertFalse(model.canDropTask(a.id, onto: b.id, position: .inside))
+        XCTAssertFalse(model.canDropTask(a.id, onto: grandchild.id, position: .inside))
+        XCTAssertFalse(model.dropTask(a.id, onto: b.id, position: .inside))
+        XCTAssertFalse(model.addTask(title: "第四层", day: day, groupID: nil, parentID: grandchild.id))
+        XCTAssertEqual(model.document, beforeInvalid)
+        XCTAssertTrue(model.dropTask(source.id, onto: b.id, position: .inside))
+        XCTAssertEqual(model.task(source.id)?.parentID, b.id)
+        XCTAssertEqual(model.task(source.id)?.note, source.note)
+        XCTAssertEqual(model.task(source.id)?.plannedDay, source.plannedDay)
+        XCTAssertEqual(model.task(grandchild.id)?.parentID, source.id)
+        XCTAssertEqual(try PindoRepository(directory: model.repository.directory).document, model.document)
+    }
+
+    @MainActor func testHierarchySectionsShowEachFamilyOnceAndKeepFilteredAncestorsOutOfSelection() async throws {
+        let model = try makeModel(), day = DayKey()
+        model.today = day; model.selectedDay = day
+        XCTAssertTrue(model.addTask(title: "主项", day: day, groupID: nil))
+        let root = model.document.tasks[0]
+        XCTAssertTrue(model.addTask(title: "子项", day: day, groupID: nil, parentID: root.id))
+        let child = model.document.tasks[1]
+        XCTAssertTrue(model.addTask(title: "孙项", day: day.adding(days: 1), groupID: nil, parentID: child.id))
+        XCTAssertTrue(model.addTask(title: "另一子项", day: day, groupID: nil, parentID: root.id))
+        let grandchild = model.document.tasks[2], sibling = model.document.tasks[3]
+        let matches = Set(model.managedTasks(query: "孙项", status: .all, group: .all).map(\.id))
+        let context = model.document.taskOutline(matching: matches)
+        XCTAssertEqual(matches, [grandchild.id])
+        XCTAssertEqual(context.map(\.isContext), [true, true, false])
+        XCTAssertEqual(model.outlineSections.unfinished.map(\.depth), [0, 1, 2, 1])
+        XCTAssertTrue(model.applyBatch(.setPhase(.completed), to: matches))
+        XCTAssertEqual(model.task(child.id)?.phase, .completed)
+        XCTAssertEqual(model.task(root.id)?.phase, .inProgress)
+        XCTAssertEqual(model.outlineSections.unfinished.count, 4)
+        XCTAssertTrue(model.outlineSections.completed.isEmpty)
+        model.setPhase(root, .completed)
+        XCTAssertEqual(model.task(root.id)?.phase, .inProgress)
+        XCTAssertNotNil(model.errorMessage)
+        model.setPhase(sibling, .completed)
+        XCTAssertEqual(model.task(root.id)?.phase, .completed)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertTrue(model.outlineSections.unfinished.isEmpty)
+        XCTAssertEqual(model.outlineSections.completed.count, 4)
+        model.setPhase(grandchild, .pending)
+        XCTAssertEqual(model.outlineSections.unfinished.count, 4)
+        XCTAssertTrue(model.outlineSections.completed.isEmpty)
+        model.noteID = grandchild.id; model.editingID = child.id
+        model.delete(root)
+        XCTAssertTrue(model.document.tasks.isEmpty)
+        XCTAssertNil(model.noteID); XCTAssertNil(model.editingID)
+    }
+
+    @MainActor func testHierarchyMoveFailureRetainsParentLinksAndUnflushedNotesForRetry() async throws {
+        let model = try makeModel(), day = DayKey()
+        XCTAssertTrue(model.addTask(title: "父项", day: day, groupID: nil))
+        XCTAssertTrue(model.addTask(title: "另一个父项", day: day, groupID: nil))
+        let root = model.document.tasks[0], target = model.document.tasks[1]
+        XCTAssertTrue(model.addTask(title: "子项", day: day, groupID: nil, parentID: root.id))
+        let child = model.document.tasks[2]
+        let bytes = try Data(contentsOf: model.repository.dataURL)
+        model.updateNote(child.id, text: "尚未自动保存的备注")
+        let before = model.document
+        try FileManager.default.removeItem(at: model.repository.dataURL)
+        try FileManager.default.createDirectory(at: model.repository.dataURL, withIntermediateDirectories: false)
+        XCTAssertFalse(model.dropTask(child.id, onto: target.id, position: .inside))
+        XCTAssertEqual(model.document, before)
+        XCTAssertEqual(model.task(child.id)?.parentID, root.id)
+        try FileManager.default.removeItem(at: model.repository.dataURL)
+        try bytes.write(to: model.repository.dataURL, options: .atomic)
+        XCTAssertTrue(model.dropTask(child.id, onto: target.id, position: .inside))
+        XCTAssertEqual(model.task(child.id)?.parentID, target.id)
+        XCTAssertEqual(model.task(child.id)?.note, "尚未自动保存的备注")
+        XCTAssertEqual(try PindoRepository(directory: model.repository.directory).document, model.document)
+    }
+
     @MainActor func testSettingsAndTaskViewsConstructAtDocumentedSizes() async throws {
         _ = NSApplication.shared
         let model = try makeModel()
+        XCTAssertTrue(model.addTask(title: "主待办", day: DayKey(), groupID: nil))
+        let root = model.document.tasks[0]
+        XCTAssertTrue(model.addTask(title: "子待办", day: DayKey(), groupID: nil, parentID: root.id))
+        let child = model.document.tasks[1]
+        XCTAssertTrue(model.addTask(title: "较长的孙待办标题需要在最小窗口宽度下自动换行，右侧备注标记仍然保持对齐", note: "备注", day: DayKey(), groupID: nil, parentID: child.id))
+        model.setPhase(model.document.tasks[2], .inProgress)
         let panel = NSHostingView(rootView: TaskPanelView(model: model))
         panel.frame = NSRect(x: 0, y: 0, width: 390, height: 610)
         panel.layoutSubtreeIfNeeded()
