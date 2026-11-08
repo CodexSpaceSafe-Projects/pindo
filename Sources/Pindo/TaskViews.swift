@@ -98,19 +98,15 @@ struct TaskPanelView: View {
     private var taskList: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 2) {
-                if !model.inProgress.isEmpty {
-                    Text(l10n("进行中 · %ld", model.inProgress.count)).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary).padding(8)
-                    ForEach(model.inProgress) { TaskRow(model: model, task: $0) }
-                }
                 if model.selectedDay == model.today && !model.previous.isEmpty {
                     TaskDisclosure(title: l10n("之前未完成"), count: model.previous.count, expanded: $previousOpen) {
                         ForEach(model.previous) { TaskRow(model: model, task: $0) }
                         Button(l10n("将这 %ld 件移到今天", model.previous.count)) { model.rollover() }.font(.system(size: 11)).buttonStyle(.borderless).padding(8)
                     }
                 }
-                TaskDisclosure(title: l10n("未完成"), count: model.pending.count, expanded: $pendingOpen) {
-                    ForEach(model.pending) { TaskRow(model: model, task: $0) }
-                    if model.pending.isEmpty {
+                TaskDisclosure(title: l10n("未完成"), count: model.unfinished.count, expanded: $pendingOpen) {
+                    ForEach(model.unfinished) { TaskRow(model: model, task: $0) }
+                    if model.unfinished.isEmpty {
                         Text(l10n("想到一件事，就在下方记下来。")).font(.system(size: 12)).foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity).padding(.vertical, 28)
                     }
@@ -194,6 +190,83 @@ struct TaskComposer: View {
     }
 }
 
+/// Half of the inner circle, divided by two opposing semicircles into a reversed S.
+struct InProgressHalf: Shape {
+    func path(in rect: CGRect) -> Path {
+        let radius = min(rect.width, rect.height) / 2
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        var path = Path()
+        path.move(to: CGPoint(x: center.x, y: center.y - radius))
+        path.addArc(center: CGPoint(x: center.x, y: center.y - radius / 2), radius: radius / 2,
+                    startAngle: .degrees(-90), endAngle: .degrees(90), clockwise: false)
+        path.addArc(center: CGPoint(x: center.x, y: center.y + radius / 2), radius: radius / 2,
+                    startAngle: .degrees(-90), endAngle: .degrees(90), clockwise: true)
+        path.addArc(center: center, radius: radius, startAngle: .degrees(90), endAngle: .degrees(270), clockwise: false)
+        path.closeSubpath()
+        return path
+    }
+}
+
+struct TaskStatusIcon: View {
+    let phase: TaskPhase
+    var body: some View {
+        if phase == .inProgress {
+            ZStack {
+                Circle().stroke(Color.secondary, lineWidth: 1)
+                ZStack {
+                    Circle().stroke(Color.secondary.opacity(0.5), lineWidth: 0.6)
+                    InProgressHalf().fill(Color.green)
+                }.padding(3)
+            }.frame(width: 18, height: 18)
+        } else {
+            Image(systemName: phase == .completed ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 19, weight: .light)).foregroundStyle(phase == .completed ? Color.green : Color.secondary)
+        }
+    }
+}
+
+struct TaskStatusButton: View {
+    @Environment(\.pindoLocalization) private var l10n
+    @ObservedObject var model: AppModel
+    let task: TodoItem
+    private var actionKey: String {
+        switch task.phase {
+        case .pending: return "开始：%@"
+        case .inProgress: return "完成：%@"
+        case .completed: return "恢复未完成：%@"
+        }
+    }
+    private var stateKey: String {
+        switch task.phase {
+        case .pending: return "待办"
+        case .inProgress: return "进行中"
+        case .completed: return "已完成"
+        }
+    }
+    var body: some View {
+        Button { model.advancePhase(task) } label: {
+            TaskStatusIcon(phase: task.phase).frame(width: 25, height: 28).contentShape(Rectangle())
+        }.buttonStyle(.plain).help(l10n(actionKey, task.title))
+            .accessibilityLabel(l10n(actionKey, task.title)).accessibilityValue(l10n(stateKey))
+    }
+}
+
+struct TaskRowMenu: View {
+    @Environment(\.pindoLocalization) private var l10n
+    let edit: () -> Void
+    let openNote: () -> Void
+    let move: (Int) -> Void
+    let delete: () -> Void
+    var body: some View {
+        Button(l10n("修改待办"), action: edit)
+        Button(l10n("打开备注"), action: openNote)
+        Divider()
+        Button(l10n("上移")) { move(-1) }
+        Button(l10n("下移")) { move(1) }
+        Button(l10n("删除待办"), role: .destructive, action: delete)
+    }
+}
+
 struct TaskRow: View {
     @Environment(\.pindoLocalization) private var l10n
     @ObservedObject var model: AppModel
@@ -202,10 +275,7 @@ struct TaskRow: View {
     private var groupColor: Color { Color(hex: model.group(task.groupID)?.colorHex ?? "#9AA9AF") }
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
-            Button { model.setPhase(task, task.phase == .completed ? .pending : .completed) } label: {
-                Image(systemName: task.phase == .completed ? "checkmark.circle.fill" : "circle").font(.system(size: 19, weight: .light)).foregroundStyle(task.phase == .completed ? Color.green : Color.secondary)
-                    .frame(width: 25, height: 28)
-            }.buttonStyle(.plain).accessibilityLabel(task.phase == .completed ? l10n("恢复未完成：%@", task.title) : l10n("完成：%@", task.title))
+            TaskStatusButton(model: model, task: task)
             Button { model.noteID = task.id } label: {
                 HStack(alignment: .center, spacing: 6) {
                     Image(systemName: "note.text").font(.system(size: 11)).foregroundStyle(.secondary)
@@ -214,21 +284,13 @@ struct TaskRow: View {
                 }.foregroundStyle(task.phase == .completed ? Color.secondary : Color.primary)
                     .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel(l10n("打开备注：%@", task.title)).accessibilityValue(model.group(task.groupID)?.name ?? l10n("未分组"))
-            Button { model.editingID = task.id } label: { Image(systemName: "pencil").frame(width: 20, height: 28) }
-                .buttonStyle(.borderless).help(l10n("修改待办"))
         }.padding(.leading, 16).padding(.trailing, 10).padding(.vertical, 4)
             .background(hovered ? Color.primary.opacity(0.045) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
             .modifier(GroupStripe(color: groupColor))
             .onHover { hovered = $0 }
             .contextMenu {
-                Button(l10n("打开备注")) { model.noteID = task.id }
-                Button(l10n("复制内容")) { _ = model.copyTask(task) }
-                if task.phase == .pending { Button(l10n("标记进行中")) { model.setPhase(task, .inProgress) } }
-                if task.phase == .inProgress { Button(l10n("移回未完成")) { model.setPhase(task, .pending) } }
-                Divider()
-                Button(l10n("上移")) { model.move(task, offset: -1) }; Button(l10n("下移")) { model.move(task, offset: 1) }
-                Button(l10n("修改待办")) { model.editingID = task.id }
-                Button(l10n("删除"), role: .destructive) { model.delete(task) }
+                TaskRowMenu(edit: { model.editingID = task.id }, openNote: { model.noteID = task.id },
+                            move: { model.move(task, offset: $0) }, delete: { model.delete(task) })
             }
     }
 }

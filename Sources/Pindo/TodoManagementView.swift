@@ -29,9 +29,7 @@ struct TodoManagementView: View {
                 LazyVStack(spacing: 0) {
                     ForEach(tasks) { task in
                         HStack(spacing: 10) {
-                            Button { model.setPhase(task, task.phase == .completed ? .pending : .completed) } label: {
-                                Image(systemName: task.phase == .completed ? "checkmark.circle.fill" : "circle")
-                            }.accessibilityLabel(task.phase == .completed ? l10n("恢复未完成") : l10n("标记完成"))
+                            TaskStatusButton(model: model, task: task)
                             Button { noteID = task.id } label: {
                                 VStack(alignment: .leading, spacing: 5) {
                                     Text(task.title).strikethrough(task.phase == .completed).lineLimit(2)
@@ -41,10 +39,13 @@ struct TodoManagementView: View {
                                     }.font(.system(size: 10))
                                 }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                             }
-                            Button { editingTask = task } label: { Image(systemName: "pencil") }.help(l10n("修改标题、日期和分组"))
-                            Button(role: .destructive) { model.delete(task) } label: { Image(systemName: "trash") }.help(l10n("删除待办"))
                         }.buttonStyle(.plain).font(.system(size: 12)).padding(.vertical, 12).padding(.leading, 16)
                             .modifier(GroupStripe(color: Color(hex: model.group(task.groupID)?.colorHex ?? "#9AA9AF")))
+                            .contextMenu {
+                                TaskRowMenu(edit: { editingTask = task }, openNote: { noteID = task.id },
+                                            move: { model.move(task, offset: $0, within: tasks.filter { $0.plannedDay == task.plannedDay }) },
+                                            delete: { model.delete(task) })
+                            }
                         Divider()
                     }
                     if tasks.isEmpty { Text(l10n("没有符合条件的待办")).foregroundStyle(.secondary).padding(24) }

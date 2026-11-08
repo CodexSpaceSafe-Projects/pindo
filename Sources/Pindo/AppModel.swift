@@ -82,6 +82,9 @@ enum SaveState { case saved, saving, failed }
     private func ordered(_ tasks: [TodoItem]) -> [TodoItem] { tasks.sorted { $0.order == $1.order ? $0.createdAt < $1.createdAt : $0.order < $1.order } }
     var inProgress: [TodoItem] { ordered(document.tasks.filter { $0.phase == .inProgress && matches($0) }) }
     var pending: [TodoItem] { ordered(document.tasks.filter { $0.phase == .pending && $0.plannedDay == selectedDay && matches($0) }) }
+    var unfinished: [TodoItem] {
+        ordered(document.tasks.filter { matches($0) && ($0.phase == .inProgress || ($0.phase == .pending && $0.plannedDay == selectedDay)) })
+    }
     var previous: [TodoItem] { ordered(document.tasks.filter { $0.phase == .pending && $0.plannedDay < today && matches($0) }) }
     var completed: [TodoItem] { ordered(document.tasks.filter { $0.phase == .completed && $0.plannedDay == selectedDay && matches($0) }) }
     var todayCount: Int { document.tasks.filter { $0.plannedDay == today && $0.phase != .completed }.count }
@@ -151,6 +154,10 @@ enum SaveState { case saved, saving, failed }
         guard let current = self.task(task.id), current.phase != phase else { return }
         if commit({ try $0.setPhase(phase, for: task.id) }), phase == .completed { playFeedback(.completed) }
     }
+    func advancePhase(_ task: TodoItem) {
+        guard let current = self.task(task.id) else { return }
+        setPhase(current, current.phase.next)
+    }
     func delete(_ task: TodoItem) { _ = commit { $0.tasks.removeAll { $0.id == task.id } } }
     func edit(_ id: UUID, title: String, day: DayKey, groupID: UUID?) -> Bool {
         commit { doc in
@@ -166,10 +173,13 @@ enum SaveState { case saved, saving, failed }
     func move(_ task: TodoItem, offset: Int) {
         let visible: [TodoItem]
         switch task.phase {
-        case .inProgress: visible = inProgress
+        case .inProgress: visible = unfinished
         case .completed: visible = completed
-        case .pending: visible = selectedDay == today && task.plannedDay < today ? previous : pending
+        case .pending: visible = selectedDay == today && task.plannedDay < today ? previous : unfinished
         }
+        move(task, offset: offset, within: visible)
+    }
+    func move(_ task: TodoItem, offset: Int, within visible: [TodoItem]) {
         guard let i = visible.firstIndex(where: { $0.id == task.id }), visible.indices.contains(i + offset) else { return }
         let other = visible[i + offset]
         _ = commit { doc in

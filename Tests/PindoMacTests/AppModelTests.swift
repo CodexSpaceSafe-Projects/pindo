@@ -59,6 +59,95 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(model.inProgress.isEmpty)
     }
 
+    @MainActor func testStatusClicksPersistTheCycleWithoutMovingAnActiveTaskToAnotherSection() async throws {
+        let model = try makeModel()
+        let day = model.today
+        model.selectedDay = day
+        XCTAssertTrue(model.addTask(title: "当前事项", day: day, groupID: nil))
+        XCTAssertTrue(model.addTask(title: "下一件事", day: day, groupID: nil))
+        let task = model.document.tasks[0]
+        let originalOrder = model.unfinished.map(\.id)
+        var feedback: [TaskFeedback] = []
+        model.playFeedback = { feedback.append($0) }
+
+        model.advancePhase(task)
+        XCTAssertEqual(model.task(task.id)?.phase, .inProgress)
+        XCTAssertNotNil(model.task(task.id)?.startedAt)
+        XCTAssertEqual(model.unfinished.map(\.id), originalOrder)
+        XCTAssertTrue(model.completed.isEmpty)
+        XCTAssertTrue(feedback.isEmpty)
+        XCTAssertEqual(try PindoRepository(directory: model.repository.directory).document.tasks[0].phase, .inProgress)
+
+        // Repeated clicks may still carry an older row value; advance from the stored state.
+        model.advancePhase(task)
+        XCTAssertEqual(model.task(task.id)?.phase, .completed)
+        XCTAssertNotNil(model.task(task.id)?.completedAt)
+        XCTAssertEqual(model.completed.map(\.id), [task.id])
+        XCTAssertEqual(model.unfinished.count, 1)
+        XCTAssertEqual(feedback, [.completed])
+        XCTAssertEqual(try PindoRepository(directory: model.repository.directory).document.tasks[0].phase, .completed)
+
+        model.advancePhase(task)
+        XCTAssertEqual(model.task(task.id)?.phase, .pending)
+        XCTAssertNil(model.task(task.id)?.completedAt)
+        XCTAssertEqual(model.unfinished.map(\.id), originalOrder)
+        XCTAssertTrue(model.completed.isEmpty)
+        XCTAssertEqual(feedback, [.completed])
+
+        model.advancePhase(task)
+        let before = model.document
+        try FileManager.default.removeItem(at: model.repository.dataURL)
+        try FileManager.default.createDirectory(at: model.repository.dataURL, withIntermediateDirectories: false)
+        model.advancePhase(task)
+        XCTAssertEqual(model.document, before)
+        XCTAssertEqual(model.task(task.id)?.phase, .inProgress)
+        XCTAssertEqual(feedback, [.completed])
+        XCTAssertEqual(model.saveState, .failed)
+    }
+
+    @MainActor func testUnfinishedListMixesPhasesAndMovesAcrossThemWithGroupFiltering() async throws {
+        let model = try makeModel(), today = DayKey()
+        model.today = today; model.selectedDay = today
+        let group = model.document.groups[0].id
+        XCTAssertTrue(model.addTask(title: "跨日期进行中", day: today.adding(days: -2), groupID: group))
+        XCTAssertTrue(model.addTask(title: "当前待办", day: today, groupID: group))
+        XCTAssertTrue(model.addTask(title: "当前进行中", day: today, groupID: group))
+        XCTAssertTrue(model.addTask(title: "其他分组", day: today, groupID: nil))
+        XCTAssertTrue(model.addTask(title: "未来待办", day: today.adding(days: 2), groupID: group))
+        for index in [0, 2, 3] { model.advancePhase(model.document.tasks[index]) }
+        model.groupFilter = .group(group)
+        XCTAssertEqual(model.unfinished.map(\.title), ["跨日期进行中", "当前待办", "当前进行中"])
+        XCTAssertEqual(Set(model.unfinished.map(\.id)).count, model.unfinished.count)
+        XCTAssertTrue(model.previous.isEmpty)
+
+        let active = model.document.tasks[2], pending = model.document.tasks[1]
+        model.move(active, offset: -1)
+        XCTAssertEqual(model.unfinished.map(\.id), [model.document.tasks[0].id, active.id, pending.id])
+        model.move(pending, offset: -1)
+        XCTAssertEqual(model.unfinished.map(\.title), ["跨日期进行中", "当前待办", "当前进行中"])
+        XCTAssertEqual(try PindoRepository(directory: model.repository.directory).document, model.document)
+
+        model.selectedDay = today.adding(days: 2)
+        XCTAssertEqual(model.unfinished.map(\.title), ["跨日期进行中", "当前进行中", "未来待办"])
+        model.groupFilter = .ungrouped
+        XCTAssertEqual(model.unfinished.map(\.title), ["其他分组"])
+    }
+
+    @MainActor func testManagementReorderingOnlyChangesTheProvidedDayAndSearchResults() async throws {
+        let model = try makeModel(), today = DayKey()
+        XCTAssertTrue(model.addTask(title: "更早日期", day: today.adding(days: -1), groupID: nil))
+        XCTAssertTrue(model.addTask(title: "匹配 A", day: today, groupID: nil))
+        XCTAssertTrue(model.addTask(title: "隐藏事项", day: today, groupID: nil))
+        XCTAssertTrue(model.addTask(title: "匹配 B", day: today, groupID: nil))
+        let earlier = model.document.tasks[0], hidden = model.document.tasks[2]
+        let visible = model.managedTasks(query: "匹配 ", status: .all, group: .all).filter { $0.plannedDay == today }
+        XCTAssertEqual(visible.map(\.title), ["匹配 A", "匹配 B"])
+        model.move(visible[1], offset: -1, within: visible)
+        XCTAssertEqual(model.managedTasks(query: "匹配 ", status: .all, group: .all).map(\.title), ["匹配 B", "匹配 A"])
+        XCTAssertEqual(model.task(earlier.id), earlier)
+        XCTAssertEqual(model.task(hidden.id), hidden)
+    }
+
     @MainActor func testSettingsAndTaskViewsConstructAtDocumentedSizes() async throws {
         _ = NSApplication.shared
         let model = try makeModel()

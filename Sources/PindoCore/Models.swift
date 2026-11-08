@@ -40,6 +40,14 @@ public struct DayKey: Codable, Hashable, Comparable, Sendable, CustomStringConve
 
 public enum TaskPhase: String, Codable, CaseIterable, Sendable {
     case pending, inProgress, completed
+
+    public var next: Self {
+        switch self {
+        case .pending: return .inProgress
+        case .inProgress: return .completed
+        case .completed: return .pending
+        }
+    }
 }
 
 public struct TodoItem: Codable, Identifiable, Equatable, Sendable {
