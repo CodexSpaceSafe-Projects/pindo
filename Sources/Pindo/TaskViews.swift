@@ -278,9 +278,10 @@ struct TaskRow: View {
             TaskStatusButton(model: model, task: task)
             Button { model.noteID = task.id } label: {
                 HStack(alignment: .center, spacing: 6) {
+                    Text(task.title).font(.system(size: 15)).strikethrough(task.phase == .completed).fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     Image(systemName: "note.text").font(.system(size: 11)).foregroundStyle(.secondary)
                         .frame(width: 14).opacity(task.note.isEmpty ? 0 : 1).accessibilityHidden(true)
-                    Text(task.title).font(.system(size: 15)).strikethrough(task.phase == .completed).fixedSize(horizontal: false, vertical: true)
                 }.foregroundStyle(task.phase == .completed ? Color.secondary : Color.primary)
                     .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel(l10n("打开备注：%@", task.title)).accessibilityValue(model.group(task.groupID)?.name ?? l10n("未分组"))
