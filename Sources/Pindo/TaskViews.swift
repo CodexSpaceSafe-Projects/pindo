@@ -190,7 +190,7 @@ struct TaskComposer: View {
     }
 }
 
-/// Half of the inner circle, divided by two opposing semicircles into a reversed S.
+/// Half of the status circle, divided by two opposing semicircles into a reversed S.
 struct InProgressHalf: Shape {
     func path(in rect: CGRect) -> Path {
         let radius = min(rect.width, rect.height) / 2
@@ -212,11 +212,8 @@ struct TaskStatusIcon: View {
     var body: some View {
         if phase == .inProgress {
             ZStack {
-                Circle().stroke(Color.secondary, lineWidth: 1)
-                ZStack {
-                    Circle().stroke(Color.secondary.opacity(0.5), lineWidth: 0.6)
-                    InProgressHalf().fill(Color.green)
-                }.padding(3)
+                InProgressHalf().fill(Color.green)
+                Circle().strokeBorder(Color.secondary, lineWidth: 1)
             }.frame(width: 18, height: 18)
         } else {
             Image(systemName: phase == .completed ? "checkmark.circle.fill" : "circle")
