@@ -201,16 +201,7 @@ struct TaskOutlineList: NSViewRepresentable {
         let origin = scroll?.contentView.bounds.origin ?? .zero
         restoringExpansion = true
         outline.reloadData()
-        func expand(_ nodes: [TaskOutlineNode]) {
-            for node in nodes where !node.children.isEmpty {
-                let isPreviewParent = proposal?.parent?.uuidString == node.key && previewID != nil
-                if !collapsed.contains(node.key) || isPreviewParent {
-                    outline.expandItem(node)
-                    expand(node.children)
-                } else { outline.collapseItem(node) }
-            }
-        }
-        expand(roots)
+        restoreDisclosure(in: roots)
         restoringExpansion = false
         if let scroll { scroll.contentView.scroll(to: origin); scroll.reflectScrolledClipView(scroll.contentView) }
         updateRowHeights()
@@ -251,7 +242,28 @@ struct TaskOutlineList: NSViewRepresentable {
         if content.model.draggedTaskID == nil {
             if expanded { collapsed.remove(node.key) } else { collapsed.insert(node.key) }
         }
-        updateRowHeights()
+        // AppKit can discard hidden descendants' expansion bits on reload. Reapply
+        // our disclosure state when revealing a branch, outside its delegate stack.
+        DispatchQueue.main.async { [weak self, weak node] in
+            guard let self, let node, let outline = self.outline else { return }
+            if expanded, outline.isItemExpanded(node), self.content.model.draggedTaskID == nil {
+                self.restoringExpansion = true
+                self.restoreDisclosure(in: node.children)
+                self.restoringExpansion = false
+            }
+            self.updateRowHeights()
+        }
+    }
+
+    private func restoreDisclosure(in nodes: [TaskOutlineNode]) {
+        guard let outline else { return }
+        for node in nodes where !node.children.isEmpty {
+            let isPreviewParent = proposal?.parent?.uuidString == node.key && content.model.taskDragPreview != nil
+            if !collapsed.contains(node.key) || isPreviewParent {
+                outline.expandItem(node)
+                restoreDisclosure(in: node.children)
+            } else { outline.collapseItem(node) }
+        }
     }
 
     func updateRowHeights() {

@@ -85,10 +85,12 @@ final class TaskOutlineTests: XCTestCase {
         try await settle()
         XCTAssertEqual(outline.numberOfRows, 1)
         outline.expandItem(parentNode)
+        try await settle()
         XCTAssertEqual(outline.numberOfRows, 3)
         outline.collapseItem(childNode)
         XCTAssertEqual(outline.numberOfRows, 2)
         outline.expandItem(childNode)
+        try await settle()
         XCTAssertEqual(outline.numberOfRows, 3)
     }
 
