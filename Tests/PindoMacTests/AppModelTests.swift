@@ -485,7 +485,9 @@ final class AppModelTests: XCTestCase {
                 panel.sendEvent(event)
             }
             try await Task.sleep(nanoseconds: 100_000_000)
-            let editor = try XCTUnwrap(panel.firstResponder as? NSTextView)
+            let target = host.hitTest(host.convert(point, from: nil))
+            let editor = try XCTUnwrap(panel.firstResponder as? NSTextView,
+                                      "Padding click at y=\(y), hit=\(String(describing: target)), responder=\(String(describing: panel.firstResponder))")
             let text = index == 0 ? "上" : "下"
             editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
             editor.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))

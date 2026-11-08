@@ -185,12 +185,31 @@ struct TaskComposer: View {
                 .disabled(model.listEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }.font(.system(size: 13)).padding(12)
             .background {
-                RoundedRectangle(cornerRadius: 11).fill(Color(nsColor: .textBackgroundColor).opacity(0.75))
-                    .contentShape(RoundedRectangle(cornerRadius: 11))
-                    .onTapGesture { entryFocused = true }
+                ComposerFocusTarget { entryFocused = true }
+                    .background(Color(nsColor: .textBackgroundColor).opacity(0.75))
+                    .clipShape(RoundedRectangle(cornerRadius: 11))
             }
             .overlay(RoundedRectangle(cornerRadius: 11).stroke(.primary.opacity(0.08)).allowsHitTesting(false))
             .padding(.horizontal, 14).padding(.vertical, 12)
+    }
+}
+
+/// Empty composer space is an input target, not a draggable panel background.
+struct ComposerFocusTarget: NSViewRepresentable {
+    let focus: () -> Void
+    func makeNSView(context: Context) -> FocusView {
+        let view = FocusView(); view.focus = focus; return view
+    }
+    func updateNSView(_ view: FocusView, context: Context) { view.focus = focus }
+
+    final class FocusView: NSView {
+        var focus: (() -> Void)?
+        override var mouseDownCanMoveWindow: Bool { false }
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        override func mouseDown(with event: NSEvent) {
+            window?.makeKey()
+            focus?()
+        }
     }
 }
 
