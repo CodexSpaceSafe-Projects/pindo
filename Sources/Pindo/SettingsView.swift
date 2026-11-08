@@ -22,18 +22,26 @@ struct SettingsView: View {
                 Spacer()
             }.padding(12).frame(width: 150).background(.quaternary.opacity(0.3))
             Divider()
-            ScrollView {
+            if section == .todos {
                 VStack(alignment: .leading, spacing: 19) {
                     Text(l10n(section.rawValue)).font(.system(size: 22, weight: .semibold))
                     ErrorBanner(model: model)
-                    switch section {
-                    case .general: general
-                    case .todos: TodoManagementView(model: model)
-                    case .groups: GroupsSettings(model: model)
-                    case .shortcuts: ShortcutSettings(model: model)
-                    case .backup: BackupSettings(model: model)
-                    }
-                }.frame(maxWidth: .infinity, alignment: .leading).padding(27)
+                    TodoManagementView(model: model)
+                }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(27)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 19) {
+                        Text(l10n(section.rawValue)).font(.system(size: 22, weight: .semibold))
+                        ErrorBanner(model: model)
+                        switch section {
+                        case .general: general
+                        case .todos: EmptyView()
+                        case .groups: GroupsSettings(model: model)
+                        case .shortcuts: ShortcutSettings(model: model)
+                        case .backup: BackupSettings(model: model)
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding(27)
+                }
             }
         }.frame(minWidth: 690, minHeight: 510)
     }

@@ -330,10 +330,16 @@ final class AppModelTests: XCTestCase {
         let host = try XCTUnwrap(content.subviews.first)
         XCTAssertEqual(content.bounds.width, 390, accuracy: 1)
         XCTAssertEqual(host.bounds.width, 390, accuracy: 1)
-        let row = NSHostingView(rootView: TaskRow(model: model, task: model.document.tasks[2]).frame(width: 320))
-        row.layoutSubtreeIfNeeded()
-        XCTAssertEqual(row.fittingSize.width, 320, accuracy: 1)
-        XCTAssertGreaterThan(row.fittingSize.height, 36)
+        func findOutline(_ view: NSView) -> NSOutlineView? {
+            if let outline = view as? NSOutlineView { return outline }
+            return view.subviews.lazy.compactMap { findOutline($0) }.first
+        }
+        let outline = try XCTUnwrap(findOutline(content))
+        let coordinator = try XCTUnwrap(outline.dataSource as? TaskOutlineCoordinator)
+        let node = try XCTUnwrap(coordinator.taskNode(model.document.tasks[2].id))
+        let row = outline.row(forItem: node)
+        XCTAssertGreaterThanOrEqual(row, 0)
+        XCTAssertGreaterThan(outline.rect(ofRow: row).height, 36)
         panel.setContentSize(NSSize(width: 720, height: 850))
         try await Task.sleep(nanoseconds: 100_000_000)
         content.layoutSubtreeIfNeeded()

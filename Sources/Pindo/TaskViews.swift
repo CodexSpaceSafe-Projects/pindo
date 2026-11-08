@@ -27,40 +27,12 @@ struct ErrorBanner: View {
     }
 }
 
-struct TaskDisclosure<Content: View>: View {
-    @Environment(\.pindoLocalization) private var l10n
-    let title: String
-    let count: Int
-    @Binding var expanded: Bool
-    let content: Content
-    init(title: String, count: Int, expanded: Binding<Bool>, @ViewBuilder content: () -> Content) {
-        self.title = title; self.count = count; _expanded = expanded; self.content = content()
-    }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Button { expanded.toggle() } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 9, weight: .semibold))
-                    Text(title)
-                    Text("\(count)").font(.system(size: 10, weight: .semibold, design: .rounded))
-                        .padding(.horizontal, 6).padding(.vertical, 2).background(.quaternary, in: Capsule())
-                    Spacer(minLength: 0)
-                }.font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
-                    .padding(.horizontal, 8).padding(.vertical, 10).frame(maxWidth: .infinity).contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel(l10n(expanded ? "收起%@" : "展开%@", title)).accessibilityValue(expanded ? l10n("已展开") : l10n("已收起"))
-            if expanded { content }
-        }
-    }
-}
-
 struct TaskPanelView: View {
     @Environment(\.pindoLocalization) private var l10n
     @ObservedObject var model: AppModel
     @State private var datePickerOpen = false
-    @State private var previousOpen = false
-    @State private var pendingOpen = true
-    @State private var completedOpen = false
     @State private var addingParentID: UUID?
+    @State private var deletingTask: TodoItem?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -98,41 +70,41 @@ struct TaskPanelView: View {
                 if let id = addingParentID, !ids.contains(id) { addingParentID = nil }
             }
             .onExitCommand { if model.noteID != nil { model.leaveNote() } else { model.dismissList() } }
-            .onAppear { completedOpen = model.document.preferences.expandCompleted }
-            .onChange(of: model.document.preferences.expandCompleted) { _, value in completedOpen = value }
+            .onDisappear { model.endTaskDrag() }
+            .onChange(of: model.selectedDay) { _, _ in model.endTaskDrag() }
+            .onChange(of: model.groupFilter) { _, _ in model.endTaskDrag() }
+            .alert(l10n("删除此事项及全部子项？"), isPresented: Binding(get: { deletingTask != nil }, set: { if !$0 { deletingTask = nil } })) {
+                Button(l10n("取消"), role: .cancel) { deletingTask = nil }
+                Button(l10n("删除"), role: .destructive) { if let task = deletingTask { model.delete(task) }; deletingTask = nil }
+            } message: { Text(l10n("将删除 %ld 条待办及其备注。", deletingTask.map { model.document.descendantIDs(including: [$0.id]).count } ?? 0)) }
     }
 
     private var taskList: some View {
-        let sections = model.outlineSections
+        let sections = model.outlineSections(in: model.taskDragPreview ?? model.document)
         let overdueIDs = Set(sections.previous.map(\.id)).intersection(Set(model.previous.map(\.id)))
-        return ScrollView {
-            LazyVStack(alignment: .leading, spacing: 2) {
-                if model.selectedDay == model.today && !sections.previous.isEmpty {
-                    TaskDisclosure(title: l10n("之前未完成"), count: overdueIDs.count, expanded: $previousOpen) {
-                        outlineRows(sections.previous)
-                        Button(l10n("将这 %ld 件移到今天", overdueIDs.count)) { model.rollover(taskIDs: overdueIDs) }.font(.system(size: 11)).buttonStyle(.borderless).padding(8)
-                    }
-                }
-                TaskDisclosure(title: l10n("未完成"), count: sections.unfinished.filter { $0.task.phase != .completed }.count, expanded: $pendingOpen) {
-                    outlineRows(sections.unfinished)
-                    if sections.unfinished.isEmpty {
-                        Text(l10n("想到一件事，就在下方记下来。")).font(.system(size: 12)).foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity).padding(.vertical, 28)
-                    }
-                }
-                if !sections.completed.isEmpty {
-                    TaskDisclosure(title: l10n("已完成"), count: sections.completed.count, expanded: $completedOpen) {
-                        outlineRows(sections.completed)
-                    }
-                }
-            }.padding(.horizontal, 12).padding(.vertical, 8)
-        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(nsColor: .textBackgroundColor).opacity(0.45))
-    }
-    private func outlineRows(_ rows: [TaskOutlineRow]) -> some View {
-        ForEach(rows) { row in
-            TaskRow(model: model, task: row.task, onAddChild: { addingParentID = $0.id })
-                .padding(.leading, CGFloat(row.depth) * 16)
+        var groups: [TaskOutlineSection] = []
+        if model.selectedDay == model.today && !sections.previous.isEmpty {
+            groups.append(TaskOutlineSection(id: "previous", title: l10n("之前未完成"), count: overdueIDs.count, initiallyExpanded: false,
+                                             rows: sections.previous, footer: l10n("将这 %ld 件移到今天", overdueIDs.count)))
         }
+        groups.append(TaskOutlineSection(id: "unfinished", title: l10n("未完成"), count: sections.unfinished.filter { $0.task.phase != .completed }.count,
+                                         rows: sections.unfinished, emptyText: l10n("想到一件事，就在下方记下来。")))
+        if !sections.completed.isEmpty {
+            groups.append(TaskOutlineSection(id: "completed", title: l10n("已完成"), count: sections.completed.count,
+                                             initiallyExpanded: model.document.preferences.expandCompleted, rows: sections.completed))
+        }
+        return VStack(spacing: 0) {
+            TaskOutlineList(model: model, sections: groups,
+                            onSelect: { model.noteID = $0.id }, onSelectNote: { model.noteID = $0.id }, onEdit: { model.editingID = $0.id },
+                            onAddChild: { addingParentID = $0.id },
+                            onDelete: { task in
+                                if model.document.descendantIDs(including: [task.id]).count > 1 { deletingTask = task } else { model.delete(task) }
+                            }, onMove: { model.move($0, offset: $1) }, onFooter: { model.rollover(taskIDs: overdueIDs) })
+            if model.draggedTaskID != nil {
+                Text(l10n("拖动排序，放到事项上可作为子项")).font(.system(size: 11)).foregroundStyle(.secondary).padding(6)
+            }
+        }.padding(.horizontal, 12).padding(.vertical, 8).frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .textBackgroundColor).opacity(0.45))
     }
     private var dateBar: some View {
         HStack(spacing: 3) {
@@ -219,108 +191,6 @@ struct InProgressHalf: Shape {
         path.addArc(center: center, radius: radius, startAngle: .degrees(90), endAngle: .degrees(270), clockwise: false)
         path.closeSubpath()
         return path
-    }
-}
-
-struct TaskStatusIcon: View {
-    let phase: TaskPhase
-    var body: some View {
-        if phase == .inProgress {
-            ZStack {
-                InProgressHalf().fill(Color.green)
-                Circle().strokeBorder(Color.secondary, lineWidth: 1)
-            }.frame(width: 18, height: 18)
-        } else {
-            Image(systemName: phase == .completed ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 19, weight: .light)).foregroundStyle(phase == .completed ? Color.green : Color.secondary)
-        }
-    }
-}
-
-struct TaskStatusButton: View {
-    @Environment(\.pindoLocalization) private var l10n
-    @ObservedObject var model: AppModel
-    let task: TodoItem
-    private var actionKey: String {
-        switch task.phase {
-        case .pending: return "开始：%@"
-        case .inProgress: return "完成：%@"
-        case .completed: return "恢复未完成：%@"
-        }
-    }
-    private var stateKey: String {
-        switch task.phase {
-        case .pending: return "待办"
-        case .inProgress: return "进行中"
-        case .completed: return "已完成"
-        }
-    }
-    var body: some View {
-        Button { model.advancePhase(task) } label: {
-            TaskStatusIcon(phase: task.phase).frame(width: 25, height: 28).contentShape(Rectangle())
-        }.buttonStyle(.plain).help(l10n(actionKey, task.title))
-            .accessibilityLabel(l10n(actionKey, task.title)).accessibilityValue(l10n(stateKey))
-    }
-}
-
-struct TaskRowMenu: View {
-    @Environment(\.pindoLocalization) private var l10n
-    let edit: () -> Void
-    let openNote: () -> Void
-    let move: (Int) -> Void
-    let delete: () -> Void
-    var addChild: (() -> Void)? = nil
-    var makeRoot: (() -> Void)? = nil
-    var canAddChild = true
-    var body: some View {
-        Button(l10n("修改待办"), action: edit)
-        Button(l10n("打开备注"), action: openNote)
-        if let addChild { Button(l10n("添加子项"), action: addChild).disabled(!canAddChild) }
-        if let makeRoot { Button(l10n("移为主待办"), action: makeRoot) }
-        Divider()
-        Button(l10n("上移")) { move(-1) }
-        Button(l10n("下移")) { move(1) }
-        Button(l10n("删除待办"), role: .destructive, action: delete)
-    }
-}
-
-struct TaskRow: View {
-    @Environment(\.pindoLocalization) private var l10n
-    @ObservedObject var model: AppModel
-    let task: TodoItem
-    var onAddChild: (TodoItem) -> Void = { _ in }
-    @State private var hovered = false
-    @State private var confirmDelete = false
-    private var groupColor: Color { Color(hex: model.group(task.groupID)?.colorHex ?? "#9AA9AF") }
-    var body: some View {
-        HStack(alignment: .center, spacing: 8) {
-            TaskStatusButton(model: model, task: task)
-            Button { model.noteID = task.id } label: {
-                HStack(alignment: .center, spacing: 6) {
-                    Text(task.title).font(.system(size: 15)).strikethrough(task.phase == .completed).fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Image(systemName: "note.text").font(.system(size: 11)).foregroundStyle(.secondary)
-                        .frame(width: 14).opacity(task.note.isEmpty ? 0 : 1).accessibilityHidden(true)
-                }.foregroundStyle(task.phase == .completed ? Color.secondary : Color.primary)
-                    .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel(l10n("打开备注：%@", task.title)).accessibilityValue(model.group(task.groupID)?.name ?? l10n("未分组"))
-        }.padding(.leading, 16).padding(.trailing, 10).padding(.vertical, 4)
-            .background(hovered ? Color.primary.opacity(0.045) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
-            .modifier(GroupStripe(color: groupColor))
-            .onHover { hovered = $0 }
-            .modifier(TaskDragAndDrop(model: model, task: task))
-            .contextMenu {
-                TaskRowMenu(edit: { model.editingID = task.id }, openNote: { model.noteID = task.id },
-                            move: { model.move(task, offset: $0) },
-                            delete: { if model.document.descendantIDs(including: [task.id]).count > 1 { confirmDelete = true } else { model.delete(task) } },
-                            addChild: { onAddChild(task) },
-                            makeRoot: task.parentID == nil ? nil : { _ = model.relocateTask(task.id, parent: nil) },
-                            canAddChild: (model.document.taskDepth(task.id) ?? 0) < 2)
-            }
-            .alert(l10n("删除此事项及全部子项？"), isPresented: $confirmDelete) {
-                Button(l10n("取消"), role: .cancel) {}
-                Button(l10n("删除"), role: .destructive) { model.delete(task) }
-            } message: { Text(l10n("将删除 %ld 条待办及其备注。", model.document.descendantIDs(including: [task.id]).count)) }
     }
 }
 

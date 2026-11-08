@@ -14,7 +14,10 @@ enum SaveState { case saved, saving, failed }
     @Published var listEntryGroupID: UUID?
     @Published var noteID: UUID?
     @Published var editingID: UUID?
-    @Published var draggedTaskID: UUID?
+    @Published private(set) var draggedTaskID: UUID?
+    @Published private(set) var taskDragPreview: PindoDocument?
+    private var taskDragBase: PindoDocument?
+    private var taskDragDate = Date()
     @Published var notice: PindoNotice?
     @Published private(set) var interfaceLanguage: InterfaceLanguage
     @Published var saveState = SaveState.saved
@@ -89,9 +92,13 @@ enum SaveState { case saved, saving, failed }
     var previous: [TodoItem] { ordered(document.tasks.filter { $0.phase == .pending && $0.plannedDay < today && matches($0) }) }
     var completed: [TodoItem] { ordered(document.tasks.filter { $0.phase == .completed && $0.plannedDay == selectedDay && matches($0) }) }
     var outlineSections: (unfinished: [TaskOutlineRow], previous: [TaskOutlineRow], completed: [TaskOutlineRow]) {
-        let active = document.rootTaskIDs(containing: Set(unfinished.map(\.id)))
-        let overdue = selectedDay == today ? document.rootTaskIDs(containing: Set(previous.map(\.id))).subtracting(active) : []
-        let done = document.rootTaskIDs(containing: Set(completed.map(\.id))).subtracting(active.union(overdue))
+        outlineSections(in: document)
+    }
+    func outlineSections(in document: PindoDocument) -> (unfinished: [TaskOutlineRow], previous: [TaskOutlineRow], completed: [TaskOutlineRow]) {
+        let matching = document.tasks.filter { matches($0) }
+        let active = document.rootTaskIDs(containing: Set(matching.filter { $0.phase == .inProgress || ($0.phase == .pending && $0.plannedDay == selectedDay) }.map(\.id)))
+        let overdue = selectedDay == today ? document.rootTaskIDs(containing: Set(matching.filter { $0.phase == .pending && $0.plannedDay < today }.map(\.id))).subtracting(active) : []
+        let done = document.rootTaskIDs(containing: Set(matching.filter { $0.phase == .completed && $0.plannedDay == selectedDay }.map(\.id))).subtracting(active.union(overdue))
         return (document.taskOutline(matching: active, expandingFamilies: true),
                 document.taskOutline(matching: overdue, expandingFamilies: true),
                 document.taskOutline(matching: done, expandingFamilies: true))
@@ -113,6 +120,7 @@ enum SaveState { case saved, saving, failed }
     }
 
     @discardableResult func commit(_ change: (inout PindoDocument) throws -> Void) -> Bool {
+        endTaskDrag()
         noteSave?.cancel()
         do {
             let previousDefault = document.preferences.defaultGroupID
@@ -186,7 +194,6 @@ enum SaveState { case saved, saving, failed }
         if case .delete = action {
             if let noteID, task(noteID) == nil { self.noteID = nil }
             if let editingID, task(editingID) == nil { self.editingID = nil }
-            if let draggedTaskID, task(draggedTaskID) == nil { self.draggedTaskID = nil }
         }
         return true
     }
@@ -257,6 +264,43 @@ enum SaveState { case saved, saving, failed }
         return saved
     }
 
+    /// Hovering edits only a copy. Disk, undoable state, notes and completion feedback
+    /// are untouched until the native dragging destination accepts the drop.
+    @discardableResult func beginTaskDrag(_ id: UUID) -> Bool {
+        guard task(id) != nil else { return false }
+        endTaskDrag()
+        taskDragBase = document; taskDragDate = Date(); draggedTaskID = id
+        return true
+    }
+
+    @discardableResult func previewTaskDrag(parent: UUID?, before: UUID?) -> Bool {
+        guard let id = draggedTaskID, let base = taskDragBase, base == document else { endTaskDrag(); return false }
+        var next = base
+        do { try next.moveTask(id, toParent: parent, before: before, now: taskDragDate) }
+        catch { clearTaskDragPreview(); return false }
+        if taskDragPreview != next { taskDragPreview = next }
+        return true
+    }
+
+    func clearTaskDragPreview() {
+        if taskDragPreview != nil { taskDragPreview = nil }
+    }
+
+    @discardableResult func acceptTaskDrag(parent: UUID?, before: UUID?) -> Bool {
+        guard previewTaskDrag(parent: parent, before: before), let next = taskDragPreview else { endTaskDrag(); return false }
+        endTaskDrag()
+        if next == document { return true }
+        let saved = commit { $0 = next }
+        if saved { notice = nil }
+        return saved
+    }
+
+    func endTaskDrag() {
+        clearTaskDragPreview()
+        if draggedTaskID != nil { draggedTaskID = nil }
+        taskDragBase = nil
+    }
+
     func copyTask(_ task: TodoItem) -> Bool {
         let text = task.title + (task.note.isEmpty ? "" : "\n\n" + task.note)
         guard writeClipboard(text) else { notice = .text("未能复制待办内容。"); return false }
@@ -310,6 +354,7 @@ enum SaveState { case saved, saving, failed }
         snapshotBytes = (try? DocumentCodec.encode(repository.archive).count) ?? 0
     }
     func restore(_ id: UUID) {
+        endTaskDrag()
         guard flush() else { return }
         do {
             let oldLogin = document.preferences.launchAtLogin
@@ -322,6 +367,7 @@ enum SaveState { case saved, saving, failed }
         } catch { notice = .failure(error); refreshSnapshots() }
     }
     func retryRecovery() {
+        endTaskDrag()
         do {
             repository = try PindoRepository(directory: repository.directory, initialDocument: localization.initialDocument)
             snapshotFailure = nil
@@ -340,6 +386,7 @@ enum SaveState { case saved, saving, failed }
         catch { notice = .failure(error) }
     }
     func importData() {
+        endTaskDrag()
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.json]; panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let l10n = localization
