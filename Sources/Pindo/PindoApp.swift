@@ -153,17 +153,13 @@ import PindoCore
     private func showStatusMenu(from button: NSStatusBarButton) {
         let l10n = localization
         let menu = NSMenu()
-        let settingsItem = NSMenuItem(title: l10n("设置"), action: nil, keyEquivalent: "")
-        settingsItem.submenu = NSMenu(title: settingsItem.title)
-        if let submenu = settingsItem.submenu {
-            submenu.addItem(settingsMenuItem(l10n, key: ""))
-            submenu.addItem(.separator())
-            submenu.addItem(quitMenuItem(l10n, key: ""))
-        }
-        menu.addItem(settingsItem)
-        let add = NSMenuItem(title: l10n("添加待办"), action: #selector(showQuickFromMenu), keyEquivalent: "")
+        let add = NSMenuItem(title: l10n("添加事项"), action: #selector(showQuickFromMenu), keyEquivalent: "")
         add.target = self
         menu.addItem(add)
+        let settings = settingsMenuItem(l10n, key: "")
+        settings.title = l10n("设置"); menu.addItem(settings)
+        let quit = quitMenuItem(l10n, key: "")
+        quit.title = l10n("退出"); menu.addItem(quit)
         let bottom = button.isFlipped ? button.bounds.maxY : button.bounds.minY
         menu.popUp(positioning: nil, at: NSPoint(x: button.bounds.minX, y: bottom), in: button)
     }

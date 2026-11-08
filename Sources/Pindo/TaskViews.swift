@@ -98,7 +98,7 @@ struct TaskPanelView: View {
 
     private var taskList: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 3) {
+            LazyVStack(alignment: .leading, spacing: 2) {
                 if !model.inProgress.isEmpty {
                     Text(l10n("进行中 · %ld", model.inProgress.count)).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary).padding(8)
                     ForEach(model.inProgress) { TaskRow(model: model, task: $0) }
@@ -183,6 +183,22 @@ struct TaskPanelView: View {
     }
 }
 
+/// Wraps the leading corners of a row, with rounded ends above and below its content.
+struct TaskGroupAccent: Shape {
+    func path(in rect: CGRect) -> Path {
+        let inset: CGFloat = 1.5
+        let radius = min(8, max(0, (rect.height - inset * 2) / 2))
+        var path = Path()
+        path.move(to: CGPoint(x: rect.maxX - inset, y: rect.minY + inset))
+        path.addLine(to: CGPoint(x: rect.minX + inset + radius, y: rect.minY + inset))
+        path.addQuadCurve(to: CGPoint(x: rect.minX + inset, y: rect.minY + inset + radius), control: CGPoint(x: rect.minX + inset, y: rect.minY + inset))
+        path.addLine(to: CGPoint(x: rect.minX + inset, y: rect.maxY - inset - radius))
+        path.addQuadCurve(to: CGPoint(x: rect.minX + inset + radius, y: rect.maxY - inset), control: CGPoint(x: rect.minX + inset, y: rect.maxY - inset))
+        path.addLine(to: CGPoint(x: rect.maxX - inset, y: rect.maxY - inset))
+        return path
+    }
+}
+
 struct TaskRow: View {
     @Environment(\.pindoLocalization) private var l10n
     @ObservedObject var model: AppModel
@@ -190,25 +206,25 @@ struct TaskRow: View {
     @State private var hovered = false
     private var groupColor: Color { Color(hex: model.group(task.groupID)?.colorHex ?? "#9AA9AF") }
     var body: some View {
-        HStack(alignment: .top, spacing: 9) {
+        HStack(alignment: .center, spacing: 8) {
             Button { model.setPhase(task, task.phase == .completed ? .pending : .completed) } label: {
                 Image(systemName: task.phase == .completed ? "checkmark.circle.fill" : "circle").font(.system(size: 19, weight: .light)).foregroundStyle(task.phase == .completed ? Color.green : Color.secondary)
-                    .frame(width: 25, height: 26)
+                    .frame(width: 25, height: 28)
             }.buttonStyle(.plain).accessibilityLabel(task.phase == .completed ? l10n("恢复未完成：%@", task.title) : l10n("完成：%@", task.title))
             Button { model.noteID = task.id } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 5) {
-                        Text(task.title).font(.system(size: 14)).strikethrough(task.phase == .completed).fixedSize(horizontal: false, vertical: true)
-                        if !task.note.isEmpty { Image(systemName: "note.text").font(.system(size: 9)).foregroundStyle(.secondary) }
-                    }
-                    Text(model.group(task.groupID)?.name ?? l10n("未分组")).font(.system(size: 11)).foregroundStyle(groupColor)
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(task.title).font(.system(size: 15)).strikethrough(task.phase == .completed).fixedSize(horizontal: false, vertical: true)
+                    if !task.note.isEmpty { Image(systemName: "note.text").font(.system(size: 9)).foregroundStyle(.secondary) }
                 }.foregroundStyle(task.phase == .completed ? Color.secondary : Color.primary)
-                    .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel(l10n("打开备注：%@", task.title))
-            Button { model.editingID = task.id } label: { Image(systemName: "pencil").frame(width: 20, height: 25) }
+                    .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading).contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityLabel(l10n("打开备注：%@", task.title)).accessibilityValue(model.group(task.groupID)?.name ?? l10n("未分组"))
+            Button { model.editingID = task.id } label: { Image(systemName: "pencil").frame(width: 20, height: 28) }
                 .buttonStyle(.borderless).help(l10n("修改待办"))
-        }.padding(.leading, 16).padding(.trailing, 10).padding(.vertical, 10)
-            .modifier(GroupStripe(color: groupColor))
+        }.padding(.leading, 16).padding(.trailing, 10).padding(.vertical, 4)
+            .overlay(alignment: .leading) {
+                TaskGroupAccent().stroke(groupColor, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                    .frame(width: 12).allowsHitTesting(false).accessibilityHidden(true)
+            }
             .background(hovered ? Color.primary.opacity(0.045) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
             .onHover { hovered = $0 }
             .contextMenu {

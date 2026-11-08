@@ -45,6 +45,7 @@ struct GroupColorMenu: View {
                     if colorHex.uppercased() != preset.hex { colorHex = preset.hex }
                 } label: {
                     Label { Text(l10n(preset.name)) } icon: { Image(nsImage: preset.swatch) }
+                        .labelStyle(.titleAndIcon)
                 }
             }
             Divider()

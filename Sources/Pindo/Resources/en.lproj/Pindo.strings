@@ -129,7 +129,7 @@
 "标记完成" = "Mark Complete";
 "标记进行中" = "Mark In Progress";
 "每 30 秒检查，有变化才创建快照。" = "Pindo checks every 30 seconds and takes a snapshot when data changes.";
-"每条待办左侧用 6px 色条区分分组，分组名称也使用对应颜色。" = "Each task displays its group's color in the left stripe and group name.";
+"待办清单左侧用圆弧色条区分分组，颜色选项同时显示色块和名称。" = "Curved stripes identify task groups. Color choices display both a swatch and a name.";
 "没有符合条件的待办" = "No matching tasks";
 "浅色" = "Light";
 "深色" = "Dark";
@@ -191,3 +191,4 @@
 "黄色" = "Yellow";
 "默认分组不存在" = "The default group doesn't exist";
 "默认展开已完成" = "Expand Completed Tasks by Default";
+"添加事项" = "Add Task";
