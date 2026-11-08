@@ -60,7 +60,6 @@ struct TaskPanelView: View {
     @State private var previousOpen = false
     @State private var pendingOpen = true
     @State private var completedOpen = false
-    @FocusState private var entryFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -83,7 +82,7 @@ struct TaskPanelView: View {
                 NoteView(model: model, task: task).id(id)
             } else {
                 taskList
-                composer
+                TaskComposer(model: model)
                 Divider()
                 dateBar
             }
@@ -123,19 +122,6 @@ struct TaskPanelView: View {
                 }
             }.padding(.horizontal, 12).padding(.vertical, 8)
         }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(nsColor: .textBackgroundColor).opacity(0.45))
-    }
-    private var composer: some View {
-        HStack(spacing: 8) {
-            TextField(l10n("添加一件要做的事…"), text: $model.listEntry).textFieldStyle(.plain).focused($entryFocused)
-                .onChange(of: model.listEntry) { _, _ in model.scheduleDraftSave() }
-                .onSubmit { if model.submitListEntry() { entryFocused = true } }
-            GroupSelectionMenu(groups: model.document.groups, selection: $model.listEntryGroupID)
-            Button { if model.submitListEntry() { entryFocused = true } } label: { Image(systemName: "return").frame(width: 24, height: 25).contentShape(Rectangle()) }
-                .buttonStyle(.plain).help(l10n("添加待办")).accessibilityLabel(l10n("添加待办"))
-                .disabled(model.listEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        }.font(.system(size: 13)).padding(12)
-            .background(Color(nsColor: .textBackgroundColor).opacity(0.75), in: RoundedRectangle(cornerRadius: 11))
-            .overlay(RoundedRectangle(cornerRadius: 11).stroke(.primary.opacity(0.08))).padding(.horizontal, 14).padding(.vertical, 12)
     }
     private var dateBar: some View {
         HStack(spacing: 3) {
@@ -183,19 +169,28 @@ struct TaskPanelView: View {
     }
 }
 
-/// Wraps the leading corners of a row, with rounded ends above and below its content.
-struct TaskGroupAccent: Shape {
-    func path(in rect: CGRect) -> Path {
-        let inset: CGFloat = 1.5
-        let radius = min(8, max(0, (rect.height - inset * 2) / 2))
-        var path = Path()
-        path.move(to: CGPoint(x: rect.maxX - inset, y: rect.minY + inset))
-        path.addLine(to: CGPoint(x: rect.minX + inset + radius, y: rect.minY + inset))
-        path.addQuadCurve(to: CGPoint(x: rect.minX + inset, y: rect.minY + inset + radius), control: CGPoint(x: rect.minX + inset, y: rect.minY + inset))
-        path.addLine(to: CGPoint(x: rect.minX + inset, y: rect.maxY - inset - radius))
-        path.addQuadCurve(to: CGPoint(x: rect.minX + inset + radius, y: rect.maxY - inset), control: CGPoint(x: rect.minX + inset, y: rect.maxY - inset))
-        path.addLine(to: CGPoint(x: rect.maxX - inset, y: rect.maxY - inset))
-        return path
+struct TaskComposer: View {
+    @Environment(\.pindoLocalization) private var l10n
+    @ObservedObject var model: AppModel
+    @FocusState private var entryFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TextField(l10n("添加一件要做的事…"), text: $model.listEntry).textFieldStyle(.plain).focused($entryFocused)
+                .onChange(of: model.listEntry) { _, _ in model.scheduleDraftSave() }
+                .onSubmit { if model.submitListEntry() { entryFocused = true } }
+            GroupSelectionMenu(groups: model.document.groups, selection: $model.listEntryGroupID)
+            Button { if model.submitListEntry() { entryFocused = true } } label: { Image(systemName: "return").frame(width: 24, height: 25).contentShape(Rectangle()) }
+                .buttonStyle(.plain).help(l10n("添加待办")).accessibilityLabel(l10n("添加待办"))
+                .disabled(model.listEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }.font(.system(size: 13)).padding(12)
+            .background {
+                RoundedRectangle(cornerRadius: 11).fill(Color(nsColor: .textBackgroundColor).opacity(0.75))
+                    .contentShape(RoundedRectangle(cornerRadius: 11))
+                    .onTapGesture { entryFocused = true }
+            }
+            .overlay(RoundedRectangle(cornerRadius: 11).stroke(.primary.opacity(0.08)).allowsHitTesting(false))
+            .padding(.horizontal, 14).padding(.vertical, 12)
     }
 }
 
@@ -221,11 +216,8 @@ struct TaskRow: View {
             Button { model.editingID = task.id } label: { Image(systemName: "pencil").frame(width: 20, height: 28) }
                 .buttonStyle(.borderless).help(l10n("修改待办"))
         }.padding(.leading, 16).padding(.trailing, 10).padding(.vertical, 4)
-            .overlay(alignment: .leading) {
-                TaskGroupAccent().stroke(groupColor, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-                    .frame(width: 12).allowsHitTesting(false).accessibilityHidden(true)
-            }
             .background(hovered ? Color.primary.opacity(0.045) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
+            .modifier(GroupStripe(color: groupColor))
             .onHover { hovered = $0 }
             .contextMenu {
                 Button(l10n("打开备注")) { model.noteID = task.id }

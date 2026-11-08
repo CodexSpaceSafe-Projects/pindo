@@ -424,4 +424,75 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(panel.frame.minX, topLeft.x, accuracy: 1)
         XCTAssertEqual(panel.frame.maxY, topLeft.y, accuracy: 1)
     }
+
+    @MainActor func testSingleSecondaryClickAndControlClickOpenTheFlatStatusMenu() async throws {
+        _ = NSApplication.shared
+        let model = try makeModel()
+        let delegate = AppDelegate(model: model)
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        defer { NSStatusBar.system.removeStatusItem(item); delegate.listPanel?.orderOut(nil) }
+        let button = try XCTUnwrap(item.button)
+        var menus: [NSMenu] = []
+        delegate.presentStatusMenu = { menu, source in
+            XCTAssertTrue(source === button)
+            menus.append(menu)
+        }
+        func click(_ type: NSEvent.EventType, modifiers: NSEvent.ModifierFlags = []) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: .zero, modifierFlags: modifiers,
+                                            timestamp: ProcessInfo.processInfo.systemUptime,
+                                            windowNumber: button.window?.windowNumber ?? 0, context: nil,
+                                            eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+
+        // A trackpad secondary click has clickCount == 1, just like a mouse right-click.
+        delegate.handleStatusClick(button, event: try click(.rightMouseUp))
+        delegate.handleStatusClick(button, event: try click(.leftMouseDown, modifiers: .control))
+        XCTAssertEqual(menus.count, 2)
+        for menu in menus {
+            XCTAssertEqual(menu.items.map(\.title), ["添加事项", "设置", "退出"].map { model.localization($0) })
+            XCTAssertTrue(menu.items.allSatisfy { $0.submenu == nil && $0.action != nil })
+        }
+        XCTAssertNil(delegate.listPanel)
+        delegate.handleStatusClick(button, event: try click(.leftMouseDown))
+        XCTAssertEqual(menus.count, 2)
+        XCTAssertEqual(delegate.listPanel?.isVisible, true)
+    }
+
+    @MainActor func testComposerTopAndBottomPaddingClicksAcceptTyping() async throws {
+        _ = NSApplication.shared
+        let model = try makeModel()
+        let panel = QuickPanel.quickAddPanel()
+        defer { panel.orderOut(nil) }
+        let host = NSHostingView(rootView: TaskComposer(model: model).ignoresSafeArea())
+        panel.contentView = host
+        panel.setContentSize(NSSize(width: 390, height: 82))
+        panel.showInFront()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        host.layoutSubtreeIfNeeded()
+        var expected = ""
+
+        // Both points are in the composer's padded background, outside the native text field.
+        for (index, y) in [CGFloat(14), host.bounds.height - 14].enumerated() {
+            panel.makeFirstResponder(nil)
+            try await Task.sleep(nanoseconds: 100_000_000)
+            let point = host.convert(NSPoint(x: 30, y: y), to: nil)
+            let timestamp = ProcessInfo.processInfo.systemUptime
+            for (offset, type) in [NSEvent.EventType.leftMouseDown, .leftMouseUp].enumerated() {
+                let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                                                           timestamp: timestamp + Double(offset) * 0.05,
+                                                           windowNumber: panel.windowNumber, context: nil,
+                                                           eventNumber: index * 2 + offset, clickCount: 1, pressure: 1))
+                panel.sendEvent(event)
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+            let editor = try XCTUnwrap(panel.firstResponder as? NSTextView)
+            let text = index == 0 ? "上" : "下"
+            editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+            editor.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+            try await Task.sleep(nanoseconds: 100_000_000)
+            expected += text
+            XCTAssertEqual(model.listEntry, expected)
+            XCTAssertTrue(model.document.tasks.isEmpty)
+        }
+    }
 }

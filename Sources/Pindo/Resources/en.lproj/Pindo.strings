@@ -2,7 +2,7 @@
 "%@颜色" = "Color for %@";
 "%@，未完成 %ld，已完成 %ld" = "%@: %ld unfinished, %ld completed";
 "%ld 字" = "Characters: %ld";
-"Pindo · 待办清单（右键双击打开菜单）" = "Pindo · Tasks (double right-click for menu)";
+"Pindo · 待办清单（右键打开菜单）" = "Pindo · Tasks (right-click for menu)";
 "Pindo 未能读取资料" = "Pindo couldn't read its data";
 "Pindo 设置" = "Pindo Settings";
 "Return 添加 · Esc 保留草稿" = "Return Add · Esc Keep Draft";
@@ -129,7 +129,7 @@
 "标记完成" = "Mark Complete";
 "标记进行中" = "Mark In Progress";
 "每 30 秒检查，有变化才创建快照。" = "Pindo checks every 30 seconds and takes a snapshot when data changes.";
-"待办清单左侧用圆弧色条区分分组，颜色选项同时显示色块和名称。" = "Curved stripes identify task groups. Color choices display both a swatch and a name.";
+"待办清单左侧用分组色带区分分组，颜色选项同时显示色块和名称。" = "Stripes on the left identify task groups. Color choices display both a swatch and a name.";
 "没有符合条件的待办" = "No matching tasks";
 "浅色" = "Light";
 "深色" = "Dark";

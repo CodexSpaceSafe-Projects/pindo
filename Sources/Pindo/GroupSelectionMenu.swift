@@ -43,7 +43,7 @@ struct GroupStripe: ViewModifier {
     let color: Color
     func body(content: Content) -> some View {
         content.overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 3).fill(color).frame(width: 6).padding(.vertical, 9).allowsHitTesting(false)
-        }
+            Rectangle().fill(color).frame(width: 5).allowsHitTesting(false).accessibilityHidden(true)
+        }.clipShape(RoundedRectangle(cornerRadius: 9))
     }
 }

@@ -73,6 +73,10 @@ import PindoCore
     private let hotkeys = GlobalHotkeys()
     private var lastPreferences: Preferences?
     private let quickPosition: QuickPanelPosition
+    var presentStatusMenu: (NSMenu, NSStatusBarButton) -> Void = { menu, button in
+        let bottom = button.isFlipped ? button.bounds.maxY : button.bounds.minY
+        menu.popUp(positioning: nil, at: NSPoint(x: button.bounds.minX, y: bottom), in: button)
+    }
 
     init(model: AppModel? = nil, quickPosition: QuickPanelPosition = QuickPanelPosition()) {
         self.model = model; self.quickPosition = quickPosition
@@ -103,7 +107,7 @@ import PindoCore
                 button.image = NSImage(systemSymbolName: "checklist", accessibilityDescription: "Pindo")
                 button.image?.isTemplate = true; button.imagePosition = .imageLeading
                 button.target = self; button.action = #selector(statusClicked(_:))
-                button.sendAction(on: [.leftMouseDown, .rightMouseDown])
+                button.sendAction(on: [.leftMouseDown, .rightMouseUp])
             }
             updateLanguage(); apply(model.document.preferences); installDismissalObservers()
             NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didWake), name: NSWorkspace.didWakeNotification, object: nil)
@@ -125,7 +129,7 @@ import PindoCore
 
     private func updateLanguage() {
         let l10n = localization
-        statusItem?.button?.toolTip = l10n("Pindo · 待办清单（右键双击打开菜单）")
+        statusItem?.button?.toolTip = l10n("Pindo · 待办清单（右键打开菜单）")
         settingsWindow?.title = l10n("Pindo 设置")
         installMenu()
     }
@@ -140,10 +144,14 @@ import PindoCore
     }
 
     @objc private func statusClicked(_ button: NSStatusBarButton) {
-        if let event = NSApp.currentEvent {
+        handleStatusClick(button, event: NSApp.currentEvent)
+    }
+
+    func handleStatusClick(_ button: NSStatusBarButton, event: NSEvent?) {
+        if let event {
             lastStatusClickAt = event.timestamp
-            if event.type == .rightMouseDown || event.type == .rightMouseUp {
-                if event.clickCount == 2 { showStatusMenu(from: button) }
+            if event.type == .rightMouseDown || event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
+                showStatusMenu(from: button)
                 return
             }
         }
@@ -160,8 +168,7 @@ import PindoCore
         settings.title = l10n("设置"); menu.addItem(settings)
         let quit = quitMenuItem(l10n, key: "")
         quit.title = l10n("退出"); menu.addItem(quit)
-        let bottom = button.isFlipped ? button.bounds.maxY : button.bounds.minY
-        menu.popUp(positioning: nil, at: NSPoint(x: button.bounds.minX, y: bottom), in: button)
+        presentStatusMenu(menu, button)
     }
 
     @objc private func showQuickFromMenu() {
