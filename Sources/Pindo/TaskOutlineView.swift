@@ -134,6 +134,7 @@ struct TaskOutlineList: NSViewRepresentable {
     private var knownSections: Set<String> = []
     private var lastSections: [TaskOutlineSection]?
     private var lastSelected: Set<UUID> = []
+    private var lastGroups: [TaskGroup] = []
     private var lastBatch = false
     private var lastLanguage: InterfaceLanguage?
     private var lastPreviewID: UUID?
@@ -167,8 +168,9 @@ struct TaskOutlineList: NSViewRepresentable {
             collapsedBeforeDrag = nil
             pendingPreview?.cancel(); pendingPreview = nil; proposal = nil
         }
-        guard lastSections != content.sections || lastSelected != content.selectedIDs || lastBatch != content.batchMode || lastLanguage != content.model.interfaceLanguage || lastPreviewID != previewID else { return }
+        guard lastSections != content.sections || lastGroups != content.model.document.groups || lastSelected != content.selectedIDs || lastBatch != content.batchMode || lastLanguage != content.model.interfaceLanguage || lastPreviewID != previewID else { return }
         lastSections = content.sections; lastSelected = content.selectedIDs
+        lastGroups = content.model.document.groups
         lastBatch = content.batchMode; lastLanguage = content.model.interfaceLanguage; lastPreviewID = previewID
         for node in cache.values { node.children = [] }
         roots = []
@@ -237,11 +239,25 @@ struct TaskOutlineList: NSViewRepresentable {
 
     func outlineViewItemDidCollapse(_ notification: Notification) { expansionChanged(notification, expanded: false) }
     func outlineViewItemDidExpand(_ notification: Notification) { expansionChanged(notification, expanded: true) }
+    func outlineViewItemWillCollapse(_ notification: Notification) { rememberDisclosure(notification, expanded: false) }
+    func outlineViewItemWillExpand(_ notification: Notification) { rememberDisclosure(notification, expanded: true) }
+
+    private func rememberDisclosure(_ notification: Notification, expanded: Bool) {
+        guard !restoringExpansion, content.model.draggedTaskID == nil,
+              let node = notification.userInfo?["NSObject"] as? TaskOutlineNode else { return }
+        // Collapsing a branch can also notify for its hidden descendants. Those
+        // notifications are not separate user choices to close each child branch.
+        var ancestor = outline?.parent(forItem: node) as? TaskOutlineNode
+        while let parent = ancestor {
+            if collapsed.contains(parent.key) { return }
+            ancestor = outline?.parent(forItem: parent) as? TaskOutlineNode
+        }
+        if expanded { collapsed.remove(node.key) } else { collapsed.insert(node.key) }
+    }
+
     private func expansionChanged(_ notification: Notification, expanded: Bool) {
         guard !restoringExpansion, let node = notification.userInfo?["NSObject"] as? TaskOutlineNode else { return }
-        if content.model.draggedTaskID == nil {
-            if expanded { collapsed.remove(node.key) } else { collapsed.insert(node.key) }
-        }
+        rememberDisclosure(notification, expanded: expanded)
         // AppKit can discard hidden descendants' expansion bits on reload. Reapply
         // our disclosure state when revealing a branch, outside its delegate stack.
         DispatchQueue.main.async { [weak self, weak node] in

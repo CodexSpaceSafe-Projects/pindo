@@ -43,7 +43,8 @@ final class TaskOutlineTests: XCTestCase {
 
     @MainActor func testNativeTitleOwnsMouseTrackingAndPasteboardWriterExportsTaskID() async throws {
         let model = try model(), day = DayKey()
-        XCTAssertTrue(model.addTask(title: "可以拖动的标题", note: "说明", day: day, groupID: nil))
+        let group = model.document.groups[0]
+        XCTAssertTrue(model.addTask(title: "可以拖动的标题", note: "说明", day: day, groupID: group.id))
         let task = model.document.tasks[0]
         let (window, outline, coordinator) = try await host(model)
         defer { window.orderOut(nil); window.contentView = nil }
@@ -65,6 +66,11 @@ final class TaskOutlineTests: XCTestCase {
         XCTAssertFalse(cell.note.isHidden)
         XCTAssertEqual(cell.note.frame.maxX, cell.bounds.maxX - 7, accuracy: 0.5)
         XCTAssertNil(model.noteID)
+        model.saveGroup(id: group.id, name: "改名后的分组", color: "#33AA66")
+        try await settle()
+        let refreshed = try XCTUnwrap(outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? TaskOutlineCell)
+        XCTAssertTrue(refreshed.metadata.stringValue.contains("改名后的分组"))
+        XCTAssertEqual(model.document.tasks[0], task)
     }
 
     @MainActor func testNativeDisclosureHidesWholeBranchAndSurvivesRefresh() async throws {
