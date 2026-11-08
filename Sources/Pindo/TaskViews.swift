@@ -207,9 +207,10 @@ struct TaskRow: View {
                     .frame(width: 25, height: 28)
             }.buttonStyle(.plain).accessibilityLabel(task.phase == .completed ? l10n("恢复未完成：%@", task.title) : l10n("完成：%@", task.title))
             Button { model.noteID = task.id } label: {
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                HStack(alignment: .center, spacing: 6) {
+                    Image(systemName: "note.text").font(.system(size: 11)).foregroundStyle(.secondary)
+                        .frame(width: 14).opacity(task.note.isEmpty ? 0 : 1).accessibilityHidden(true)
                     Text(task.title).font(.system(size: 15)).strikethrough(task.phase == .completed).fixedSize(horizontal: false, vertical: true)
-                    if !task.note.isEmpty { Image(systemName: "note.text").font(.system(size: 9)).foregroundStyle(.secondary) }
                 }.foregroundStyle(task.phase == .completed ? Color.secondary : Color.primary)
                     .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel(l10n("打开备注：%@", task.title)).accessibilityValue(model.group(task.groupID)?.name ?? l10n("未分组"))

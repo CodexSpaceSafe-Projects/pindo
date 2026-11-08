@@ -449,13 +449,41 @@ final class AppModelTests: XCTestCase {
         delegate.handleStatusClick(button, event: try click(.leftMouseDown, modifiers: .control))
         XCTAssertEqual(menus.count, 2)
         for menu in menus {
-            XCTAssertEqual(menu.items.map(\.title), ["添加事项", "设置", "退出"].map { model.localization($0) })
-            XCTAssertTrue(menu.items.allSatisfy { $0.submenu == nil && $0.action != nil })
+            let actions = menu.items.filter { !$0.isSeparatorItem }
+            XCTAssertEqual(actions.map(\.title), ["添加事项", "设置", "退出"].map { model.localization($0) })
+            XCTAssertTrue(actions.allSatisfy { $0.submenu == nil && $0.action != nil })
+            XCTAssertEqual(actions.map(\.keyEquivalent), ["", ",", "q"])
         }
         XCTAssertNil(delegate.listPanel)
         delegate.handleStatusClick(button, event: try click(.leftMouseDown))
         XCTAssertEqual(menus.count, 2)
         XCTAssertEqual(delegate.listPanel?.isVisible, true)
+    }
+
+    @MainActor func testNativeStatusMenuRestoresButtonRoutingAfterSystemTracking() async throws {
+        _ = NSApplication.shared
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        defer { NSStatusBar.system.removeStatusItem(item) }
+        let button = try XCTUnwrap(item.button)
+        let target = NSObject()
+        let action = NSSelectorFromString("statusClicked:")
+        let clicks: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseUp]
+        button.target = target; button.action = action; button.sendAction(on: clicks)
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Settings", action: nil, keyEquivalent: "")
+        var tracked = false
+
+        NativeStatusMenu.show(menu, on: item) { source in
+            tracked = true
+            XCTAssertTrue(source === button)
+            XCTAssertTrue(item.menu === menu)
+        }
+
+        XCTAssertTrue(tracked)
+        XCTAssertNil(item.menu)
+        XCTAssertTrue(button.target === target)
+        XCTAssertEqual(button.action, action)
+        XCTAssertEqual(button.sendAction(on: clicks), clicks)
     }
 
     @MainActor func testComposerTopAndBottomPaddingClicksAcceptTyping() async throws {

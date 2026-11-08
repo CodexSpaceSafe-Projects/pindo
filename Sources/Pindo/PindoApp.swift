@@ -58,6 +58,23 @@ import PindoCore
     }
 }
 
+@MainActor enum NativeStatusMenu {
+    static func show(_ menu: NSMenu, on item: NSStatusItem,
+                     track: (NSStatusBarButton) -> Void = { $0.performClick(nil) }) {
+        guard let button = item.button else { return }
+        let previousMenu = item.menu
+        let previousTarget = button.target
+        let previousAction = button.action
+        item.menu = menu
+        defer {
+            item.menu = previousMenu
+            button.target = previousTarget; button.action = previousAction
+        }
+        // Let the status item use the system menu-bar presentation and tracking behavior.
+        track(button)
+    }
+}
+
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var model: AppModel?
     private var statusItem: NSStatusItem?
@@ -73,10 +90,7 @@ import PindoCore
     private let hotkeys = GlobalHotkeys()
     private var lastPreferences: Preferences?
     private let quickPosition: QuickPanelPosition
-    var presentStatusMenu: (NSMenu, NSStatusBarButton) -> Void = { menu, button in
-        let bottom = button.isFlipped ? button.bounds.maxY : button.bounds.minY
-        menu.popUp(positioning: nil, at: NSPoint(x: button.bounds.minX, y: bottom), in: button)
-    }
+    var presentStatusMenu: ((NSMenu, NSStatusBarButton) -> Void)?
 
     init(model: AppModel? = nil, quickPosition: QuickPanelPosition = QuickPanelPosition()) {
         self.model = model; self.quickPosition = quickPosition
@@ -164,11 +178,13 @@ import PindoCore
         let add = NSMenuItem(title: l10n("添加事项"), action: #selector(showQuickFromMenu), keyEquivalent: "")
         add.target = self
         menu.addItem(add)
-        let settings = settingsMenuItem(l10n, key: "")
+        let settings = settingsMenuItem(l10n, key: ",")
         settings.title = l10n("设置"); menu.addItem(settings)
-        let quit = quitMenuItem(l10n, key: "")
+        menu.addItem(.separator())
+        let quit = quitMenuItem(l10n, key: "q")
         quit.title = l10n("退出"); menu.addItem(quit)
-        presentStatusMenu(menu, button)
+        if let presentStatusMenu { presentStatusMenu(menu, button) }
+        else if let statusItem { NativeStatusMenu.show(menu, on: statusItem) }
     }
 
     @objc private func showQuickFromMenu() {
