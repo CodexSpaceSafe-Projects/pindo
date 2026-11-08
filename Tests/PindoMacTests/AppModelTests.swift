@@ -148,6 +148,79 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.task(hidden.id), hidden)
     }
 
+    @MainActor func testBatchActionsUseFilteredIDsPersistOnceAndOnlyPlayOneCompletionSound() async throws {
+        let model = try makeModel(), today = DayKey()
+        let group = model.document.groups[0].id, otherGroup = model.document.groups[1].id
+        for index in 0..<3 {
+            XCTAssertTrue(model.addTask(title: "选择 \(index)", note: "备注 \(index)", day: today.adding(days: index), groupID: group))
+        }
+        XCTAssertTrue(model.addTask(title: "选择 其他分组", day: today, groupID: otherGroup))
+        XCTAssertTrue(model.addTask(title: "未选事项", day: today, groupID: group))
+        model.setPhase(model.document.tasks[1], .inProgress)
+        model.setPhase(model.document.tasks[2], .completed)
+        let untouched = Array(model.document.tasks.suffix(2))
+        let selected = Set(model.managedTasks(query: "选择", status: .all, group: .group(group)).map(\.id))
+        XCTAssertEqual(selected.count, 3)
+        model.updateNote(model.document.tasks[0].id, text: "最新草稿")
+        var saves = 0, feedback: [TaskFeedback] = []
+        model.preferencesChanged = { _ in saves += 1 }
+        model.playFeedback = { feedback.append($0) }
+        let snapshots = model.repository.archive.count
+
+        XCTAssertTrue(model.applyBatch(.setPhase(.completed), to: selected))
+        XCTAssertEqual(saves, 1)
+        XCTAssertEqual(feedback, [.completed])
+        XCTAssertTrue(model.document.tasks.filter { selected.contains($0.id) }.allSatisfy { $0.phase == .completed })
+        XCTAssertEqual(model.document.tasks[0].note, "最新草稿")
+        XCTAssertEqual(Array(model.document.tasks.suffix(2)), untouched)
+        XCTAssertEqual(model.repository.archive.count, snapshots)
+        XCTAssertTrue(model.applyBatch(.setPhase(.completed), to: selected))
+        XCTAssertEqual(saves, 1)
+        XCTAssertEqual(feedback, [.completed])
+
+        XCTAssertTrue(model.applyBatch(.setGroup(otherGroup), to: selected))
+        XCTAssertTrue(model.document.tasks.filter { selected.contains($0.id) }.allSatisfy { $0.groupID == otherGroup })
+        XCTAssertTrue(model.applyBatch(.setGroup(nil), to: selected))
+        XCTAssertTrue(model.document.tasks.filter { selected.contains($0.id) }.allSatisfy { $0.groupID == nil })
+        XCTAssertTrue(model.applyBatch(.setPhase(.pending), to: selected))
+        XCTAssertTrue(model.document.tasks.filter { selected.contains($0.id) }.allSatisfy { $0.phase == .pending && $0.completedAt == nil })
+        model.noteID = model.document.tasks[0].id; model.editingID = model.document.tasks[1].id
+        XCTAssertTrue(model.applyBatch(.delete, to: selected))
+        XCTAssertEqual(saves, 5)
+        XCTAssertEqual(feedback, [.completed])
+        XCTAssertNil(model.noteID); XCTAssertNil(model.editingID)
+        XCTAssertEqual(model.document.tasks, untouched)
+        XCTAssertEqual(try PindoRepository(directory: model.repository.directory).document, model.document)
+    }
+
+    @MainActor func testBatchWriteFailureKeepsAllTasksAndCanBeRetried() async throws {
+        let model = try makeModel()
+        for title in ["事项 A", "事项 B"] { XCTAssertTrue(model.addTask(title: title, note: "保留备注", day: DayKey(), groupID: nil)) }
+        let ids = Set(model.document.tasks.map(\.id))
+        model.noteID = model.document.tasks[0].id; model.editingID = model.document.tasks[1].id
+        let before = model.document
+        let originalBytes = try Data(contentsOf: model.repository.dataURL)
+        var feedback: [TaskFeedback] = []
+        model.playFeedback = { feedback.append($0) }
+        try FileManager.default.removeItem(at: model.repository.dataURL)
+        try FileManager.default.createDirectory(at: model.repository.dataURL, withIntermediateDirectories: false)
+
+        XCTAssertFalse(model.applyBatch(.setPhase(.completed), to: ids))
+        XCTAssertFalse(model.applyBatch(.delete, to: ids))
+        XCTAssertEqual(model.document, before)
+        XCTAssertEqual(model.noteID, before.tasks[0].id)
+        XCTAssertEqual(model.editingID, before.tasks[1].id)
+        XCTAssertTrue(feedback.isEmpty)
+        XCTAssertEqual(model.saveState, .failed)
+
+        try FileManager.default.removeItem(at: model.repository.dataURL)
+        try originalBytes.write(to: model.repository.dataURL, options: .atomic)
+        XCTAssertTrue(model.applyBatch(.setPhase(.completed), to: ids))
+        XCTAssertTrue(model.document.tasks.allSatisfy { $0.phase == .completed })
+        XCTAssertEqual(feedback, [.completed])
+        XCTAssertEqual(try PindoRepository(directory: model.repository.directory).document, model.document)
+    }
+
     @MainActor func testSettingsAndTaskViewsConstructAtDocumentedSizes() async throws {
         _ = NSApplication.shared
         let model = try makeModel()

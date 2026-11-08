@@ -159,6 +159,19 @@ enum SaveState { case saved, saving, failed }
         setPhase(current, current.phase.next)
     }
     func delete(_ task: TodoItem) { _ = commit { $0.tasks.removeAll { $0.id == task.id } } }
+    @discardableResult func applyBatch(_ action: TaskBatchAction, to ids: Set<UUID>) -> Bool {
+        var next = document
+        do {
+            guard try next.applyBatch(action, to: ids) > 0 else { return true }
+        } catch { notice = .failure(error); return false }
+        guard commit({ $0 = next }) else { return false }
+        if case .setPhase(.completed) = action { playFeedback(.completed) }
+        if case .delete = action {
+            if let noteID, ids.contains(noteID) { self.noteID = nil }
+            if let editingID, ids.contains(editingID) { self.editingID = nil }
+        }
+        return true
+    }
     func edit(_ id: UUID, title: String, day: DayKey, groupID: UUID?) -> Bool {
         commit { doc in
             guard let i = doc.tasks.firstIndex(where: { $0.id == id }) else { throw PindoError.missingTask }

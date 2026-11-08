@@ -195,3 +195,12 @@
 "开始：%@" = "Start: %@";
 "待办" = "To Do";
 "进行中" = "In Progress";
+"批量操作" = "Batch Actions";
+"结束批量操作" = "Done";
+"全选当前结果" = "Select All Results";
+"已选择 %ld 条" = "Selected: %ld";
+"取消选择" = "Clear Selection";
+"选择待办：%@" = "Select task: %@";
+"标记未完成" = "Mark Unfinished";
+"删除选中的 %ld 条待办？" = "Delete %ld selected tasks?";
+"所选待办及其备注将被删除。" = "The selected tasks and their notes will be deleted.";

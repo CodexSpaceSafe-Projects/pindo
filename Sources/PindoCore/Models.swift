@@ -50,6 +50,12 @@ public enum TaskPhase: String, Codable, CaseIterable, Sendable {
     }
 }
 
+public enum TaskBatchAction: Sendable {
+    case delete
+    case setPhase(TaskPhase)
+    case setGroup(UUID?)
+}
+
 public struct TodoItem: Codable, Identifiable, Equatable, Sendable {
     public var id: UUID
     public var title: String
@@ -154,9 +160,39 @@ public struct PindoDocument: Codable, Equatable, Sendable {
 
     public mutating func setPhase(_ phase: TaskPhase, for id: UUID, now: Date = Date()) throws {
         guard let index = tasks.firstIndex(where: { $0.id == id }) else { throw PindoError.missingTask }
+        setPhase(phase, at: index, now: now)
+    }
+
+    private mutating func setPhase(_ phase: TaskPhase, at index: Int, now: Date) {
         tasks[index].phase = phase; tasks[index].updatedAt = now
         tasks[index].completedAt = phase == .completed ? now : nil
         if phase == .inProgress && tasks[index].startedAt == nil { tasks[index].startedAt = now }
+    }
+
+    /// Applies a batch to explicit IDs. Unknown IDs are ignored; unchanged tasks keep their timestamps.
+    @discardableResult public mutating func applyBatch(_ action: TaskBatchAction, to ids: Set<UUID>, now: Date = Date()) throws -> Int {
+        guard !ids.isEmpty else { return 0 }
+        if case .setGroup(let id) = action, let id, !groups.contains(where: { $0.id == id }) {
+            throw PindoError.invalidData("事项引用了不存在的分组")
+        }
+        var changed = 0
+        switch action {
+        case .delete:
+            let before = tasks.count
+            tasks.removeAll { ids.contains($0.id) }
+            changed = before - tasks.count
+        case .setPhase(let phase):
+            for index in tasks.indices where ids.contains(tasks[index].id) && tasks[index].phase != phase {
+                setPhase(phase, at: index, now: now)
+                changed += 1
+            }
+        case .setGroup(let id):
+            for index in tasks.indices where ids.contains(tasks[index].id) && tasks[index].groupID != id {
+                tasks[index].groupID = id; tasks[index].updatedAt = now
+                changed += 1
+            }
+        }
+        return changed
     }
 
     public mutating func removeGroup(_ id: UUID) {
