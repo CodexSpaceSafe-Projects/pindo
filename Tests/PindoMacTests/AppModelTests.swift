@@ -483,7 +483,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertNil(item.menu)
         XCTAssertTrue(button.target === target)
         XCTAssertEqual(button.action, action)
-        XCTAssertEqual(button.sendAction(on: clicks), clicks)
+        XCTAssertEqual(button.sendAction(on: clicks), Int(clicks.rawValue))
     }
 
     @MainActor func testComposerTopAndBottomPaddingClicksAcceptTyping() async throws {
