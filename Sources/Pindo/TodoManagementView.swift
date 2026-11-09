@@ -105,6 +105,7 @@ struct TodoManagementView: View {
                         onDelete: { pendingDeletion = [$0.id]; confirmDeletion = true },
                         onMove: { task, offset in model.move(task, offset: offset, within: tasks.filter { $0.plannedDay == task.plannedDay }) })
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .textBackgroundColor).opacity(0.45))
             .onDisappear { model.endTaskDrag() }
     }
 

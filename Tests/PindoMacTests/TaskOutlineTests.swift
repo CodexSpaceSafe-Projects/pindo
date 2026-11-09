@@ -47,6 +47,70 @@ final class TaskOutlineTests: XCTestCase {
 
     @MainActor private func settle() async throws { try await Task.sleep(nanoseconds: 320_000_000) }
 
+    @MainActor func testTaskPanelBackgroundFollowsAppearanceAcrossWakeAndDayChange() async throws {
+        let app = NSApplication.shared
+        let previousAppearance = app.appearance
+        let light = try XCTUnwrap(NSAppearance(named: .aqua))
+        let dark = try XCTUnwrap(NSAppearance(named: .darkAqua))
+        let model = try model()
+        let today = model.today
+        let yesterday = today.adding(days: -1)
+        model.today = yesterday
+        model.selectedDay = yesterday
+        XCTAssertTrue(model.addTask(title: "跨天继续进行", day: yesterday, groupID: nil))
+        let active = try XCTUnwrap(model.document.tasks.first)
+        model.setPhase(active, .inProgress)
+        XCTAssertTrue(model.addTask(title: "昨天未完成", day: yesterday, groupID: nil))
+
+        let delegate = AppDelegate(model: model)
+        defer {
+            delegate.listPanel?.orderOut(nil)
+            delegate.listPanel?.contentView = nil
+            app.appearance = previousAppearance
+        }
+        func findOutline(_ view: NSView) -> TaskNativeOutlineView? {
+            if let outline = view as? TaskNativeOutlineView { return outline }
+            return view.subviews.lazy.compactMap { findOutline($0) }.first
+        }
+        func checkBackground(of panel: QuickPanel, appearance: NSAppearance.Name) throws -> TaskNativeOutlineView {
+            let outline = try XCTUnwrap(panel.contentView.flatMap(findOutline))
+            XCTAssertEqual(outline.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), appearance)
+            XCTAssertEqual(outline.backgroundColor.alphaComponent, 0, "空白区应透出清单容器的背景")
+            let row = try XCTUnwrap(outline.rowView(atRow: 0, makeIfNecessary: true))
+            XCTAssertEqual(row.backgroundColor.alphaComponent, 0, "有任务的区域应透出同一层背景")
+            return outline
+        }
+
+        app.appearance = dark
+        delegate.toggleList()
+        let panel = try XCTUnwrap(delegate.listPanel)
+        try await settle()
+        let outline = try checkBackground(of: panel, appearance: .darkAqua)
+
+        app.appearance = light
+        try await settle()
+        XCTAssertTrue(try checkBackground(of: panel, appearance: .aqua) === outline)
+
+        delegate.toggleList()
+        XCTAssertFalse(panel.isVisible)
+        app.appearance = dark
+        delegate.didWake()
+        XCTAssertEqual(model.today, today)
+        XCTAssertEqual(model.selectedDay, today)
+        XCTAssertEqual(model.unfinished.map(\.id), [active.id])
+        XCTAssertEqual(model.previous.count, 1)
+
+        delegate.toggleList()
+        try await settle()
+        XCTAssertTrue(panel.isVisible)
+        XCTAssertTrue(delegate.listPanel === panel)
+        _ = try checkBackground(of: panel, appearance: .darkAqua)
+
+        app.appearance = light
+        try await settle()
+        _ = try checkBackground(of: panel, appearance: .aqua)
+    }
+
     @MainActor func testNativeTitleOwnsMouseTrackingAndPasteboardWriterExportsTaskID() async throws {
         let model = try model(), day = DayKey()
         let group = model.document.groups[0]

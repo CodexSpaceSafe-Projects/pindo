@@ -191,7 +191,7 @@ import PindoCore
         if let panel = quickPanel, panel.isVisible { panel.showInFront() }
         else { toggleQuick() }
     }
-    @objc private func didWake() { model?.captureSnapshot() }
+    @objc func didWake() { model?.captureSnapshot() }
     func toggleList(fromStatus: Bool = false) {
         if listPanel?.isVisible == true {
             closeList(restoreFocus: true); return

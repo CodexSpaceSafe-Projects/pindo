@@ -45,7 +45,8 @@ struct TaskOutlineList: NSViewRepresentable {
         outline.selectionHighlightStyle = .none
         outline.allowsMultipleSelection = false; outline.allowsEmptySelection = true
         outline.focusRingType = .none
-        outline.backgroundColor = .textBackgroundColor.withAlphaComponent(0.45)
+        // 行会继承表格底色，由 SwiftUI 容器统一绘制背景，避免重复叠加和缓存旧外观的颜色。
+        outline.backgroundColor = .clear
         outline.registerForDraggedTypes([TaskOutlineCoordinator.pasteboardType])
         outline.setDraggingSourceOperationMask(.move, forLocal: true)
         outline.setDraggingSourceOperationMask([], forLocal: false)
