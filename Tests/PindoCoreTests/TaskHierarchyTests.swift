@@ -55,31 +55,133 @@ final class TaskHierarchyTests: XCTestCase {
 
     func testLastChildCompletesAncestorsAndReopeningAChildReopensItsAncestors() throws {
         var document = try tree()
-        let root = document.tasks[0].id, grandchild = document.tasks[2].id, sibling = document.tasks[3].id
+        let grandchild = document.tasks[2].id, sibling = document.tasks[3].id
         try document.setPhase(.completed, for: grandchild, now: now.addingTimeInterval(60))
         XCTAssertEqual(document.tasks[1].phase, .completed)
-        XCTAssertEqual(document.tasks[0].phase, .inProgress)
+        XCTAssertEqual(document.tasks[0].phase, .pending)
+        XCTAssertNil(document.tasks[0].startedAt)
         XCTAssertEqual(document.tasks[4].phase, .pending)
-        let partial = document
-        XCTAssertThrowsError(try document.setPhase(.completed, for: root))
-        XCTAssertEqual(document, partial)
         try document.setPhase(.completed, for: sibling, now: now.addingTimeInterval(120))
         XCTAssertEqual(document.tasks[0].phase, .completed)
         XCTAssertEqual(document.tasks[0].completedAt, now.addingTimeInterval(120))
         try document.setPhase(.pending, for: grandchild, now: now.addingTimeInterval(180))
         XCTAssertEqual(document.tasks[1].phase, .pending)
-        XCTAssertEqual(document.tasks[0].phase, .inProgress)
+        XCTAssertEqual(document.tasks[0].phase, .pending)
         XCTAssertNil(document.tasks[0].completedAt)
         XCTAssertEqual(try document.validated(), document)
+    }
+
+    func testCompletingAndReopeningParentAppliesToTheWholeBranch() throws {
+        var document = try tree()
+        let original = document
+        let root = document.tasks[0].id, grandchild = document.tasks[2].id
+        let firstCompletion = now.addingTimeInterval(30), completion = now.addingTimeInterval(60)
+        try document.setPhase(.completed, for: grandchild, now: firstCompletion)
+        try document.setPhase(.completed, for: root, now: completion)
+        XCTAssertEqual(document.tasks.prefix(4).map(\.phase), [.completed, .completed, .completed, .completed])
+        XCTAssertEqual(document.tasks.prefix(4).map(\.completedAt), [completion, firstCompletion, firstCompletion, completion])
+
+        let reopenedAt = now.addingTimeInterval(90)
+        try document.setPhase(.pending, for: root, now: reopenedAt)
+        for (task, before) in zip(document.tasks.prefix(4), original.tasks) {
+            XCTAssertEqual(task.phase, .pending)
+            XCTAssertNil(task.completedAt)
+            XCTAssertNil(task.startedAt)
+            XCTAssertEqual(task.createdAt, before.createdAt)
+            XCTAssertEqual(task.updatedAt, reopenedAt)
+            XCTAssertEqual(task.id, before.id)
+            XCTAssertEqual(task.title, before.title)
+            XCTAssertEqual(task.note, before.note)
+            XCTAssertEqual(task.plannedDay, before.plannedDay)
+            XCTAssertEqual(task.groupID, before.groupID)
+            XCTAssertEqual(task.parentID, before.parentID)
+            XCTAssertEqual(task.order, before.order)
+        }
+        XCTAssertEqual(document.tasks[4], original.tasks[4])
+        XCTAssertEqual(try document.validated(), document)
+    }
+
+    func testResettingTheOnlyActiveGrandchildReturnsBothAncestorsToPending() throws {
+        var document = try tree()
+        let grandchild = document.tasks[2].id
+        let unaffectedTasks = Array(document.tasks.suffix(2))
+
+        try document.setPhase(.inProgress, for: grandchild, now: now.addingTimeInterval(60))
+        XCTAssertEqual(document.tasks.prefix(3).map(\.phase), [.inProgress, .inProgress, .inProgress])
+
+        XCTAssertEqual(try document.applyBatch(.setPhase(.pending), to: [grandchild], now: now.addingTimeInterval(120)), 3)
+        XCTAssertEqual(document.tasks.prefix(3).map(\.phase), [.pending, .pending, .pending])
+        XCTAssertEqual(Array(document.tasks.suffix(2)), unaffectedTasks)
+    }
+
+    func testManualProgressSurvivesReloadAndResettingTheOnlyActiveGrandchild() throws {
+        var document = try tree()
+        let root = document.tasks[0].id, grandchild = document.tasks[2].id
+        try document.setPhase(.inProgress, for: root, now: now.addingTimeInterval(30))
+        let manuallyStarted = document.tasks[0]
+        XCTAssertTrue(document.tasks.dropFirst().allSatisfy { $0.phase == .pending })
+        try document.setPhase(.inProgress, for: grandchild, now: now.addingTimeInterval(60))
+        document = try DocumentCodec.decode(PindoDocument.self, from: DocumentCodec.encode(document))
+
+        try document.setPhase(.pending, for: grandchild, now: now.addingTimeInterval(120))
+        XCTAssertEqual(document.tasks[0], manuallyStarted)
+        XCTAssertEqual(document.tasks.dropFirst().prefix(2).map(\.phase), [.pending, .pending])
+    }
+
+    func testAddingFirstPendingChildKeepsLegacyStartedTaskInProgress() throws {
+        var document = try tree()
+        let index = 4, parent = document.tasks[index].id
+        document.tasks[index].phase = .inProgress
+        document.tasks[index].startedAt = now
+
+        let child = TodoItem(title: "首个子项", parentID: parent, now: now)
+        try document.insertTask(child, now: now.addingTimeInterval(30))
+        try document.setPhase(.inProgress, for: child.id, now: now.addingTimeInterval(60))
+        try document.setPhase(.pending, for: child.id, now: now.addingTimeInterval(90))
+        XCTAssertEqual(document.tasks[index].phase, .inProgress)
+        XCTAssertEqual(document.tasks[index].startedAt, now)
+        XCTAssertEqual(document.tasks[index].updatedAt, now)
+    }
+
+    func testReopeningChildBranchInBatchKeepsCompletedSiblingAndReopensAncestor() throws {
+        var document = try tree()
+        let root = document.tasks[0].id, child = document.tasks[1].id
+        let grandchild = document.tasks[2].id
+        try document.setPhase(.completed, for: root, now: now.addingTimeInterval(60))
+        let unaffectedTasks = Array(document.tasks.suffix(2))
+
+        let reopenedAt = now.addingTimeInterval(120)
+        XCTAssertEqual(try document.applyBatch(.setPhase(.pending), to: [child, grandchild], now: reopenedAt), 3)
+        XCTAssertEqual(document.tasks.prefix(3).map(\.phase), [.pending, .pending, .pending])
+        XCTAssertTrue(document.tasks.prefix(3).allSatisfy { $0.completedAt == nil && $0.updatedAt == reopenedAt })
+        XCTAssertEqual(Array(document.tasks.suffix(2)), unaffectedTasks)
+    }
+
+    func testMovingAndDeletingTheOnlyActiveChildResetsItsFormerParent() throws {
+        var document = try tree()
+        let child = document.tasks[1].id, grandchild = document.tasks[2].id
+        let sibling = document.tasks[3].id, other = document.tasks[4].id
+        try document.setPhase(.completed, for: sibling, now: now.addingTimeInterval(60))
+        let completedSibling = document.tasks[3]
+        try document.setPhase(.inProgress, for: grandchild, now: now.addingTimeInterval(120))
+
+        try document.moveTask(grandchild, toParent: other, now: now.addingTimeInterval(180))
+        XCTAssertEqual(document.tasks.first { $0.id == child }?.phase, .pending)
+        XCTAssertEqual(document.tasks.first { $0.id == other }?.phase, .inProgress)
+
+        XCTAssertEqual(try document.applyBatch(.delete, to: [grandchild], now: now.addingTimeInterval(240)), 2)
+        XCTAssertEqual(document.tasks.first { $0.id == other }?.phase, .pending)
+        XCTAssertEqual(document.tasks[0].phase, .pending)
+        XCTAssertEqual(document.tasks.first { $0.id == sibling }, completedSibling)
     }
 
     func testAddingAndMovingUnfinishedChildrenUpdatesCompletedParents() throws {
         var document = try tree()
         let root = document.tasks[0].id, other = document.tasks[4].id
-        _ = try document.applyBatch(.setPhase(.completed), to: document.descendantIDs(including: [root]), now: now)
+        try document.setPhase(.completed, for: root, now: now)
         let newChild = TodoItem(title: "新子项", parentID: root, order: 10, now: now)
         try document.insertTask(newChild, now: now.addingTimeInterval(60))
-        XCTAssertEqual(document.tasks[0].phase, .inProgress)
+        XCTAssertEqual(document.tasks[0].phase, .pending)
         XCTAssertNil(document.tasks[0].completedAt)
         try document.moveTask(newChild.id, toParent: other, now: now.addingTimeInterval(120))
         XCTAssertEqual(document.tasks[0].phase, .completed)
@@ -87,13 +189,26 @@ final class TaskHierarchyTests: XCTestCase {
         XCTAssertEqual(document.tasks.last?.parentID, other)
     }
 
-    func testBatchCannotCompleteAParentWithoutItsChildrenAndNeverPartiallyApplies() throws {
+    func testBatchUpdatesOverlappingBranchesOnceAndKeepsUnchangedTimestamps() throws {
         var document = try tree()
         let original = document, root = document.tasks[0].id, grandchild = document.tasks[2].id
-        XCTAssertThrowsError(try document.applyBatch(.setPhase(.completed), to: [root, grandchild], now: now))
-        XCTAssertEqual(document, original)
-        XCTAssertEqual(try document.applyBatch(.setPhase(.completed), to: document.descendantIDs(including: [root]), now: now), 4)
-        XCTAssertTrue(document.tasks.prefix(4).allSatisfy { $0.phase == .completed })
+        let completion = now.addingTimeInterval(60)
+        let selected: Set<UUID> = [root, grandchild]
+        XCTAssertEqual(try document.applyBatch(.setPhase(.completed), to: selected, now: completion), 4)
+        XCTAssertTrue(document.tasks.prefix(4).allSatisfy { $0.phase == .completed && $0.completedAt == completion })
+        XCTAssertEqual(document.tasks[4], original.tasks[4])
+
+        let completed = document
+        XCTAssertEqual(try document.applyBatch(.setPhase(.completed), to: selected, now: now.addingTimeInterval(120)), 0)
+        XCTAssertEqual(document, completed)
+
+        // 旧版本可单独重开父项，保留已完成的后代。
+        document.tasks[0].phase = .pending
+        document.tasks[0].completedAt = nil
+        let reopenedRoot = document.tasks[0]
+        XCTAssertEqual(try document.applyBatch(.setPhase(.pending), to: selected, now: now.addingTimeInterval(180)), 3)
+        XCTAssertEqual(document.tasks[0], reopenedRoot)
+        XCTAssertTrue(document.tasks.dropFirst().prefix(3).allSatisfy { $0.phase == .pending && $0.completedAt == nil })
         XCTAssertEqual(document.tasks[4], original.tasks[4])
     }
 

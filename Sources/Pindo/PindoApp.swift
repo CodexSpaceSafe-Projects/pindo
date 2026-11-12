@@ -27,7 +27,7 @@ import PindoCore
     }
 
     static func quickAddPanel() -> QuickPanel {
-        nativePanel(size: NSSize(width: 470, height: 260), resizable: false)
+        nativePanel(size: NSSize(width: QuickAddView.panelWidth, height: 194), resizable: false)
     }
 
     private static func nativePanel(size: NSSize, resizable: Bool) -> QuickPanel {
@@ -150,8 +150,18 @@ import PindoCore
     }
 
     private func apply(_ preferences: Preferences) {
-        switch preferences.appearance { case .system: NSApp.appearance = nil; case .light: NSApp.appearance = NSAppearance(named: .aqua); case .dark: NSApp.appearance = NSAppearance(named: .darkAqua) }
-        statusItem?.button?.title = preferences.showTodayCount && (model?.todayCount ?? 0) > 0 ? " \(model!.todayCount)" : ""
+        if lastPreferences?.appearance != preferences.appearance {
+            switch preferences.appearance {
+            case .system: NSApp.appearance = nil
+            case .light: NSApp.appearance = NSAppearance(named: .aqua)
+            case .dark: NSApp.appearance = NSAppearance(named: .darkAqua)
+            }
+        }
+        if let button = statusItem?.button {
+            let count = preferences.showTodayCount ? model?.todayCount ?? 0 : 0
+            let title = count > 0 ? " \(count)" : ""
+            if button.title != title { button.title = title }
+        }
         if lastPreferences?.quickAddHotkey != preferences.quickAddHotkey || lastPreferences?.listHotkey != preferences.listHotkey {
             do { try hotkeys.configure(preferences) } catch { model?.notice = .failure(error) }
         }
@@ -248,13 +258,17 @@ import PindoCore
         model.quickInvocationID = UUID()
         if quickPanel == nil { quickPanel = QuickPanel.quickAddPanel(); quickPanel?.delegate = self }
         guard let panel = quickPanel else { return }
-        panel.contentView = glassHost(QuickAddView(model: model, sizeChanged: { [weak self, weak panel] height in
-            guard let panel, abs((panel.contentView?.frame.height ?? 0) - height) > 1 else { return }
-            let top = panel.frame.maxY
-            panel.setContentSize(NSSize(width: 470, height: min(max(height, 180), 520)))
-            panel.setFrameOrigin(NSPoint(x: panel.frame.minX, y: top - panel.frame.height))
+        panel.contentView = glassHost(QuickAddView(model: model, finishEditing: { [weak panel] in
+            panel?.makeFirstResponder(nil)
+        }, sizeChanged: { [weak self, weak panel] height in
+            let targetHeight = min(max(height, 180), 520)
+            guard let panel, abs(panel.frame.height - targetHeight) > 1 else { return }
+            let frame = panel.frame
+            // 全尺寸内容视图覆盖标题栏，窗口高度直接跟随内容并固定顶边。
+            panel.setFrame(NSRect(x: frame.minX, y: frame.maxY - targetHeight,
+                                  width: QuickAddView.panelWidth, height: targetHeight), display: panel.isVisible)
             self?.keepQuickOnScreen(panel)
-        }).id(model.quickInvocationID).ignoresSafeArea(), model: model)
+        }).id(model.quickInvocationID), model: model, ignoresWindowSafeArea: true)
         if let origin = quickPosition.restoredOrigin(size: panel.frame.size, visibleFrames: NSScreen.screens.map(\.visibleFrame)) {
             panel.setFrameOrigin(origin)
         } else { position(panel) }
@@ -360,10 +374,11 @@ import PindoCore
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
-    private func glassHost<V: View>(_ root: V, model: AppModel) -> NSView {
+    private func glassHost<V: View>(_ root: V, model: AppModel, ignoresWindowSafeArea: Bool = false) -> NSView {
         let effect = NSVisualEffectView()
         effect.material = .popover; effect.blendingMode = .behindWindow; effect.state = .active
         let host = TransparentHostingView(rootView: LocalizedAppContent(model: model, content: root))
+        if ignoresWindowSafeArea { host.safeAreaRegions = [] }
         host.translatesAutoresizingMaskIntoConstraints = false
         effect.addSubview(host)
         NSLayoutConstraint.activate([host.leadingAnchor.constraint(equalTo: effect.leadingAnchor), host.trailingAnchor.constraint(equalTo: effect.trailingAnchor), host.topAnchor.constraint(equalTo: effect.topAnchor), host.bottomAnchor.constraint(equalTo: effect.bottomAnchor)])

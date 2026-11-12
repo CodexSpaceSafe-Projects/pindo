@@ -33,7 +33,7 @@ final class LocalizationAndFeedbackTests: XCTestCase {
     }
 
     @MainActor func testConsecutiveFeedbackUsesIndependentSoundInstances() async throws {
-        for feedback in [TaskFeedback.added, .completed] {
+        for feedback in TaskFeedback.allCases {
             let first = try XCTUnwrap(feedback.makeSound())
             let next = try XCTUnwrap(feedback.makeSound())
             XCTAssertFalse(first === next)

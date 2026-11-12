@@ -35,31 +35,49 @@ struct TaskPanelView: View {
     @State private var deletingTask: TodoItem?
 
     var body: some View {
+        let noteTask = model.noteID.flatMap(model.task)
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 HStack(spacing: 9) {
-                    Image(systemName: "checklist").font(.system(size: 20, weight: .medium)).foregroundStyle(Color.accentColor)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color(nsColor: TaskBranchPalette.paper))
+                        .frame(width: 24, height: 24)
+                        .background(Color(nsColor: TaskBranchPalette.accent), in: RoundedRectangle(cornerRadius: 6))
+                        .accessibilityHidden(true)
                     Text("Pindo").font(.system(size: 17, weight: .semibold))
                 }
                 Spacer(minLength: 0)
                 Button { model.togglePin() } label: {
-                    Image(systemName: model.isPinned ? "pin.fill" : "pin").foregroundStyle(model.isPinned ? Color.accentColor : Color.secondary)
-                        .frame(width: 30, height: 30).background(model.isPinned ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 7)).contentShape(Rectangle())
+                    Image(systemName: model.isPinned ? "pin.fill" : "pin")
+                        .foregroundStyle(model.isPinned ? Color(nsColor: TaskBranchPalette.accent) : Color.secondary)
+                        .frame(width: 30, height: 30)
+                        .background(model.isPinned ? Color(nsColor: TaskBranchPalette.accentWash) : Color.clear, in: RoundedRectangle(cornerRadius: 7))
+                        .contentShape(Rectangle())
                 }.help(model.isPinned ? l10n("取消置顶，失焦后收起") : l10n("固定面板并保持在前台")).accessibilityLabel(model.isPinned ? l10n("取消置顶") : l10n("固定在前台"))
                 Button { model.openSettings() } label: { Image(systemName: "gearshape").foregroundStyle(.secondary).frame(width: 30, height: 30).contentShape(Rectangle()) }
                     .help(l10n("设置")).accessibilityLabel(l10n("打开设置"))
-            }.buttonStyle(.plain).padding(.horizontal, 18).frame(height: 54)
+            }.buttonStyle(.plain).padding(.horizontal, 18).frame(height: 48)
+                .background(Color(nsColor: TaskBranchPalette.toolbar))
             Divider()
             ErrorBanner(model: model)
-            if let id = model.noteID, let task = model.task(id) {
-                NoteView(model: model, task: task).id(id)
-            } else {
-                taskList
-                TaskComposer(model: model)
-                Divider()
-                dateBar
+            ZStack {
+                // 打开备注时保留原清单，返回时直接显示原来的滚动位置。
+                VStack(spacing: 0) {
+                    taskList
+                    TaskComposer(model: model)
+                    Divider()
+                    dateBar
+                }.opacity(noteTask == nil ? 1 : 0)
+                    .allowsHitTesting(noteTask == nil)
+                    .disabled(noteTask != nil)
+                    .accessibilityHidden(noteTask != nil)
+                if let noteTask {
+                    NoteView(model: model, task: noteTask).id(noteTask.id)
+                }
             }
         }.frame(minWidth: 360, maxWidth: .infinity, minHeight: 420, maxHeight: .infinity)
+            .background(Color(nsColor: TaskBranchPalette.paper))
             .sheet(isPresented: Binding(get: { model.editingID != nil }, set: { if !$0 { model.editingID = nil } })) {
                 if let id = model.editingID, let task = model.task(id) { EditTaskView(model: model, task: task) }
             }
@@ -80,7 +98,7 @@ struct TaskPanelView: View {
     }
 
     private var taskList: some View {
-        let sections = model.outlineSections(in: model.taskDragPreview ?? model.document)
+        let sections = model.outlineSections
         let overdueIDs = Set(sections.previous.map(\.id)).intersection(Set(model.previous.map(\.id)))
         var groups: [TaskOutlineSection] = []
         if model.selectedDay == model.today && !sections.previous.isEmpty {
@@ -94,6 +112,7 @@ struct TaskPanelView: View {
                                              initiallyExpanded: model.document.preferences.expandCompleted, rows: sections.completed, completed: true))
         }
         return VStack(spacing: 0) {
+            dayOverview
             TaskOutlineList(model: model, sections: groups,
                             onSelect: { model.noteID = $0.id }, onSelectNote: { model.noteID = $0.id }, onEdit: { model.editingID = $0.id },
                             onAddChild: { addingParentID = $0.id },
@@ -102,18 +121,42 @@ struct TaskPanelView: View {
                             }, onMove: { model.move($0, offset: $1) }, onFooter: { model.rollover(taskIDs: overdueIDs) })
         }.overlay(alignment: .bottom) {
             if model.draggedTaskID != nil {
-                Text(l10n("拖动排序，放到事项上可作为子项")).font(.system(size: 11)).foregroundStyle(.secondary).padding(6)
+                Text(l10n("上下拖动排序，左右拖动调整层级")).font(.system(size: 11)).foregroundStyle(.secondary).padding(6)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7)).padding(6).allowsHitTesting(false)
             }
-        }.padding(.horizontal, 12).padding(.vertical, 8).frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .textBackgroundColor).opacity(0.45))
+        }.padding(.horizontal, 12).padding(.bottom, 4).frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    private var dayOverview: some View {
+        let date = model.selectedDay.date()
+        let day = model.selectedDay
+        let tasks = model.document.tasks.filter { $0.plannedDay == day && model.matches($0) }
+        let counts = DayTaskCount.grouped(tasks)[day] ?? DayTaskCount()
+        let total = counts.unfinished + counts.completed
+        let accent = Color(nsColor: TaskBranchPalette.accent)
+        return HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(dayTitle).font(.system(size: 21, weight: .semibold)).accessibilityAddTraits(.isHeader)
+                Text(date.formatted(.dateTime.month().day().weekday(.abbreviated).locale(l10n.locale)))
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 4)
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(l10n("已完成 %ld / %ld", counts.completed, total))
+                    .font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color(nsColor: TaskBranchPalette.line))
+                    Capsule().fill(accent)
+                        .frame(width: total == 0 ? 0 : 76 * CGFloat(counts.completed) / CGFloat(total))
+                }.frame(width: 76, height: 3).accessibilityHidden(true)
+            }
+        }.padding(.horizontal, 5).padding(.top, 12).padding(.bottom, 5)
     }
     private var dateBar: some View {
         HStack(spacing: 3) {
             Button { model.selectedDay = model.selectedDay.adding(days: -1) } label: { Image(systemName: "chevron.left").frame(width: 22, height: 32) }.accessibilityLabel(l10n("前一天"))
             Button { datePickerOpen.toggle() } label: {
                 HStack(spacing: 5) {
-                    Image(systemName: "calendar").foregroundStyle(Color.accentColor)
+                    Image(systemName: "calendar").foregroundStyle(Color(nsColor: TaskBranchPalette.accent))
                     Text(model.selectedDay.date().formatted(.dateTime.month().day().locale(l10n.locale)))
                     Text(dayTitle).foregroundStyle(.secondary)
                 }.lineLimit(1).frame(height: 32).contentShape(Rectangle())
@@ -136,7 +179,8 @@ struct TaskPanelView: View {
                     .overlay(RoundedRectangle(cornerRadius: 7).stroke(.primary.opacity(0.12)))
             }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize(horizontal: false, vertical: true).frame(maxWidth: 155)
                 .help(l10n("筛选待办分组")).accessibilityLabel(l10n("筛选分组：%@", groupTitle))
-        }.font(.system(size: 11)).buttonStyle(.plain).padding(.horizontal, 12).frame(height: 50)
+        }.font(.system(size: 11)).buttonStyle(.plain).padding(.horizontal, 12).frame(height: 44)
+            .background(Color(nsColor: TaskBranchPalette.toolbar))
             .background(DayScrollMonitor { model.selectedDay = model.selectedDay.adding(days: $0) })
     }
     private var dayTitle: String {
@@ -165,10 +209,12 @@ struct TaskComposer: View {
                 .onChange(of: model.listEntry) { _, _ in model.scheduleDraftSave() }
                 .onSubmit { if model.submitListEntry() { entryFocused = true } }
             GroupSelectionMenu(groups: model.document.groups, selection: $model.listEntryGroupID)
-            Button { if model.submitListEntry() { entryFocused = true } } label: { Image(systemName: "return").frame(width: 24, height: 25).contentShape(Rectangle()) }
+            Button { if model.submitListEntry() { entryFocused = true } } label: {
+                Image(systemName: "return").font(.system(size: 13)).frame(width: 24, height: 25).contentShape(Rectangle())
+            }
                 .buttonStyle(.plain).help(l10n("添加待办")).accessibilityLabel(l10n("添加待办"))
                 .disabled(model.listEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        }.font(.system(size: 13)).padding(12)
+        }.font(model.fontPreferences.task.swiftUIFont(defaultSize: 13)).padding(12)
             .background {
                 RoundedRectangle(cornerRadius: 11).fill(Color(nsColor: .textBackgroundColor).opacity(0.75))
                     .contentShape(RoundedRectangle(cornerRadius: 11))
@@ -179,39 +225,28 @@ struct TaskComposer: View {
     }
 }
 
-/// Half of the status circle, divided by two opposing semicircles into a reversed S.
-struct InProgressHalf: Shape {
-    func path(in rect: CGRect) -> Path {
-        let radius = min(rect.width, rect.height) / 2
-        let center = CGPoint(x: rect.midX, y: rect.midY)
-        var path = Path()
-        path.move(to: CGPoint(x: center.x, y: center.y - radius))
-        path.addArc(center: CGPoint(x: center.x, y: center.y - radius / 2), radius: radius / 2,
-                    startAngle: .degrees(-90), endAngle: .degrees(90), clockwise: false)
-        path.addArc(center: CGPoint(x: center.x, y: center.y + radius / 2), radius: radius / 2,
-                    startAngle: .degrees(-90), endAngle: .degrees(90), clockwise: true)
-        path.addArc(center: center, radius: radius, startAngle: .degrees(90), endAngle: .degrees(270), clockwise: false)
-        path.closeSubpath()
-        return path
-    }
-}
-
 struct NoteView: View {
     @Environment(\.pindoLocalization) private var l10n
     @ObservedObject var model: AppModel
     let task: TodoItem
     var onBack: (() -> Void)? = nil
     private var note: Binding<String> { Binding(get: { model.task(task.id)?.note ?? "" }, set: { model.updateNote(task.id, text: $0) }) }
-    private func finishEditing() { model.flush() }
-    private func back() { finishEditing(); if let onBack { onBack() } else { model.leaveNote() } }
+    private func back() {
+        if let onBack {
+            model.flush()
+            onBack()
+        } else {
+            model.leaveNote()
+        }
+    }
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(task.title).font(.system(size: 20, weight: .semibold)).lineLimit(2)
+                Text(task.title).font(model.fontPreferences.task.swiftUIFont(defaultSize: 20, variant: .semibold)).lineLimit(2)
                 Text("\(model.group(task.groupID)?.name ?? l10n("未分组")) · \(task.plannedDay.date().formatted(.dateTime.month().day().locale(l10n.locale)))")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }.frame(maxWidth: .infinity, alignment: .leading).padding(18)
-            NoteEditor(text: note, onOutsideClick: back).id(task.id)
+            NoteEditor(text: note, fontChoice: model.fontPreferences.note, onOutsideClick: back).id(task.id)
                 .background(Color(nsColor: .textBackgroundColor).opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(.primary.opacity(0.06)))
                 .padding(.horizontal, 14)
@@ -236,9 +271,13 @@ struct EditTaskView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text(l10n("修改待办")).font(.headline)
-            TextField(l10n("事项内容"), text: $title).onSubmit(save)
+            TextField(l10n("事项内容"), text: $title)
+                .font(model.fontPreferences.task.swiftUIFont(defaultSize: 13)).onSubmit(save)
             DatePicker(l10n("计划日期"), selection: $day, displayedComponents: .date)
             Picker(l10n("分组"), selection: $groupID) { Text(l10n("未分组")).tag(UUID?.none); ForEach(model.document.groups) { Text($0.name).tag(Optional($0.id)) } }
+            if let metadata = model.metadata(for: task.id) {
+                TaskMetadataView(metadata: metadata) { model.copyTaskMetadata(task.id) }
+            }
             HStack { Button(l10n("删除"), role: .destructive) { if model.document.descendantIDs(including: [task.id]).count > 1 { confirmDelete = true } else { model.delete(task); close() } }; Spacer(); Button(l10n("取消")) { close() }.keyboardShortcut(.cancelAction); Button(l10n("完成"), action: save).keyboardShortcut(.defaultAction).disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
         }.padding(24).frame(width: 340)
             .alert(l10n("删除此事项及全部子项？"), isPresented: $confirmDelete) {
@@ -260,8 +299,9 @@ struct AddSubtaskView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(l10n("添加子项")).font(.headline)
-            Text(parent.title).foregroundStyle(.secondary).lineLimit(2)
-            TextField(l10n("事项内容"), text: $title).focused($focused).onSubmit(save)
+            Text(parent.title).font(model.fontPreferences.task.swiftUIFont(defaultSize: 13)).foregroundStyle(.secondary).lineLimit(2)
+            TextField(l10n("事项内容"), text: $title)
+                .font(model.fontPreferences.task.swiftUIFont(defaultSize: 13)).focused($focused).onSubmit(save)
             ErrorBanner(model: model)
             HStack {
                 Button(l10n("取消"), action: close).keyboardShortcut(.cancelAction)
@@ -273,48 +313,5 @@ struct AddSubtaskView: View {
     private func save() {
         guard let current = model.task(parent.id) else { model.notice = .failure(PindoError.missingParent); return }
         if model.addTask(title: title, day: current.plannedDay, groupID: current.groupID, parentID: current.id) { close() }
-    }
-}
-
-struct QuickAddView: View {
-    @Environment(\.pindoLocalization) private var l10n
-    @ObservedObject var model: AppModel
-    var sizeChanged: (CGFloat) -> Void
-    @State private var date = Date()
-    @State private var groupID: UUID?
-    @State private var showNote = false
-    @FocusState private var titleFocused: Bool
-    @MainActor init(model: AppModel, sizeChanged: @escaping (CGFloat) -> Void = { _ in }) {
-        self.model = model; self.sizeChanged = sizeChanged
-        _groupID = State(initialValue: model.document.preferences.defaultGroupID)
-    }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            HStack { Label("Pindo", systemImage: "checklist").fontWeight(.semibold); Text(l10n("快速记录待办")).foregroundStyle(.secondary); Spacer(); Button("esc") { model.hideQuickAdd() }.buttonStyle(.plain).foregroundStyle(.secondary) }.font(.system(size: 12))
-            HStack(spacing: 10) {
-                TextField(l10n("有什么要做的？"), text: $model.quickTitle).font(.system(size: 19)).textFieldStyle(.plain).focused($titleFocused).onSubmit(save).onChange(of: model.quickTitle) { _, _ in model.scheduleDraftSave() }
-                GroupSelectionMenu(groups: model.document.groups, selection: $groupID)
-            }
-            HStack {
-                DatePicker(l10n("日期"), selection: $date, displayedComponents: .date).labelsHidden().fixedSize()
-                Spacer(); Button(showNote ? l10n("收起备注") : l10n("添加备注")) { showNote.toggle() }.font(.system(size: 11))
-            }.controlSize(.small)
-            if showNote {
-                NoteEditor(text: $model.quickNote, accessibilityName: l10n("快速记录备注")).font(.system(size: 12)).frame(height: 100).padding(5).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 6)).onChange(of: model.quickNote) { _, _ in model.scheduleDraftSave() }
-            }
-            ErrorBanner(model: model)
-            HStack { Text(showNote ? l10n("备注中 ⌘↵ 添加 · Esc 保留草稿") : l10n("Return 添加 · Esc 保留草稿")).font(.system(size: 10)).foregroundStyle(.secondary); Spacer(); Button(l10n("添加待办"), action: save).keyboardShortcut(.return, modifiers: .command).disabled(model.quickTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
-        }.padding(20).frame(width: 470).fixedSize(horizontal: false, vertical: true)
-            .background(GeometryReader { proxy in
-                Color.clear.onAppear { sizeChanged(proxy.size.height) }.onChange(of: proxy.size.height) { _, height in sizeChanged(height) }
-            })
-            .onAppear { titleFocused = true; showNote = !model.quickNote.isEmpty }
-            .onChange(of: model.document.groups.map(\.id)) { _, ids in
-                if let selected = groupID, !ids.contains(selected) { groupID = model.document.preferences.defaultGroupID }
-            }
-            .onExitCommand { model.hideQuickAdd() }.onDisappear { model.persistDrafts() }
-    }
-    private func save() {
-        if model.addTask(title: model.quickTitle, note: model.quickNote, day: DayKey(date), groupID: groupID) { model.quickTitle = ""; model.quickNote = ""; model.persistDrafts(); model.hideQuickAdd() }
     }
 }

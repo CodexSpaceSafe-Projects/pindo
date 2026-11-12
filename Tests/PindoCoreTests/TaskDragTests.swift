@@ -33,7 +33,7 @@ final class TaskDragTests: XCTestCase {
         XCTAssertNoThrow(try document.validateTaskDrag(b.id, toParent: parent.id, before: a.id, completed: true))
         XCTAssertThrowsError(try document.validateTaskDrag(b.id, toParent: other.id, completed: true))
         XCTAssertNoThrow(try document.validateTaskDrag(b.id, toParent: nil, completed: true))
-        XCTAssertEqual(document.tasks.first { $0.id == parent.id }?.phase, .inProgress)
+        XCTAssertEqual(document.tasks.first { $0.id == parent.id }?.phase, .pending)
     }
 
     func testSingleSubtreeTransitionHandlesReorderReparentAndReverseWithStableIDs() {

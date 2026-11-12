@@ -1,7 +1,9 @@
 import SwiftUI
 import PindoCore
 
-enum ManagedTaskStatus: String, CaseIterable { case all = "全部状态", unfinished = "未完成", completed = "已完成" }
+enum ManagedTaskStatus: String, CaseIterable {
+    case all = "全部状态", unfinished = "未完成", inProgress = "进行中", completed = "已完成"
+}
 
 struct TodoManagementView: View {
     @Environment(\.pindoLocalization) private var l10n
@@ -19,30 +21,26 @@ struct TodoManagementView: View {
     private var tasks: [TodoItem] { model.managedTasks(query: query, status: status, group: group) }
     private var visibleIDs: Set<UUID> { Set(tasks.map(\.id)) }
     private var selectedVisibleIDs: Set<UUID> { selectedIDs.intersection(visibleIDs) }
-    private var outline: [TaskOutlineRow] { (model.taskDragPreview ?? model.document).taskOutline(matching: visibleIDs) }
+    private var outline: [TaskOutlineRow] { model.document.taskOutline(matching: visibleIDs) }
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider()
+            ErrorBanner(model: model)
             if let id = noteID, let task = model.task(id) {
                 NoteView(model: model, task: task, onBack: { noteID = nil }).id(id).frame(minHeight: 200, maxHeight: .infinity)
             } else {
-                TextField(l10n("搜索标题或备注"), text: $query).textFieldStyle(.roundedBorder)
-                HStack {
-                    Picker(l10n("状态"), selection: $status) { ForEach(ManagedTaskStatus.allCases, id: \.self) { Text(l10n($0.rawValue)).tag($0) } }
-                    Picker(l10n("分组"), selection: $group) {
-                        Text(l10n("全部分组")).tag(GroupFilter.all); Text(l10n("未分组")).tag(GroupFilter.ungrouped)
-                        ForEach(model.document.groups) { Text($0.name).tag(GroupFilter.group($0.id)) }
-                    }
-                }.font(.system(size: 12))
-                HStack {
-                    Text(l10n("共 %ld 条 · 包含所有日期的待办", tasks.count)).font(.system(size: 11)).foregroundStyle(.secondary)
-                    Spacer()
-                    Button(l10n(batchMode ? "结束批量操作" : "批量操作")) { batchMode.toggle(); clearSelection() }
-                        .disabled(tasks.isEmpty && !batchMode)
-                }
-                if batchMode { batchControls }
-                taskList
+                VStack(alignment: .leading, spacing: 10) {
+                    filters
+                    Text(l10n("共 %ld 条 · 包含所有日期的待办", tasks.count))
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                    if batchMode { batchControls }
+                    taskList
+                }.padding(12)
             }
-        }.sheet(item: $editingTask) { task in EditTaskView(model: model, task: task, dismiss: { editingTask = nil }) }
+        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(Color(nsColor: TaskBranchPalette.paper))
+            .sheet(item: $editingTask) { task in EditTaskView(model: model, task: task, dismiss: { editingTask = nil }) }
             .sheet(isPresented: Binding(get: { addingParentID != nil }, set: { if !$0 { addingParentID = nil } })) {
                 if let id = addingParentID, let parent = model.task(id) { AddSubtaskView(model: model, parent: parent) { addingParentID = nil } }
             }
@@ -67,6 +65,42 @@ struct TodoManagementView: View {
             } message: { Text(l10n("将删除这些事项、全部子项及其备注。")) }
     }
 
+    private var header: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "checklist").font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color(nsColor: TaskBranchPalette.paper))
+                .frame(width: 24, height: 24)
+                .background(Color(nsColor: TaskBranchPalette.accent), in: RoundedRectangle(cornerRadius: 6))
+                .accessibilityHidden(true)
+            Text(l10n("管理待办")).font(.system(size: 17, weight: .semibold)).accessibilityAddTraits(.isHeader)
+            Spacer()
+            if noteID == nil {
+                Button(l10n(batchMode ? "结束批量操作" : "批量操作")) { batchMode.toggle(); clearSelection() }
+                    .controlSize(.small).disabled(tasks.isEmpty && !batchMode)
+            }
+        }.padding(.horizontal, 18).frame(height: 48)
+            .background(Color(nsColor: TaskBranchPalette.toolbar))
+    }
+
+    private var filters: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 7) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
+                TextField(l10n("搜索标题或备注"), text: $query).textFieldStyle(.plain)
+            }.padding(.horizontal, 9).frame(minHeight: 30)
+                .background(Color(nsColor: TaskBranchPalette.card), in: RoundedRectangle(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color(nsColor: TaskBranchPalette.line)).allowsHitTesting(false))
+            Picker(l10n("状态"), selection: $status) {
+                ForEach(ManagedTaskStatus.allCases, id: \.self) { Text(l10n($0.rawValue)).tag($0) }
+            }.labelsHidden().frame(width: 104)
+            Picker(l10n("分组"), selection: $group) {
+                Text(l10n("全部分组")).tag(GroupFilter.all)
+                Text(l10n("未分组")).tag(GroupFilter.ungrouped)
+                ForEach(model.document.groups) { Text($0.name).tag(GroupFilter.group($0.id)) }
+            }.labelsHidden().frame(width: 120)
+        }.font(.system(size: 12)).controlSize(.small)
+    }
+
     private var batchControls: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -81,7 +115,9 @@ struct TodoManagementView: View {
             HStack(spacing: 8) {
                 Button(l10n("删除"), role: .destructive) { pendingDeletion = selectedVisibleIDs; confirmDeletion = true }
                 Button(l10n("标记完成")) { apply(.setPhase(.completed)) }
+                    .help(l10n("标记父项时也会更新其全部下级事项"))
                 Button(l10n("标记未完成")) { apply(.setPhase(.pending)) }
+                    .help(l10n("标记父项时也会更新其全部下级事项"))
                 Menu(l10n("分组")) {
                     Button(l10n("未分组")) { apply(.setGroup(nil)) }
                     ForEach(model.document.groups) { group in Button(group.name) { apply(.setGroup(group.id)) } }
@@ -89,7 +125,7 @@ struct TodoManagementView: View {
                 Spacer(minLength: 0)
             }.disabled(selectedVisibleIDs.isEmpty)
         }.font(.system(size: 12)).controlSize(.small).padding(12)
-            .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+            .background(Color(nsColor: TaskBranchPalette.toolbar), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private var taskList: some View {
@@ -102,10 +138,8 @@ struct TodoManagementView: View {
                             } else { noteID = task.id }
                         }, onSelectNote: { noteID = $0.id }, onEdit: { editingTask = $0 },
                         onAddChild: { addingParentID = $0.id },
-                        onDelete: { pendingDeletion = [$0.id]; confirmDeletion = true },
-                        onMove: { task, offset in model.move(task, offset: offset, within: tasks.filter { $0.plannedDay == task.plannedDay }) })
+                        onDelete: { pendingDeletion = [$0.id]; confirmDeletion = true })
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .textBackgroundColor).opacity(0.45))
             .onDisappear { model.endTaskDrag() }
     }
 
@@ -125,6 +159,7 @@ extension AppModel {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return document.tasks.filter { task in
             if status == .unfinished && task.phase == .completed { return false }
+            if status == .inProgress && task.phase != .inProgress { return false }
             if status == .completed && task.phase != .completed { return false }
             switch group { case .all: break; case .ungrouped: if task.groupID != nil { return false }; case .group(let id): if task.groupID != id { return false } }
             return text.isEmpty || task.title.localizedCaseInsensitiveContains(text) || task.note.localizedCaseInsensitiveContains(text)

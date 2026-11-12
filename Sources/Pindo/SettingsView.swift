@@ -3,7 +3,9 @@ import AppKit
 import PindoCore
 import ServiceManagement
 
-enum SettingsSection: String, CaseIterable { case general = "通用", todos = "管理待办", groups = "分组", sync = "云同步", shortcuts = "快捷记录", backup = "备份与恢复" }
+enum SettingsSection: String, CaseIterable {
+    case general = "通用", fonts = "字体", todos = "管理待办", groups = "分组", sync = "云同步", shortcuts = "快捷记录", backup = "备份与恢复"
+}
 
 struct SettingsView: View {
     @Environment(\.pindoLocalization) private var l10n
@@ -23,11 +25,7 @@ struct SettingsView: View {
             }.padding(12).frame(width: 150).background(.quaternary.opacity(0.3))
             Divider()
             if section == .todos {
-                VStack(alignment: .leading, spacing: 19) {
-                    Text(l10n(section.rawValue)).font(.system(size: 22, weight: .semibold))
-                    ErrorBanner(model: model)
-                    TodoManagementView(model: model)
-                }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(27)
+                TodoManagementView(model: model)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 19) {
@@ -35,6 +33,7 @@ struct SettingsView: View {
                         ErrorBanner(model: model)
                         switch section {
                         case .general: general
+                        case .fonts: FontSettingsView(model: model)
                         case .todos: EmptyView()
                         case .groups: GroupsSettings(model: model)
                         case .sync: SyncSettings(controller: model.cloudSync)
@@ -45,6 +44,7 @@ struct SettingsView: View {
                 }
             }
         }.frame(minWidth: 690, minHeight: 510)
+            .onAppear { FontFamilyCatalog.shared.prepare() }
     }
 
     private var general: some View {
@@ -105,10 +105,10 @@ struct GroupsSettings: View {
     @State private var newColor = GroupColorMenu.defaultColor
     var body: some View {
         VStack(alignment: .leading, spacing: 15) {
-            Text(l10n("待办清单左侧用分组色带区分分组，颜色选项同时显示色块和名称。")).font(.system(size: 12)).foregroundStyle(.secondary)
+            Text(l10n("清单用分组名旁的色点区分分组，颜色选项同时显示色块和名称。")).font(.system(size: 12)).foregroundStyle(.secondary)
             ForEach(model.document.groups) { group in GroupSettingsRow(model: model, group: group) }
             HStack {
-                GroupColorMenu(colorHex: $newColor, accessibilityName: l10n("新分组颜色"))
+                GroupColorMenu(colorHex: $newColor, accessibilityName: l10n("新分组颜色")).fixedSize()
                 TextField(l10n("新分组名称"), text: $newName).onSubmit(add)
                 Button(l10n("添加"), action: add).disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }.padding(.top, 6)
@@ -133,7 +133,7 @@ struct GroupSettingsRow: View {
         HStack(spacing: 10) {
             GroupColorMenu(colorHex: Binding(get: { model.group(group.id)?.colorHex ?? group.colorHex },
                                             set: { model.saveGroup(id: group.id, color: $0) }),
-                           accessibilityName: l10n("%@颜色", group.name))
+                           accessibilityName: l10n("%@颜色", group.name)).fixedSize()
             TextField(l10n("分组名称"), text: $name).focused($focused).onSubmit(save)
                 .onChange(of: focused) { _, value in if !value { save() } }
                 .onChange(of: group.name) { _, value in name = value }
@@ -229,7 +229,7 @@ struct BackupSettings: View {
             }
             if let warning = model.backupWarning { Text(warning).font(.system(size: 11)).foregroundStyle(.red) }
             if model.repository.needsRecovery { Button(l10n("重试未完成的恢复")) { model.retryRecovery() } }
-            VStack(spacing: 0) {
+            LazyVStack(spacing: 0) {
                 ForEach(model.snapshotRecords) { record in
                     HStack {
                         VStack(alignment: .leading, spacing: 5) { Text(l10n.snapshotLabel(record.label)).font(.system(size: 12)); Text(record.date.formatted(Date.FormatStyle(date: .numeric, time: .standard, locale: l10n.locale))).font(.system(size: 10)).foregroundStyle(.secondary) }
@@ -241,7 +241,7 @@ struct BackupSettings: View {
             }.background(.quaternary.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
             HStack { Button(l10n("导出当前资料")) { model.export(backup: false) }; Button(l10n("导出备份文件")) { model.export(backup: true) }; Spacer(); Button(l10n("导入资料…")) { model.importData() } }
             Text(l10n("恢复前会保护当前资料。当前正文自动保存与快照备份分开处理，30 秒内的中间状态不会逐次保留。")).font(.system(size: 10)).foregroundStyle(.secondary)
-        }.onAppear { model.refreshSnapshots() }
+        }
             .alert(l10n("恢复这个快照？"), isPresented: $confirmRestore) {
                 Button(l10n("取消"), role: .cancel) {}
                 Button(l10n("恢复")) { if let restoreID { model.restore(restoreID) } }

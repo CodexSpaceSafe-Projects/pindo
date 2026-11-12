@@ -16,9 +16,17 @@ final class NoteMarkdownTests: XCTestCase {
         XCTAssertEqual(NoteMarkdown.blocks("```swift\n# 不是标题\n- 不是列表\n```"), [.code(language: "swift", text: "# 不是标题\n- 不是列表")])
         XCTAssertEqual(NoteMarkdown.blocks("~~~\n中文代码"), [.code(language: "", text: "中文代码")])
         XCTAssertEqual(NoteMarkdown.blocks("````markdown\r\n```swift\r\n中文\r\n```\r\n````"), [.code(language: "markdown", text: "```swift\n中文\n```")])
+        XCTAssertEqual(NoteMarkdown.blocks("```123```\n# 后续标题"), [.paragraph("```123```"), .heading(level: 1, text: "后续标题")])
         XCTAssertEqual(NoteMarkdown.blocks("第一行\r\n第二行"), [.paragraph("第一行\n第二行")])
         XCTAssertEqual(NoteMarkdown.blocks(""), [])
         XCTAssertEqual(NoteMarkdown.blocks("#没有空格\n<script>原文</script>"), [.paragraph("#没有空格\n<script>原文</script>")])
+    }
+    func testHeadingsDividersAndTaskListsUseTheSameBlockRules() {
+        let source = "标题\n===\n\n## 带收尾的标题 ##\n\n* * *\n\n>引用\n2) 编号\n  - [X] 完成"
+        XCTAssertEqual(NoteMarkdown.blocks(source), [
+            .heading(level: 1, text: "标题"), .heading(level: 2, text: "带收尾的标题"), .divider,
+            .quote("引用"), .listItem(text: "编号", checked: nil), .listItem(text: "完成", checked: true)
+        ])
     }
     func testHotkeyHoldDoesNotTogglePanelTwice() {
         var tracker = HotkeyPressTracker()

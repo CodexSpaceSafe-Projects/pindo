@@ -10,18 +10,28 @@ cd "$repo_dir"
 app_dir="$repo_dir/dist/Pindo.app"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 if [[ "${PINDO_UNIVERSAL:-0}" == "1" ]]; then
-  swift build -c release --product Pindo --arch arm64 --jobs "${PINDO_BUILD_JOBS:-4}"
-  arm_binary_dir="$(swift build -c release --arch arm64 --show-bin-path)"
-  swift build -c release --product Pindo --arch x86_64 --jobs "${PINDO_BUILD_JOBS:-4}"
-  intel_binary_dir="$(swift build -c release --arch x86_64 --show-bin-path)"
+  # SwiftPM 的两个架构可能共享默认产物路径，给每个架构独立的构建目录。
+  arm_build="$repo_dir/.build/pindo-universal/arm64"
+  intel_build="$repo_dir/.build/pindo-universal/x86_64"
+  swift build -c release --product Pindo --scratch-path "$arm_build" --arch arm64 --jobs "${PINDO_BUILD_JOBS:-4}"
+  arm_binary_dir="$(swift build -c release --scratch-path "$arm_build" --arch arm64 --show-bin-path)"
+  swift build -c release --product Pindo --scratch-path "$intel_build" --arch x86_64 --jobs "${PINDO_BUILD_JOBS:-4}"
+  intel_binary_dir="$(swift build -c release --scratch-path "$intel_build" --arch x86_64 --show-bin-path)"
+  /usr/bin/lipo "$arm_binary_dir/Pindo" -verify_arch arm64
+  /usr/bin/lipo "$intel_binary_dir/Pindo" -verify_arch x86_64
   /usr/bin/lipo -create "$arm_binary_dir/Pindo" "$intel_binary_dir/Pindo" -output "$app_dir/Contents/MacOS/Pindo"
-  /usr/bin/lipo "$app_dir/Contents/MacOS/Pindo" -verify_arch arm64 x86_64
+  /usr/bin/lipo "$app_dir/Contents/MacOS/Pindo" -verify_arch arm64
+  /usr/bin/lipo "$app_dir/Contents/MacOS/Pindo" -verify_arch x86_64
 else
   swift build -c release --product Pindo --jobs "${PINDO_BUILD_JOBS:-4}"
   binary_dir="$(swift build -c release --show-bin-path)"
   cp "$binary_dir/Pindo" "$app_dir/Contents/MacOS/Pindo"
 fi
 cp "$repo_dir/Resources/Info.plist" "$app_dir/Contents/Info.plist"
+cp "$repo_dir/Resources/Pindo.icns" "$app_dir/Contents/Resources/Pindo.icns"
+for event in added deleted completed started; do
+  cp "$repo_dir/Sources/Pindo/Resources/feedback-$event.wav" "$app_dir/Contents/Resources/"
+done
 for language in en zh-Hans; do
   translations="$repo_dir/Sources/Pindo/Resources/$language.lproj/Pindo.strings"
   /usr/bin/plutil -lint "$translations"

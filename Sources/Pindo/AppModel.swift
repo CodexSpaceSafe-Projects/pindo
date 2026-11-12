@@ -15,11 +15,10 @@ enum SaveState { case saved, saving, failed }
     @Published var noteID: UUID?
     @Published var editingID: UUID?
     @Published private(set) var draggedTaskID: UUID?
-    @Published private(set) var taskDragPreview: PindoDocument?
     private var taskDragBase: PindoDocument?
-    private var taskDragDate = Date()
     @Published var notice: PindoNotice?
     @Published private(set) var interfaceLanguage: InterfaceLanguage
+    @Published private(set) var fontPreferences: PindoFontPreferences
     @Published var saveState = SaveState.saved
     @Published var snapshotRecords: [SnapshotRecord] = []
     @Published var snapshotBytes = 0
@@ -53,6 +52,8 @@ enum SaveState { case saved, saving, failed }
         self.defaults = defaults
         let language = InterfaceLanguage(defaults: defaults)
         interfaceLanguage = language
+        fontPreferences = defaults.data(forKey: PindoFontPreferences.defaultsKey)
+            .flatMap { try? JSONDecoder().decode(PindoFontPreferences.self, from: $0) } ?? PindoFontPreferences()
         repository = try PindoRepository(directory: directory, initialDocument: PindoLocalization(language).initialDocument)
         document = repository.document
         listEntryGroupID = repository.document.preferences.defaultGroupID
@@ -79,6 +80,12 @@ enum SaveState { case saved, saving, failed }
         interfaceLanguageChanged()
     }
 
+    func setFontPreferences(_ preferences: PindoFontPreferences) {
+        guard preferences != fontPreferences, let data = try? JSONEncoder().encode(preferences) else { return }
+        defaults.set(data, forKey: PindoFontPreferences.defaultsKey)
+        fontPreferences = preferences
+    }
+
     func task(_ id: UUID) -> TodoItem? { document.tasks.first { $0.id == id } }
     func group(_ id: UUID?) -> TaskGroup? { document.groups.first { $0.id == id } }
     func matches(_ task: TodoItem) -> Bool {
@@ -99,8 +106,10 @@ enum SaveState { case saved, saving, failed }
         let matching = document.tasks.filter { matches($0) }
         let active = document.rootTaskIDs(containing: Set(matching.filter { $0.phase == .inProgress || ($0.phase == .pending && $0.plannedDay == selectedDay) }.map(\.id)))
         let overdue = selectedDay == today ? document.rootTaskIDs(containing: Set(matching.filter { $0.phase == .pending && $0.plannedDay < today }.map(\.id))).subtracting(active) : []
-        let done = document.rootTaskIDs(containing: Set(matching.filter { $0.phase == .completed && $0.plannedDay == selectedDay }.map(\.id))).subtracting(active.union(overdue))
-        return (document.taskOutline(matching: active, expandingFamilies: true),
+        let completedMatches = document.rootTaskIDs(containing: Set(matching.filter { $0.phase == .completed && $0.plannedDay == selectedDay }.map(\.id))).subtracting(active.union(overdue))
+        let done = Set(document.tasks.filter { completedMatches.contains($0.id) && $0.phase == .completed }.map(\.id))
+        let unfinished = active.union(completedMatches.subtracting(done))
+        return (document.taskOutline(matching: unfinished, expandingFamilies: true),
                 document.taskOutline(matching: overdue, expandingFamilies: true),
                 document.taskOutline(matching: done, expandingFamilies: true))
     }
@@ -122,11 +131,11 @@ enum SaveState { case saved, saving, failed }
 
     @discardableResult func commit(_ change: (inout PindoDocument) throws -> Void) -> Bool {
         endTaskDrag()
-        noteSave?.cancel()
         do {
             let previousDefault = document.preferences.defaultGroupID
             let previousTasks = document.tasks, previousGroups = document.groups
             try repository.update(change)
+            noteSave?.cancel()
             document = repository.document; saveState = .saved
             if groupFilter == .all && listEntryGroupID == previousDefault { listEntryGroupID = document.preferences.defaultGroupID }
             if let id = listEntryGroupID, group(id) == nil { resetListEntryGroup() }
@@ -150,8 +159,12 @@ enum SaveState { case saved, saving, failed }
         noteSave?.cancel(); persistDrafts()
         let hadChanges = repository.hasUnsavedChanges
         do {
-            try repository.flush(); document = repository.document; saveState = .saved
-            if hadChanges { cloudSync.documentDidChange() }
+            try repository.flush()
+            if hadChanges {
+                if document != repository.document { document = repository.document }
+                cloudSync.documentDidChange()
+            }
+            if saveState != .saved { saveState = .saved }
             return true
         }
         catch { saveState = .failed; notice = .failure(error); return false }
@@ -172,7 +185,9 @@ enum SaveState { case saved, saving, failed }
     }
     func persistDrafts() {
         draftSave?.cancel()
-        defaults.set(quickTitle, forKey: "quickTitle"); defaults.set(quickNote, forKey: "quickNote"); defaults.set(listEntry, forKey: "listEntry")
+        for (key, value) in [("quickTitle", quickTitle), ("quickNote", quickNote), ("listEntry", listEntry)] {
+            if defaults.string(forKey: key) != value { defaults.set(value, forKey: key) }
+        }
     }
     func leaveNote() { _ = flush(); noteID = nil }
 
@@ -188,28 +203,29 @@ enum SaveState { case saved, saving, failed }
         return saved
     }
     func setPhase(_ task: TodoItem, _ phase: TaskPhase) {
-        guard let current = self.task(task.id), current.phase != phase else { return }
-        if commit({ try $0.setPhase(phase, for: task.id) }) {
-            notice = nil
-            if phase == .completed { playFeedback(.completed) }
-        }
+        _ = applyBatch(.setPhase(phase), to: [task.id])
     }
-    func advancePhase(_ task: TodoItem) {
+    func advancePhase(_ task: TodoItem, now: Date = Date()) {
         guard let current = self.task(task.id) else { return }
-        setPhase(current, current.phase.next)
+        _ = applyBatch(.setPhase(current.phase.next), to: [current.id], now: now)
     }
     func delete(_ task: TodoItem) { _ = applyBatch(.delete, to: [task.id]) }
-    @discardableResult func applyBatch(_ action: TaskBatchAction, to ids: Set<UUID>) -> Bool {
+    @discardableResult func applyBatch(_ action: TaskBatchAction, to ids: Set<UUID>, now: Date = Date()) -> Bool {
         var next = document
         do {
-            guard try next.applyBatch(action, to: ids) > 0 else { return true }
+            guard try next.applyBatch(action, to: ids, now: now) > 0 else { return true }
         } catch { notice = .failure(error); return false }
         guard commit({ $0 = next }) else { return false }
         notice = nil
-        if case .setPhase(.completed) = action { playFeedback(.completed) }
-        if case .delete = action {
+        switch action {
+        case .setPhase(.inProgress): playFeedback(.started)
+        case .setPhase(.completed): playFeedback(.completed)
+        case .delete:
             if let noteID, task(noteID) == nil { self.noteID = nil }
             if let editingID, task(editingID) == nil { self.editingID = nil }
+            playFeedback(.deleted)
+        case .setPhase(.pending), .setGroup:
+            break
         }
         return true
     }
@@ -240,7 +256,11 @@ enum SaveState { case saved, saving, failed }
         let other = siblings[i + offset]
         _ = commit { doc in
             guard let a = doc.tasks.firstIndex(where: { $0.id == task.id }), let b = doc.tasks.firstIndex(where: { $0.id == other.id }) else { return }
-            if doc.tasks[a].order == doc.tasks[b].order {
+            let affectedOrders = Set([doc.tasks[a].order, doc.tasks[b].order])
+            let orderCollision = doc.tasks.contains { item in
+                item.parentID == current.parentID && item.id != task.id && item.id != other.id && affectedOrders.contains(item.order)
+            }
+            if affectedOrders.count == 1 || orderCollision {
                 for (order, sibling) in doc.siblingTasks(of: task.id).enumerated() {
                     if let index = doc.tasks.firstIndex(where: { $0.id == sibling.id }) { doc.tasks[index].order = order }
                 }
@@ -280,40 +300,29 @@ enum SaveState { case saved, saving, failed }
         return saved
     }
 
-    /// Hovering edits only a copy. Disk, undoable state, notes and completion feedback
-    /// are untouched until the native dragging destination accepts the drop.
+    /// 拖动期间只记录原始资料，避免松手时覆盖期间发生的编辑。
     @discardableResult func beginTaskDrag(_ id: UUID) -> Bool {
         guard task(id) != nil else { return false }
         endTaskDrag()
-        taskDragBase = document; taskDragDate = Date(); draggedTaskID = id
+        taskDragBase = document; draggedTaskID = id
         return true
     }
 
-    func canPreviewTaskDrag(parent: UUID?, before: UUID?, completed: Bool?) -> Bool {
+    func canAcceptTaskDrag(parent: UUID?, before: UUID?, completed: Bool?) -> Bool {
         guard let id = draggedTaskID, taskDragBase == document else { return false }
         do { try document.validateTaskDrag(id, toParent: parent, before: before, completed: completed); return true }
         catch { return false }
     }
 
-    @discardableResult func previewTaskDrag(parent: UUID?, before: UUID?, completed: Bool? = nil) -> Bool {
-        guard let id = draggedTaskID, let base = taskDragBase, base == document else { endTaskDrag(); return false }
-        var next = base
+    @discardableResult func acceptTaskDrag(parent: UUID?, before: UUID?, completed: Bool? = nil) -> Bool {
+        defer { endTaskDrag() }
+        guard let id = draggedTaskID, taskDragBase == document else { return false }
+        var next = document
         do {
             try next.validateTaskDrag(id, toParent: parent, before: before, completed: completed)
-            try next.moveTask(id, toParent: parent, before: before, now: taskDragDate)
+            try next.moveTask(id, toParent: parent, before: before)
         }
-        catch { clearTaskDragPreview(); return false }
-        if taskDragPreview != next { taskDragPreview = next }
-        return true
-    }
-
-    func clearTaskDragPreview() {
-        if taskDragPreview != nil { taskDragPreview = nil }
-    }
-
-    @discardableResult func acceptTaskDrag(parent: UUID?, before: UUID?, completed: Bool? = nil) -> Bool {
-        guard previewTaskDrag(parent: parent, before: before, completed: completed), let next = taskDragPreview else { endTaskDrag(); return false }
-        endTaskDrag()
+        catch { return false }
         if next == document { return true }
         let saved = commit { $0 = next }
         if saved { notice = nil }
@@ -321,7 +330,6 @@ enum SaveState { case saved, saving, failed }
     }
 
     func endTaskDrag() {
-        clearTaskDragPreview()
         if draggedTaskID != nil { draggedTaskID = nil }
         taskDragBase = nil
     }
@@ -329,6 +337,20 @@ enum SaveState { case saved, saving, failed }
     func copyTask(_ task: TodoItem) -> Bool {
         let text = task.title + (task.note.isEmpty ? "" : "\n\n" + task.note)
         guard writeClipboard(text) else { notice = .text("未能复制待办内容。"); return false }
+        return true
+    }
+
+    func metadata(for id: UUID) -> TaskMetadata? {
+        guard let item = task(id) else { return nil }
+        return TaskMetadata(item: item, groupName: group(item.groupID)?.name,
+                            parentTitle: item.parentID.flatMap { task($0)?.title })
+    }
+
+    @discardableResult func copyTaskMetadata(_ id: UUID) -> Bool {
+        guard let metadata = metadata(for: id), let json = try? metadata.json(), writeClipboard(json) else {
+            notice = .text("未能复制事项元数据。")
+            return false
+        }
         return true
     }
 
@@ -369,12 +391,14 @@ enum SaveState { case saved, saving, failed }
         let newToday = DayKey()
         if today != newToday { if selectedDay == today { selectedDay = newToday }; today = newToday }
         guard flush() else { return }
-        do { _ = try repository.captureIfChanged(); snapshotFailure = nil }
+        do {
+            if try repository.captureIfChanged() { refreshSnapshots() }
+            if snapshotFailure != nil { snapshotFailure = nil }
+        }
         catch { snapshotFailure = error }
-        refreshSnapshots()
         preferencesChanged(document.preferences)
     }
-    func refreshSnapshots() {
+    private func refreshSnapshots() {
         snapshotRecords = repository.archive.records.reversed()
         snapshotBytes = (try? DocumentCodec.encode(repository.archive).count) ?? 0
     }

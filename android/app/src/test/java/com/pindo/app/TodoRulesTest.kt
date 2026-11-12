@@ -27,6 +27,15 @@ class TodoRulesTest {
         }
     }
 
+    @Test fun partialCompletionDoesNotStartParent() {
+        val parent = task("父项")
+        val child = task("完成的子项", parent.getString("id"))
+        val sibling = task("未开始的子项", parent.getString("id"))
+        val result = TodoRules.setPhase(JSONArray().put(parent).put(child).put(sibling), child.getString("id"), "completed")
+        assertEquals("pending", result.getJSONObject(0).getString("phase"))
+        assertTrue(result.getJSONObject(0).isNull("startedAt"))
+    }
+
     @Test fun preventsFourthLevelAndCyclesIncludingMovingWholeSubtree() {
         val root = task("root"); val child = task("child", root.getString("id")); val grand = task("grand", child.getString("id"))
         val parsed = listOf(root, child, grand).map(Todo::from)

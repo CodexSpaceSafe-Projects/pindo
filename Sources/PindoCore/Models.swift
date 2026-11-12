@@ -57,7 +57,7 @@ public enum TaskBatchAction: Sendable {
 }
 
 public struct TodoItem: Codable, Identifiable, Equatable, Sendable {
-    public var id: UUID
+    public let id: UUID
     public var title: String
     public var note: String
     public var plannedDay: DayKey
@@ -69,6 +69,8 @@ public struct TodoItem: Codable, Identifiable, Equatable, Sendable {
     public var updatedAt: Date
     public var startedAt: Date?
     public var completedAt: Date?
+    // 只记录显式设为进行中；旧资料没有此字段时仍可读取。
+    var isProgressExplicit: Bool?
 
     public init(id: UUID = UUID(), title: String, note: String = "", plannedDay: DayKey = DayKey(), groupID: UUID? = nil, parentID: UUID? = nil, order: Int = 0, now: Date = Date()) {
         self.id = id; self.title = title; self.note = note; self.plannedDay = plannedDay
@@ -197,7 +199,7 @@ public enum PindoError: LocalizedError {
         case .missingParent: return "找不到父事项。"
         case .hierarchyCycle: return "不能把事项移到自己或其子项下。"
         case .hierarchyDepth: return "待办层级最多为三级。"
-        case .incompleteChildren: return "请先完成所有子项。"
+        case .incompleteChildren: return "已完成的事项包含未完成的子项。"
         case .dragCompletionBoundary: return "未完成与已完成事项不能相互拖动。"
         case .invalidHotkey: return "快捷键需要修饰键，且两个快捷键不能相同。"
         case .unsupportedVersion: return "资料来自不支持的版本，原文件已保留。"

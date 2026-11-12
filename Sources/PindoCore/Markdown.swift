@@ -27,32 +27,30 @@ public enum NoteMarkdown {
                 } else { code.append(line) }
                 continue
             }
-            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
-                flushParagraph()
-                let marker = trimmed.first!
-                let length = trimmed.prefix(while: { $0 == marker }).count
-                fence = String(repeating: String(marker), count: length)
-                language = String(trimmed.dropFirst(length)).trimmingCharacters(in: .whitespaces); continue
+            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~"), let marker = trimmed.first {
+                let token = trimmed.prefix(while: { $0 == marker })
+                let info = trimmed.dropFirst(token.count)
+                if marker != "`" || !info.contains("`") {
+                    flushParagraph()
+                    fence = String(token)
+                    language = info.trimmingCharacters(in: .whitespaces)
+                    continue
+                }
             }
-            if trimmed.isEmpty { flushParagraph(); continue }
-            let hashes = trimmed.prefix(while: { $0 == "#" }).count
-            if (1...6).contains(hashes), trimmed.dropFirst(hashes).first == " " {
-                flushParagraph(); result.append(.heading(level: hashes, text: String(trimmed.dropFirst(hashes + 1)))); continue
+            let parsed = MarkdownLine(line)
+            if let level = parsed.underlineLevel, paragraph.count == 1 {
+                result.append(.heading(level: level, text: paragraph.removeLast()))
+                continue
             }
-            if ["---", "***", "___"].contains(trimmed) { flushParagraph(); result.append(.divider); continue }
-            if trimmed.hasPrefix("> ") { flushParagraph(); result.append(.quote(String(trimmed.dropFirst(2)))); continue }
-            var item: String?
-            if ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) }) { item = String(trimmed.dropFirst(2)) }
-            else {
-                let digits = trimmed.prefix(while: { $0.isNumber }).count
-                if digits > 0, trimmed.dropFirst(digits).hasPrefix(". ") { item = String(trimmed.dropFirst(digits + 2)) }
+            let content = (line as NSString).substring(with: parsed.content)
+            switch parsed.kind {
+            case .blank: flushParagraph()
+            case .paragraph: paragraph.append(line)
+            case .heading(let level): flushParagraph(); result.append(.heading(level: level, text: content))
+            case .quote: flushParagraph(); result.append(.quote(content))
+            case .list(_, let checked): flushParagraph(); result.append(.listItem(text: content, checked: checked))
+            case .divider: flushParagraph(); result.append(.divider)
             }
-            if let item {
-                flushParagraph()
-                if item.hasPrefix("[ ] ") { result.append(.listItem(text: String(item.dropFirst(4)), checked: false)) }
-                else if item.lowercased().hasPrefix("[x] ") { result.append(.listItem(text: String(item.dropFirst(4)), checked: true)) }
-                else { result.append(.listItem(text: item, checked: nil)) }
-            } else { paragraph.append(line) }
         }
         if fence != nil { result.append(.code(language: language ?? "", text: code.joined(separator: "\n"))) }
         flushParagraph()

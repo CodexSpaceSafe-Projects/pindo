@@ -125,7 +125,9 @@ public extension PindoDocument {
         if let parent = task.parentID, !tasks.contains(where: { $0.id == parent }) { throw PindoError.missingParent }
         var next = self
         next.tasks.append(task)
-        next.reconcileParents(startingAt: Set([task.parentID].compactMap { $0 }), now: now)
+        if let parent = task.parentID {
+            next.reconcileParents(startingAt: [parent], previous: TaskTreeIndex(tasks), now: now)
+        }
         _ = try next.validated()
         self = next
     }
@@ -174,42 +176,31 @@ public extension PindoDocument {
         next.tasks[source].parentID = parent
         if oldParent != parent { next.tasks[source].updatedAt = now }
         for (order, sibling) in siblings.enumerated() { if let index = tree.positions[sibling] { next.tasks[index].order = order } }
-        if oldParent != parent { next.reconcileParents(startingAt: Set([oldParent, parent].compactMap { $0 }), now: now) }
+        if oldParent != parent {
+            next.reconcileParents(startingAt: Set([oldParent, parent].compactMap { $0 }), previous: tree, now: now)
+        }
         _ = try next.validated()
         self = next
     }
 
-    /// One atomic batch; deleting a parent includes its descendants. Completion never skips unfinished children.
+    /// 批量删除、完成或重开父项时，将全部后代纳入同一次操作。
     @discardableResult mutating func applyBatch(_ action: TaskBatchAction, to ids: Set<UUID>, now: Date = Date()) throws -> Int {
         guard !ids.isEmpty else { return 0 }
         var next = self
         switch action {
         case .delete:
-            let removed = descendantIDs(including: ids)
+            let tree = TaskTreeIndex(tasks)
+            let removed = tree.subtree(ids)
             let parents = Set(tasks.filter { removed.contains($0.id) }.compactMap(\.parentID)).subtracting(removed)
             next.tasks.removeAll { removed.contains($0.id) }
-            next.reconcileParents(startingAt: parents, now: now)
+            next.reconcileParents(startingAt: parents, previous: tree, now: now)
         case .setGroup(let group):
             if let group, !groups.contains(where: { $0.id == group }) { throw PindoError.invalidData("事项引用了不存在的分组") }
             for index in next.tasks.indices where ids.contains(next.tasks[index].id) && next.tasks[index].groupID != group {
                 next.tasks[index].groupID = group; next.tasks[index].updatedAt = now
             }
         case .setPhase(let phase):
-            let tree = TaskTreeIndex(tasks)
-            var dirty: Set<UUID> = []
-            for depth in stride(from: Self.maximumTaskDepth - 1, through: 0, by: -1) {
-                for id in dirty.filter({ tree.ancestors(of: $0).count == depth }) {
-                    if next.reconcileParent(id, tree: tree, now: now), let index = tree.positions[id], let parent = tasks[index].parentID { dirty.insert(parent) }
-                }
-                for index in tasks.indices where ids.contains(tasks[index].id) && tree.ancestors(of: tasks[index].id).count == depth {
-                    guard next.tasks[index].phase != phase else { continue }
-                    if phase == .completed, (tree.children[tasks[index].id] ?? []).contains(where: { next.tasks[$0].phase != .completed }) {
-                        throw PindoError.incompleteChildren
-                    }
-                    next.setRawPhase(phase, at: index, now: now)
-                    if let parent = tasks[index].parentID { dirty.insert(parent) }
-                }
-            }
+            try next.applyPhase(phase, to: ids, now: now)
         }
         let remaining = Dictionary(uniqueKeysWithValues: next.tasks.map { ($0.id, $0) })
         let changed = tasks.filter { remaining[$0.id] != $0 }.count
@@ -219,29 +210,74 @@ public extension PindoDocument {
 }
 
 private extension PindoDocument {
-    mutating func setRawPhase(_ phase: TaskPhase, at index: Int, now: Date) {
-        tasks[index].phase = phase; tasks[index].updatedAt = now
-        tasks[index].completedAt = phase == .completed ? now : nil
-        if phase == .inProgress && tasks[index].startedAt == nil { tasks[index].startedAt = now }
+    mutating func applyPhase(_ phase: TaskPhase, to ids: Set<UUID>, now: Date) throws {
+        let tree = TaskTreeIndex(tasks)
+        let selectedIDs = ids.intersection(tree.positions.keys)
+        let selected = phase == .inProgress ? selectedIDs : tree.subtree(selectedIDs)
+        var depths: [UUID: Int] = [:]
+        for id in selected {
+            let ancestors = tree.ancestors(of: id)
+            depths[id] = ancestors.count
+            for (offset, parent) in ancestors.enumerated() { depths[parent] = ancestors.count - offset - 1 }
+        }
+        var dirtyParents: Set<UUID> = []
+        for (id, _) in depths.sorted(by: { $0.value > $1.value }) {
+            guard let index = tree.positions[id] else { continue }
+            if selected.contains(id) {
+                // 由下至上应用目标状态，每条事项只写入一次。
+                guard tasks[index].phase != phase else { continue }
+                if phase == .completed, (tree.children[id] ?? []).contains(where: { tasks[$0].phase != .completed }) {
+                    throw PindoError.incompleteChildren
+                }
+                setRawPhase(phase, at: index, now: now, explicit: true)
+            } else {
+                guard dirtyParents.contains(id), reconcileParent(id, tree: tree, now: now) else { continue }
+            }
+            if let parent = tasks[index].parentID { dirtyParents.insert(parent) }
+        }
     }
 
-    @discardableResult mutating func reconcileParent(_ id: UUID, tree: TaskTreeIndex, now: Date) -> Bool {
-        guard let index = tree.positions[id], let children = tree.children[id], !children.isEmpty else { return false }
+    mutating func setRawPhase(_ phase: TaskPhase, at index: Int, now: Date, explicit: Bool = false) {
+        let previous = tasks[index].phase
+        tasks[index].phase = phase; tasks[index].updatedAt = now
+        tasks[index].completedAt = phase == .completed ? now : nil
+        tasks[index].isProgressExplicit = phase == .inProgress ? explicit : nil
+        if phase == .inProgress {
+            tasks[index].startedAt = now
+        } else if phase == .pending || previous != .inProgress {
+            // 重开后开始新一轮。直接标记完成也不会沿用上一轮的开始时间。
+            tasks[index].startedAt = nil
+        }
+    }
+
+    @discardableResult mutating func reconcileParent(_ id: UUID, tree: TaskTreeIndex, previous: TaskTreeIndex? = nil, now: Date) -> Bool {
+        guard let index = tree.positions[id] else { return false }
+        let children = tree.children[id] ?? []
+        if tasks[index].phase == .inProgress, tasks[index].isProgressExplicit == nil {
+            // 旧资料没有来源标记；原本没有子项进度时，保留父项自己的进行中。
+            let oldTree = previous ?? tree
+            tasks[index].isProgressExplicit = (oldTree.children[id] ?? []).allSatisfy { oldTree.tasks[$0].phase == .pending }
+        }
         let phase: TaskPhase
-        if children.allSatisfy({ tasks[$0].phase == .completed }) { phase = .completed }
-        else if children.contains(where: { tasks[$0].phase != .pending }) { phase = .inProgress }
-        else { phase = tasks[index].phase == .completed ? .pending : tasks[index].phase }
+        if children.isEmpty {
+            // 移走或删除最后一个子项，只撤销由子项带来的进行中。
+            guard tasks[index].phase == .inProgress, tasks[index].isProgressExplicit != true else { return false }
+            phase = .pending
+        } else if children.allSatisfy({ tasks[$0].phase == .completed }) { phase = .completed }
+        else if children.contains(where: { tasks[$0].phase == .inProgress }) { phase = .inProgress }
+        else { phase = tasks[index].isProgressExplicit == true ? .inProgress : .pending }
         guard tasks[index].phase != phase else { return false }
         setRawPhase(phase, at: index, now: now)
         return true
     }
 
-    mutating func reconcileParents(startingAt ids: Set<UUID>, now: Date) {
+    mutating func reconcileParents(startingAt ids: Set<UUID>, previous: TaskTreeIndex, now: Date) {
+        guard !ids.isEmpty else { return }
         let tree = TaskTreeIndex(tasks)
         var affected = ids
         for id in ids { affected.formUnion(tree.ancestors(of: id)) }
         for id in affected.sorted(by: { tree.ancestors(of: $0).count > tree.ancestors(of: $1).count }) {
-            reconcileParent(id, tree: tree, now: now)
+            reconcileParent(id, tree: tree, previous: previous, now: now)
         }
     }
 }

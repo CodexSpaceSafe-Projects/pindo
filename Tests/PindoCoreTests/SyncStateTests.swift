@@ -231,6 +231,36 @@ final class SyncStateTests: XCTestCase {
         XCTAssertNil(a.document.tasks[0].parentID)
     }
 
+    func testRepeatedSyncPreservesExplicitParentProgress() throws {
+        var document = initial()
+        let child = TodoItem(title: "子项", parentID: itemID, now: date)
+        try document.insertTask(child, now: date)
+        try document.setPhase(.inProgress, for: itemID, now: date.addingTimeInterval(10))
+        try document.setPhase(.inProgress, for: child.id, now: date.addingTimeInterval(20))
+        let repo = try repository(document)
+        try repo.enableSync(deviceID: aID)
+        try repo.applySync(XCTUnwrap(repo.syncPayload))
+        XCTAssertEqual(repo.document.tasks.first(where: { $0.id == itemID })?.isProgressExplicit, true)
+        try repo.update { try $0.setPhase(.pending, for: child.id, now: self.date.addingTimeInterval(30)) }
+        XCTAssertEqual(repo.document.tasks.first(where: { $0.id == itemID })?.phase, .inProgress)
+        XCTAssertEqual(repo.document.tasks.first(where: { $0.id == itemID })?.startedAt, date.addingTimeInterval(10))
+    }
+
+    func testSyncDoesNotTurnPartialCompletionIntoInProgress() throws {
+        var document = initial()
+        let child = TodoItem(title: "已完成子项", parentID: itemID, now: date)
+        let sibling = TodoItem(title: "未开始子项", parentID: itemID, now: date)
+        try document.insertTask(child, now: date)
+        try document.insertTask(sibling, now: date)
+        try document.setPhase(.completed, for: child.id, now: date.addingTimeInterval(10))
+        let repo = try repository(document)
+        try repo.enableSync(deviceID: aID)
+        try repo.applySync(XCTUnwrap(repo.syncPayload))
+        let parent = try XCTUnwrap(repo.document.tasks.first(where: { $0.id == itemID }))
+        XCTAssertEqual(parent.phase, .pending)
+        XCTAssertNil(parent.startedAt)
+    }
+
     func testConcurrentDuplicateGroupNamesNormalizeWithoutRewritingRegisters() throws {
         let (a, b) = try pair()
         try a.update { $0.groups.append(TaskGroup(name: "Concurrent", colorHex: "#228833")) }

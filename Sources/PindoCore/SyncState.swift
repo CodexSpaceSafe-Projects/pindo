@@ -146,7 +146,7 @@ public struct SyncPayload: Codable, Equatable, Sendable {
             guard let indices = children[tasks[i].id], !indices.isEmpty else { continue }
             let phase: TaskPhase
             if indices.allSatisfy({ tasks[$0].phase == .completed }) { phase = .completed }
-            else if indices.contains(where: { tasks[$0].phase != .pending }) { phase = .inProgress }
+            else if indices.contains(where: { tasks[$0].phase == .inProgress }) { phase = .inProgress }
             else { phase = tasks[i].phase == .completed ? .pending : tasks[i].phase }
             if phase != tasks[i].phase {
                 let date = max(tasks[i].updatedAt, indices.map { tasks[$0].updatedAt }.max()!)
@@ -248,9 +248,20 @@ public struct SyncReplica: Codable, Equatable, Sendable {
     }
 
     public mutating func merge(_ incoming: SyncPayload) throws -> (tasks: [TodoItem], groups: [TaskGroup]) {
+        let previousPayload = payload
+        let previousTasks = Dictionary(uniqueKeysWithValues: baselineTasks.map { ($0.id, $0) })
         payload = try payload.merging(incoming)
         clock = payload.seen.values.max() ?? 0
-        let projection = try payload.projected()
+        var projection = try payload.projected()
+        for index in projection.tasks.indices {
+            let task = projection.tasks[index], key = "task:\(canonicalID(task.id))"
+            // v1 不传输本机的进度来源标记；状态版本未变时，保留现有标记。
+            if let previous = previousTasks[task.id], task.phase == .inProgress,
+               previous.phase == task.phase, previous.startedAt == task.startedAt,
+               previousPayload.records[key]?.fields["phase"] == payload.records[key]?.fields["phase"] {
+                projection.tasks[index].isProgressExplicit = previous.isProgressExplicit
+            }
+        }
         baselineTasks = projection.tasks; baselineGroups = projection.groups
         return projection
     }

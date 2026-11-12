@@ -26,6 +26,52 @@ final class AppModelTests: XCTestCase {
         XCTAssertNotNil(model.errorMessage)
     }
 
+    @MainActor func testCopyingTaskMetadataUsesCurrentCycleAndStableRelationships() throws {
+        let model = try makeModel(), day = model.today
+        let creation = Date(timeIntervalSince1970: 0.125), group = try XCTUnwrap(model.document.groups.first)
+        let parent = TodoItem(title: "父项", plannedDay: day, now: creation)
+        let item = TodoItem(title: "事项", plannedDay: day, groupID: group.id, parentID: parent.id, now: creation)
+        XCTAssertNotEqual(item.id, parent.id)
+        XCTAssertTrue(model.commit { document in
+            try document.insertTask(parent, now: creation)
+            try document.insertTask(item, now: creation)
+        })
+        var copied = ""
+        model.writeClipboard = { copied = $0; return true }
+        func metadata() throws -> [String: JSONValue] {
+            XCTAssertTrue(model.copyTaskMetadata(item.id))
+            return try JSONDecoder().decode([String: JSONValue].self, from: Data(copied.utf8))
+        }
+
+        model.advancePhase(item, now: creation.addingTimeInterval(10))
+        model.advancePhase(item, now: creation.addingTimeInterval(20))
+        let first = try metadata()
+        XCTAssertEqual(first["id"], .string(item.id.uuidString))
+        XCTAssertEqual(first["createdAt"], .string("1970-01-01T00:00:00.125Z"))
+        XCTAssertEqual(first["startedAt"], .string("1970-01-01T00:00:10.125Z"))
+        XCTAssertEqual(first["completedAt"], .string("1970-01-01T00:00:20.125Z"))
+        XCTAssertEqual(first["groupID"], .string(group.id.uuidString))
+        XCTAssertEqual(first["groupName"], .string(group.name))
+        XCTAssertEqual(first["parentID"], .string(parent.id.uuidString))
+        XCTAssertEqual(first["parentTitle"], .string(parent.title))
+
+        model.advancePhase(item, now: creation.addingTimeInterval(30))
+        let reopened = try metadata()
+        XCTAssertEqual(reopened["phase"], .string("pending"))
+        XCTAssertEqual(reopened["startedAt"], .null)
+        XCTAssertEqual(reopened["completedAt"], .null)
+        model.advancePhase(item, now: creation.addingTimeInterval(40))
+        XCTAssertEqual(model.managedTasks(query: "", status: .inProgress, group: .group(group.id)).map(\.id), [item.id])
+        model.advancePhase(item, now: creation.addingTimeInterval(50))
+        let second = try metadata()
+        XCTAssertEqual(second["id"], first["id"])
+        XCTAssertEqual(second["createdAt"], first["createdAt"])
+        XCTAssertEqual(second["startedAt"], .string("1970-01-01T00:00:40.125Z"))
+        XCTAssertEqual(second["completedAt"], .string("1970-01-01T00:00:50.125Z"))
+        let saved = try PindoRepository(directory: model.repository.directory).document
+        XCTAssertEqual(saved.tasks.first { $0.id == item.id }, model.task(item.id))
+    }
+
     @MainActor func testNoteAutosavesAfterDebounceWithoutTakingSnapshot() async throws {
         let model = try makeModel()
         XCTAssertTrue(model.addTask(title: "备注", day: DayKey(), groupID: nil))
@@ -42,6 +88,48 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.repository.archive.count, snapshots + 1)
         model.captureSnapshot()
         XCTAssertEqual(model.repository.archive.count, snapshots + 1)
+    }
+
+    @MainActor func testInvalidTaskEditDoesNotCancelPendingNoteAutosave() async throws {
+        let model = try makeModel(), day = DayKey()
+        XCTAssertTrue(model.addTask(title: "备注", day: day, groupID: nil))
+        let task = try XCTUnwrap(model.document.tasks.first)
+        model.updateNote(task.id, text: "等待自动保存")
+        XCTAssertFalse(model.edit(task.id, title: "", day: day, groupID: nil))
+
+        try await Task.sleep(nanoseconds: 850_000_000)
+        let reopened = try PindoRepository(directory: model.repository.directory)
+        XCTAssertEqual(reopened.document.tasks.first?.title, task.title)
+        XCTAssertEqual(reopened.document.tasks.first?.note, "等待自动保存")
+        XCTAssertFalse(model.repository.hasUnsavedChanges)
+    }
+
+    @MainActor func testFlushPublishesDocumentOnlyWhenSyncMetadataChanges() throws {
+        let model = try makeModel()
+        defer { try? FileManager.default.removeItem(at: model.repository.directory) }
+        XCTAssertTrue(model.addTask(title: "备注", day: DayKey(), groupID: nil))
+        let id = try XCTUnwrap(model.document.tasks.first?.id)
+        var publications = 0
+        let observation = model.$document.dropFirst().sink { _ in publications += 1 }
+        defer { observation.cancel() }
+
+        XCTAssertTrue(model.flush())
+        XCTAssertEqual(publications, 0)
+        model.updateNote(id, text: "本地备注")
+        XCTAssertEqual(publications, 1)
+        XCTAssertTrue(model.flush())
+        XCTAssertEqual(publications, 1)
+
+        try model.repository.enableSync()
+        model.refreshAfterCloudSync()
+        publications = 0
+        model.updateNote(id, text: "同步备注")
+        XCTAssertEqual(publications, 1)
+        XCTAssertTrue(model.flush())
+        XCTAssertEqual(publications, 2)
+        XCTAssertEqual(model.document, model.repository.document)
+        XCTAssertTrue(model.flush())
+        XCTAssertEqual(publications, 2)
     }
 
     @MainActor func testParallelTasksStayVisibleAcrossDatesAndRespectGroupFilter() async throws {
@@ -75,7 +163,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertNotNil(model.task(task.id)?.startedAt)
         XCTAssertEqual(model.unfinished.map(\.id), originalOrder)
         XCTAssertTrue(model.completed.isEmpty)
-        XCTAssertTrue(feedback.isEmpty)
+        XCTAssertEqual(feedback, [.started])
         XCTAssertEqual(try PindoRepository(directory: model.repository.directory).document.tasks[0].phase, .inProgress)
 
         // Repeated clicks may still carry an older row value; advance from the stored state.
@@ -84,7 +172,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertNotNil(model.task(task.id)?.completedAt)
         XCTAssertEqual(model.completed.map(\.id), [task.id])
         XCTAssertEqual(model.unfinished.count, 1)
-        XCTAssertEqual(feedback, [.completed])
+        XCTAssertEqual(feedback, [.started, .completed])
         XCTAssertEqual(try PindoRepository(directory: model.repository.directory).document.tasks[0].phase, .completed)
 
         model.advancePhase(task)
@@ -92,7 +180,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertNil(model.task(task.id)?.completedAt)
         XCTAssertEqual(model.unfinished.map(\.id), originalOrder)
         XCTAssertTrue(model.completed.isEmpty)
-        XCTAssertEqual(feedback, [.completed])
+        XCTAssertEqual(feedback, [.started, .completed])
 
         model.advancePhase(task)
         let before = model.document
@@ -101,8 +189,60 @@ final class AppModelTests: XCTestCase {
         model.advancePhase(task)
         XCTAssertEqual(model.document, before)
         XCTAssertEqual(model.task(task.id)?.phase, .inProgress)
-        XCTAssertEqual(feedback, [.completed])
+        XCTAssertEqual(feedback, [.started, .completed, .started])
         XCTAssertEqual(model.saveState, .failed)
+    }
+
+    @MainActor func testParentStatusClickStartsThenCompletesAndReopensTheWholeBranch() async throws {
+        let model = try makeModel(), day = model.today
+        XCTAssertTrue(model.addTask(title: "父项", day: day, groupID: nil))
+        let root = try XCTUnwrap(model.document.tasks.last)
+        XCTAssertTrue(model.addTask(title: "子项", day: day, groupID: nil, parentID: root.id))
+        let child = try XCTUnwrap(model.document.tasks.last)
+        XCTAssertTrue(model.addTask(title: "孙项", day: day, groupID: nil, parentID: child.id))
+        let grandchild = try XCTUnwrap(model.document.tasks.last)
+        let branchIDs = Set(model.document.tasks.map(\.id))
+        XCTAssertTrue(model.addTask(title: "独立事项", day: day, groupID: nil))
+        let independent = try XCTUnwrap(model.document.tasks.last)
+        var saves = 0, feedback: [TaskFeedback] = []
+        model.preferencesChanged = { _ in saves += 1 }
+        model.playFeedback = { feedback.append($0) }
+
+        let startedAt = root.createdAt.addingTimeInterval(1)
+        model.advancePhase(root, now: startedAt)
+        XCTAssertEqual(model.task(root.id)?.phase, .inProgress)
+        XCTAssertEqual(model.task(root.id)?.startedAt, startedAt)
+        XCTAssertEqual(model.task(child.id), child)
+        XCTAssertEqual(model.task(grandchild.id), grandchild)
+        XCTAssertEqual(saves, 1)
+        XCTAssertEqual(feedback, [.started])
+
+        let completedAt = startedAt.addingTimeInterval(1)
+        model.advancePhase(root, now: completedAt)
+        let completed = model.document.tasks.filter { branchIDs.contains($0.id) }
+        XCTAssertEqual(completed.map(\.phase), [.completed, .completed, .completed])
+        XCTAssertTrue(completed.allSatisfy { $0.completedAt == completedAt })
+        XCTAssertNil(model.task(child.id)?.startedAt)
+        XCTAssertEqual(model.task(independent.id), independent)
+        XCTAssertEqual(saves, 2)
+        XCTAssertEqual(feedback, [.started, .completed])
+        XCTAssertEqual(try PindoRepository(directory: model.repository.directory).document, model.document)
+
+        model.advancePhase(root, now: completedAt.addingTimeInterval(1))
+        let reopened = model.document.tasks.filter { branchIDs.contains($0.id) }
+        XCTAssertEqual(reopened.map(\.phase), [.pending, .pending, .pending])
+        XCTAssertTrue(reopened.allSatisfy { $0.startedAt == nil && $0.completedAt == nil })
+        XCTAssertEqual(model.task(independent.id), independent)
+        XCTAssertEqual(saves, 3)
+        XCTAssertEqual(feedback, [.started, .completed])
+        XCTAssertEqual(try PindoRepository(directory: model.repository.directory).document, model.document)
+
+        model.advancePhase(grandchild)
+        XCTAssertEqual(model.task(root.id)?.phase, .inProgress)
+        model.advancePhase(root)
+        XCTAssertEqual(model.document.tasks.filter { branchIDs.contains($0.id) }.map(\.phase), [.completed, .completed, .completed])
+        XCTAssertEqual(saves, 5)
+        XCTAssertEqual(feedback, [.started, .completed, .started, .completed])
     }
 
     @MainActor func testUnfinishedListMixesPhasesAndMovesAcrossThemWithGroupFiltering() async throws {
@@ -186,8 +326,9 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(model.document.tasks.filter { selected.contains($0.id) }.allSatisfy { $0.phase == .pending && $0.completedAt == nil })
         model.noteID = model.document.tasks[0].id; model.editingID = model.document.tasks[1].id
         XCTAssertTrue(model.applyBatch(.delete, to: selected))
+        XCTAssertTrue(model.applyBatch(.delete, to: selected))
         XCTAssertEqual(saves, 5)
-        XCTAssertEqual(feedback, [.completed])
+        XCTAssertEqual(feedback, [.completed, .deleted])
         XCTAssertNil(model.noteID); XCTAssertNil(model.editingID)
         XCTAssertEqual(model.document.tasks, untouched)
         XCTAssertEqual(try PindoRepository(directory: model.repository.directory).document, model.document)
@@ -265,24 +406,58 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.outlineSections.unfinished.map(\.depth), [0, 1, 2, 1])
         XCTAssertTrue(model.applyBatch(.setPhase(.completed), to: matches))
         XCTAssertEqual(model.task(child.id)?.phase, .completed)
-        XCTAssertEqual(model.task(root.id)?.phase, .inProgress)
+        XCTAssertEqual(model.task(root.id)?.phase, .pending)
         XCTAssertEqual(model.outlineSections.unfinished.count, 4)
         XCTAssertTrue(model.outlineSections.completed.isEmpty)
-        model.setPhase(root, .completed)
-        XCTAssertEqual(model.task(root.id)?.phase, .inProgress)
-        XCTAssertNotNil(model.errorMessage)
-        model.setPhase(sibling, .completed)
+
+        var saves = 0, feedback: [TaskFeedback] = []
+        model.preferencesChanged = { _ in saves += 1 }
+        model.playFeedback = { feedback.append($0) }
+        XCTAssertTrue(model.applyBatch(.setPhase(.completed), to: [root.id, child.id]))
         XCTAssertEqual(model.task(root.id)?.phase, .completed)
+        XCTAssertEqual(model.task(sibling.id)?.phase, .completed)
+        XCTAssertEqual(model.saveState, .saved)
+        XCTAssertEqual(saves, 1)
+        XCTAssertEqual(feedback, [.completed])
+        XCTAssertEqual(try PindoRepository(directory: model.repository.directory).document, model.document)
         XCTAssertNil(model.errorMessage)
         XCTAssertTrue(model.outlineSections.unfinished.isEmpty)
         XCTAssertEqual(model.outlineSections.completed.count, 4)
         model.setPhase(grandchild, .pending)
+        XCTAssertEqual(model.task(sibling.id)?.phase, .completed)
         XCTAssertEqual(model.outlineSections.unfinished.count, 4)
         XCTAssertTrue(model.outlineSections.completed.isEmpty)
         model.noteID = grandchild.id; model.editingID = child.id
         model.delete(root)
         XCTAssertTrue(model.document.tasks.isEmpty)
         XCTAssertNil(model.noteID); XCTAssertNil(model.editingID)
+    }
+
+    @MainActor func testOnlyFullyCompletedFamiliesAppearInCompletedSectionWhenFiltered() throws {
+        let model = try makeModel(), day = model.today
+        let group = try XCTUnwrap(model.document.groups.first?.id)
+        model.selectedDay = day
+        XCTAssertTrue(model.addTask(title: "父项", day: day.adding(days: 1), groupID: nil))
+        let root = try XCTUnwrap(model.document.tasks.last)
+        XCTAssertTrue(model.addTask(title: "子项", day: day, groupID: group, parentID: root.id))
+        let child = try XCTUnwrap(model.document.tasks.last)
+        XCTAssertTrue(model.addTask(title: "孙项", day: day, groupID: group, parentID: child.id))
+        let grandchild = try XCTUnwrap(model.document.tasks.last)
+        XCTAssertTrue(model.addTask(title: "明天的子项", day: day.adding(days: 1), groupID: nil, parentID: root.id))
+        let sibling = try XCTUnwrap(model.document.tasks.last)
+        XCTAssertTrue(model.addTask(title: "独立事项", day: day, groupID: group))
+        let independent = try XCTUnwrap(model.document.tasks.last)
+
+        model.setPhase(grandchild, .completed)
+        model.setPhase(independent, .completed)
+        model.groupFilter = .group(group)
+        let family = [root.id, child.id, grandchild.id, sibling.id]
+        XCTAssertEqual(model.outlineSections.unfinished.map(\.id), family)
+        XCTAssertEqual(model.outlineSections.completed.map(\.id), [independent.id])
+
+        model.setPhase(sibling, .completed)
+        XCTAssertTrue(model.outlineSections.unfinished.isEmpty)
+        XCTAssertEqual(model.outlineSections.completed.map(\.id), family + [independent.id])
     }
 
     @MainActor func testHierarchyMoveFailureRetainsParentLinksAndUnflushedNotesForRetry() async throws {
@@ -589,6 +764,89 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(stored, source as String)
     }
 
+    @MainActor func testMarkdownRestylesTouchedParagraphsAndReparsesChangedFence() throws {
+        let view = ComposingTextView()
+        view.string = "**一**\n\n# 二\n\n保留\n\n普通 **文字 code**\n"
+        let storage = try XCTUnwrap(view.textStorage)
+        let coordinator = NoteEditor(text: .constant("")).makeCoordinator()
+        let source = view.string as NSString
+        let untouched = source.range(of: "保留")
+        let original = NSRange(location: 0, length: 0)
+        view.setSelectedRange(original)
+        coordinator.render(view)
+        storage.addAttribute(.backgroundColor, value: NSColor.systemPink, range: untouched)
+
+        view.setSelectedRange(source.range(of: "二"))
+        coordinator.render(view)
+        XCTAssertEqual(storage.attribute(.backgroundColor, at: untouched.location, effectiveRange: nil) as? NSColor, .systemPink)
+        XCTAssertLessThan(try XCTUnwrap(storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont).pointSize, 1)
+
+        storage.replaceCharacters(in: source.range(of: "二"), with: "更新 👩‍💻\n第三行")
+        coordinator.render(view)
+        let shifted = (view.string as NSString).range(of: "保留")
+        XCTAssertEqual(storage.attribute(.backgroundColor, at: shifted.location, effectiveRange: nil) as? NSColor, .systemPink)
+        let headingFont = try XCTUnwrap(storage.attribute(.font, at: (view.string as NSString).range(of: "更新").location,
+                                                         effectiveRange: nil) as? NSFont)
+        XCTAssertGreaterThan(headingFont.pointSize, 14)
+
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "```\n")
+        coordinator.render(view)
+        let fenced = view.string as NSString
+        let codeFont = try XCTUnwrap(storage.attribute(.font, at: fenced.range(of: "code").location,
+                                                      effectiveRange: nil) as? NSFont)
+        XCTAssertTrue(codeFont.isFixedPitch)
+        XCTAssertFalse(NSFontManager.shared.traits(of: codeFont).contains(.boldFontMask))
+        // 中文由系统补字；代码块的背景与原文显示不依赖补字字体是否标记为等宽。
+        XCTAssertNotNil(storage.attribute(.backgroundColor, at: fenced.range(of: "文字").location, effectiveRange: nil))
+    }
+
+    @MainActor func testSameLineBackticksRenderAsInlineCode() throws {
+        _ = NSApplication.shared
+        let source = """
+        ```123```
+
+        普通 **正文**，另有 ``A `B` ``` C`` 和 ```D **E**```。
+
+        ```swift
+        let value = 1
+        ```
+
+        最后一行
+        """
+        let view = ComposingTextView()
+        view.string = source
+        let storage = try XCTUnwrap(view.textStorage)
+        let coordinator = NoteEditor(text: .constant(source)).makeCoordinator()
+        let text = source as NSString
+
+        func font(at index: Int) throws -> NSFont {
+            try XCTUnwrap(storage.attribute(.font, at: index, effectiveRange: nil) as? NSFont)
+        }
+
+        view.setSelectedRange(NSRange(location: text.length, length: 0))
+        coordinator.render(view)
+
+        let sample = text.range(of: "```123```")
+        let markers = [0, 1, 2, 6, 7, 8].map { sample.location + $0 }
+        XCTAssertTrue(try font(at: text.range(of: "123").location).isFixedPitch)
+        XCTAssertTrue(try font(at: text.range(of: "``` C").location).isFixedPitch)
+        XCTAssertTrue(try font(at: text.range(of: " C").location + 1).isFixedPitch)
+        let literal = try font(at: text.range(of: "**E**").location)
+        XCTAssertTrue(literal.isFixedPitch)
+        XCTAssertGreaterThan(literal.pointSize, 1)
+        XCTAssertTrue(NSFontManager.shared.traits(of: try font(at: text.range(of: "正文").location)).contains(.boldFontMask))
+        XCTAssertTrue(try font(at: text.range(of: "let value").location).isFixedPitch)
+        XCTAssertFalse(try font(at: text.range(of: "最后一行").location).isFixedPitch)
+        for marker in markers { XCTAssertLessThan(try font(at: marker).pointSize, 1) }
+
+        let editing = NSRange(location: sample.location + 3, length: 0)
+        view.setSelectedRange(editing)
+        coordinator.render(view)
+        for marker in markers { XCTAssertGreaterThan(try font(at: marker).pointSize, 1) }
+        XCTAssertEqual(view.string, source)
+        XCTAssertEqual(view.selectedRange(), editing)
+    }
+
     @MainActor func testNoteOutsideHitTestingIgnoresEditorResizeBorderAndOtherWindows() async throws {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 600), styleMask: .borderless, backing: .buffered, defer: false)
@@ -620,26 +878,38 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(counts[day]?.completed, 1)
     }
 
-    @MainActor func testFeedbackPlaysOnlyForSuccessfulAddsAndCompletionTransitions() async throws {
+    @MainActor func testFeedbackPlaysOnlyForSuccessfulTaskChanges() async throws {
         let model = try makeModel()
         var feedback: [TaskFeedback] = []
         model.playFeedback = { feedback.append($0) }
         XCTAssertFalse(model.addTask(title: "  ", day: DayKey(), groupID: nil))
         XCTAssertTrue(feedback.isEmpty)
         XCTAssertTrue(model.addTask(title: "事项", day: DayKey(), groupID: nil))
-        let task = model.document.tasks[0]
+        let task = try XCTUnwrap(model.document.tasks.first)
+        model.setPhase(task, .inProgress)
+        model.setPhase(task, .inProgress)
         model.setPhase(task, .completed)
         model.setPhase(task, .completed) // Stale row callbacks must not play twice.
-        XCTAssertEqual(feedback, [.added, .completed])
+        XCTAssertEqual(feedback, [.added, .started, .completed])
         model.setPhase(task, .pending)
-        XCTAssertEqual(feedback, [.added, .completed])
+        XCTAssertEqual(feedback, [.added, .started, .completed])
         // A failed disk write must never sound like a successful action.
+        let originalBytes = try Data(contentsOf: model.repository.dataURL)
         try FileManager.default.removeItem(at: model.repository.dataURL)
         try FileManager.default.createDirectory(at: model.repository.dataURL, withIntermediateDirectories: false)
         XCTAssertFalse(model.addTask(title: "写入失败", day: DayKey(), groupID: nil))
+        model.setPhase(task, .inProgress)
         model.setPhase(task, .completed)
-        XCTAssertEqual(feedback, [.added, .completed])
+        model.delete(task)
+        XCTAssertEqual(feedback, [.added, .started, .completed])
         XCTAssertEqual(model.task(task.id)?.phase, .pending)
+
+        try FileManager.default.removeItem(at: model.repository.dataURL)
+        try originalBytes.write(to: model.repository.dataURL, options: .atomic)
+        model.delete(task)
+        model.delete(task)
+        XCTAssertEqual(feedback, [.added, .started, .completed, .deleted])
+        XCTAssertNil(model.task(task.id))
     }
 
     @MainActor func testQuickPositionPersistsTopLeftAndRecoversAfterDisplayRemoval() async throws {
@@ -697,6 +967,38 @@ final class AppModelTests: XCTestCase {
         try await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertEqual(panel.frame.minX, topLeft.x, accuracy: 1)
         XCTAssertEqual(panel.frame.maxY, topLeft.y, accuracy: 1)
+    }
+
+    @MainActor func testQuickAddFromFocusedNoteSavesAndClearsDraft() async throws {
+        _ = NSApplication.shared
+        let suite = "PindoQuickAddDraft.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(suite, isDirectory: true)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: folder) }
+        let model = try AppModel(directory: folder, defaults: defaults)
+        model.playFeedback = { _ in }
+        model.quickTitle = "待提交事项"; model.quickNote = "已输入的备注"
+        let delegate = AppDelegate(model: model, quickPosition: QuickPanelPosition(defaults: defaults))
+        model.hideQuickAdd = { [weak delegate] in delegate?.toggleQuick() }
+        delegate.toggleQuick()
+        let panel = try XCTUnwrap(delegate.quickPanel)
+        defer { panel.orderOut(nil); panel.contentView = nil }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        func noteEditor(in view: NSView) -> ComposingTextView? {
+            (view as? ComposingTextView) ?? view.subviews.lazy.compactMap { noteEditor(in: $0) }.first
+        }
+        let note = try XCTUnwrap(noteEditor(in: try XCTUnwrap(panel.contentView)))
+        XCTAssertTrue(panel.makeFirstResponder(note))
+        let key = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber, context: nil,
+            characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        if !panel.performKeyEquivalent(with: key) { panel.sendEvent(key) }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(model.document.tasks.last?.note, "已输入的备注")
+        XCTAssertFalse(panel.isVisible)
+        XCTAssertTrue(model.quickTitle.isEmpty)
+        XCTAssertTrue(model.quickNote.isEmpty)
+        XCTAssertEqual(defaults.string(forKey: "quickNote"), "")
     }
 
     @MainActor func testSingleSecondaryClickAndControlClickOpenTheFlatStatusMenu() async throws {

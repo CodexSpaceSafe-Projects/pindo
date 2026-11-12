@@ -30,36 +30,64 @@ private struct GroupColorPreset: Identifiable {
     }
 }
 
-struct GroupColorMenu: View {
+struct GroupColorMenu: NSViewRepresentable {
     @Environment(\.pindoLocalization) private var l10n
     @Binding var colorHex: String
     let accessibilityName: String
 
     static let defaultColor = GroupColorPreset.palette[0].hex
 
-    var body: some View {
-        Menu {
-            ForEach(GroupColorPreset.palette) { preset in
-                Button {
-                    GroupColorEditor.shared.close()
-                    if colorHex.uppercased() != preset.hex { colorHex = preset.hex }
-                } label: {
-                    Label { Text(l10n(preset.name)) } icon: { Image(nsImage: preset.swatch) }
-                        .labelStyle(.titleAndIcon)
-                }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let button = NSPopUpButton(frame: .zero, pullsDown: false)
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.choose(_:))
+        return button
+    }
+
+    func updateNSView(_ button: NSPopUpButton, context: Context) {
+        context.coordinator.selection = $colorHex
+        button.setAccessibilityLabel(accessibilityName)
+        let current = colorHex.uppercased()
+        guard context.coordinator.renderedColor != current || context.coordinator.renderedLanguage != l10n.language else { return }
+        context.coordinator.renderedColor = current
+        context.coordinator.renderedLanguage = l10n.language
+
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        func add(_ preset: GroupColorPreset) {
+            let item = NSMenuItem(title: l10n(preset.name), action: nil, keyEquivalent: "")
+            item.image = preset.swatch
+            item.representedObject = preset.hex
+            menu.addItem(item)
+        }
+        if !GroupColorPreset.palette.contains(where: { $0.hex == current }) {
+            add(GroupColorPreset(name: "自定义颜色", hex: current))
+        }
+        GroupColorPreset.palette.forEach(add)
+        menu.addItem(.separator())
+        menu.addItem(withTitle: l10n("自定义颜色…"), action: nil, keyEquivalent: "")
+        button.menu = menu
+        button.select(menu.items.first { ($0.representedObject as? String) == current })
+    }
+
+    @MainActor final class Coordinator: NSObject {
+        var selection: Binding<String>?
+        var renderedColor: String?
+        var renderedLanguage: InterfaceLanguage?
+
+        @objc func choose(_ button: NSPopUpButton) {
+            guard let selection else { return }
+            if let hex = button.selectedItem?.representedObject as? String {
+                GroupColorEditor.shared.close()
+                if selection.wrappedValue.uppercased() != hex { selection.wrappedValue = hex }
+            } else {
+                let current = selection.wrappedValue.uppercased()
+                button.select(button.menu?.items.first { ($0.representedObject as? String) == current })
+                GroupColorEditor.shared.show(colorHex: current) { selection.wrappedValue = $0 }
             }
-            Divider()
-            Button(l10n("自定义颜色…")) {
-                GroupColorEditor.shared.show(colorHex: colorHex) { colorHex = $0 }
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Circle().fill(Color(hex: colorHex)).frame(width: 13, height: 13)
-                    .overlay(Circle().strokeBorder(.primary.opacity(0.22), lineWidth: 1))
-                Text(l10n(GroupColorPreset.palette.first { $0.hex == colorHex.uppercased() }?.name ?? "自定义颜色"))
-                    .lineLimit(1)
-            }
-        }.fixedSize().accessibilityLabel(accessibilityName)
+        }
     }
 }
 

@@ -188,7 +188,7 @@ object TodoRules {
         if (children.isEmpty()) return
         val phase = when {
             children.all { it.getString("phase") == "completed" } -> "completed"
-            children.any { it.getString("phase") != "pending" } -> "inProgress"
+            children.any { it.getString("phase") == "inProgress" } -> "inProgress"
             item.getString("phase") == "completed" -> "pending"
             else -> item.getString("phase")
         }
