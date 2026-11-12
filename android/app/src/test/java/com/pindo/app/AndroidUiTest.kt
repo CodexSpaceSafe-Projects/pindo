@@ -56,6 +56,9 @@ class AndroidUiTest {
         }
         showApp()
         compose.onNodeWithTag("dashboard").assertExists()
+        val parentTitleLeft = compose.onNodeWithText("准备下一版产品计划", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.left
+        val childTitleLeft = compose.onNodeWithText("梳理用户反馈", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.left
+        assertTrue("Child titles must be visibly indented after their parent titles", childTitleLeft > parentTitleLeft)
         saveScreenshot("dashboard-light")
 
         navigate("日历")

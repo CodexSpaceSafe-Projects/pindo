@@ -137,7 +137,7 @@ internal fun LazyListScope.pindoTaskItems(rows: List<TaskOutlineEntry>, state: A
                     Icon(if (expanded) Icons.Outlined.ExpandMore else Icons.Outlined.ChevronRight,
                         contentDescription = if (expanded) "收起子项" else "展开子项", modifier = Modifier.size(20.dp))
                 }
-            } else Spacer(Modifier.width(8.dp))
+            } else Spacer(Modifier.width(30.dp))
             if (selected != null) Checkbox(checked = selected, onCheckedChange = { onSelect() }, enabled = editable, modifier = Modifier.size(40.dp))
             else PindoPhaseCircle(task.phase, editable, onPhase)
             Column(Modifier.weight(1f).padding(vertical = 13.dp, horizontal = 5.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
