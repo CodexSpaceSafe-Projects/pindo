@@ -34,6 +34,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.core.graphics.toColorInt
 import java.time.LocalDate
 
 private data class TaskEditor(val task: Todo? = null, val parent: Todo? = null)
@@ -157,7 +158,7 @@ private data class TaskEditor(val task: Todo? = null, val parent: Todo? = null)
 @Composable private fun TaskRow(task: Todo, group: TodoGroup?, depth: Int, hasChildren: Boolean, expanded: Boolean, enabled: Boolean,
     onToggle: () -> Unit, onDisclosure: () -> Unit, onEdit: () -> Unit, onAddChild: () -> Unit, onDelete: () -> Unit, onMove: (Int) -> Unit) {
     var menu by remember { mutableStateOf(false) }
-    val groupColor = group?.let { Color(android.graphics.Color.parseColor(it.color)) } ?: MaterialTheme.colorScheme.outlineVariant
+    val groupColor = group?.let { Color(it.color.toColorInt()) } ?: MaterialTheme.colorScheme.outlineVariant
     Row(Modifier.padding(start = (depth * 17).dp).clip(RoundedCornerShape(9.dp)).background(MaterialTheme.colorScheme.surfaceContainer)
         .height(IntrinsicSize.Min).combinedClickable(enabled = enabled, onClick = onEdit, onLongClick = { menu = true }), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.width(5.dp).fillMaxHeight().background(groupColor))
@@ -209,7 +210,7 @@ private data class TaskEditor(val task: Todo? = null, val parent: Todo? = null)
     var expanded by remember { mutableStateOf(false) }
     Box(modifier) {
         TextButton(onClick = { expanded = true }) {
-            groups.find { it.id == selected }?.let { Box(Modifier.size(10.dp).background(Color(android.graphics.Color.parseColor(it.color)), RoundedCornerShape(3.dp))); Spacer(Modifier.width(6.dp)) }
+            groups.find { it.id == selected }?.let { Box(Modifier.size(10.dp).background(Color(it.color.toColorInt()), RoundedCornerShape(3.dp))); Spacer(Modifier.width(6.dp)) }
             Text(if (selected == "ungrouped") "未分组" else groups.find { it.id == selected }?.name ?: empty)
             Text(" ▾")
         }
@@ -217,7 +218,7 @@ private data class TaskEditor(val task: Todo? = null, val parent: Todo? = null)
             DropdownMenuItem(text = { Text(empty) }, onClick = { expanded = false; onSelect(null) })
             if (includeUngrouped) DropdownMenuItem(text = { Text("未分组") }, onClick = { expanded = false; onSelect("ungrouped") })
             groups.forEach { group -> DropdownMenuItem(text = {
-                Row(verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(12.dp).background(Color(android.graphics.Color.parseColor(group.color)), RoundedCornerShape(3.dp))); Spacer(Modifier.width(10.dp)); Text(group.name) }
+                Row(verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(12.dp).background(Color(group.color.toColorInt()), RoundedCornerShape(3.dp))); Spacer(Modifier.width(10.dp)); Text(group.name) }
             }, onClick = { expanded = false; onSelect(group.id) }) }
         }
     }

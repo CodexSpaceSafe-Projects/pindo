@@ -24,6 +24,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.core.graphics.toColorInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun CloudSettingsScreen(store: AppStore, state: AppState, onBack: () -> Unit) {
@@ -90,7 +91,7 @@ import androidx.compose.ui.unit.dp
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             state.groups.forEach { group ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(14.dp).background(Color(android.graphics.Color.parseColor(group.color)), CircleShape))
+                    Box(Modifier.size(14.dp).background(Color(group.color.toColorInt()), CircleShape))
                     Text(group.name, Modifier.weight(1f).padding(horizontal = 10.dp))
                     TextButton(onClick = { store.deleteGroup(group.id) }) { Text("删除") }
                 }
@@ -98,7 +99,7 @@ import androidx.compose.ui.unit.dp
             Text("删除分组保留待办和备注。", style = MaterialTheme.typography.bodySmall)
             OutlinedTextField(name, { name = it }, label = { Text("新分组名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             Row(Modifier.horizontalScroll(rememberScrollState())) {
-                colors.forEach { hex -> FilterChip(selected = color == hex, onClick = { color = hex }, label = { Box(Modifier.size(18.dp).background(Color(android.graphics.Color.parseColor(hex)), CircleShape)) }, modifier = Modifier.padding(end = 5.dp)) }
+                colors.forEach { hex -> FilterChip(selected = color == hex, onClick = { color = hex }, label = { Box(Modifier.size(18.dp).background(Color(hex.toColorInt()), CircleShape)) }, modifier = Modifier.padding(end = 5.dp)) }
             }
             TextButton(onClick = { if (store.addGroup(name, color)) name = "" }, enabled = name.isNotBlank()) { Text("添加分组") }
             state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
