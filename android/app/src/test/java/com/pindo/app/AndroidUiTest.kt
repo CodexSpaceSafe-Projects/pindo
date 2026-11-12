@@ -2,12 +2,15 @@ package com.pindo.app
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.view.View
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.material3.Surface
-import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.Density
@@ -23,6 +26,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowDialog
+import org.json.JSONArray
 
 /** Runs real Compose layout and input in Robolectric; it is not a phone/emulator acceptance test. */
 @RunWith(RobolectricTestRunner::class)
@@ -31,6 +36,7 @@ import org.robolectric.annotation.GraphicsMode
 class AndroidUiTest {
     @get:Rule val compose = createComposeRule()
     private lateinit var store: AppStore
+    private lateinit var rootView: View
 
     @Before fun resetLocalData() {
         val app = ApplicationProvider.getApplicationContext<Application>()
@@ -120,10 +126,31 @@ class AndroidUiTest {
         compose.onNodeWithTag("calendar").assertExists()
     }
 
+    @Test fun importProtectsAndRestoresLocalDocumentLargerThanExternalFileLimit() {
+        compose.runOnUiThread {
+            val app = ApplicationProvider.getApplicationContext<Application>()
+            val largeNote = "x".repeat(BackupCodec.MAX_BYTES + 1024)
+            val original = emptyDocument().put("tasks", JSONArray().put(
+                TodoRules.newTask("保留完整的大备注", largeNote, LocalDate.now(), null, null, 0)))
+            File(app.filesDir, "data.json").writeText(original.toString())
+            val restoredStore = AppStore(app)
+            assertEquals(largeNote.length, restoredStore.state.value.tasks.single().note.length)
+            assertTrue(restoredStore.importData(emptyDocument().toString()))
+            assertTrue(restoredStore.state.value.hasLocalBackup)
+            assertTrue(restoredStore.state.value.tasks.isEmpty())
+            assertTrue(restoredStore.restoreBackup())
+            assertEquals("保留完整的大备注", restoredStore.state.value.tasks.single().title)
+            assertTrue("Local protection backup must preserve the exact note",
+                largeNote == restoredStore.state.value.tasks.single().note)
+        }
+    }
+
     private fun showApp(fontScale: Float = 1f) {
         compose.setContent {
             val state by store.state.collectAsState()
             val currentDensity = LocalDensity.current
+            val view = LocalView.current
+            SideEffect { rootView = view }
             CompositionLocalProvider(LocalDensity provides Density(currentDensity.density, fontScale)) {
                 PindoTheme(state.preferences.theme) { Surface { PindoScreen(store) } }
             }
@@ -151,11 +178,28 @@ class AndroidUiTest {
 
     private fun saveScreenshot(name: String, tag: String? = null) {
         compose.waitForIdle()
+        if (tag != null) compose.onNodeWithTag(tag).assertExists()
+        lateinit var image: Bitmap
+        compose.runOnIdle {
+            // Compose captureToImage waits for a hardware frame-commit callback
+            // that Robolectric cannot deliver. Draw the actual Compose view to
+            // a native Skia Canvas instead; dialogs have their own decor view.
+            val view = if (tag == null) rootView else checkNotNull(
+                ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.window?.decorView)
+            check(view.width > 0 && view.height > 0)
+            image = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+            view.draw(Canvas(image))
+        }
+        val firstPixel = image.getPixel(0, 0)
+        val containsUi = (0 until image.height step 13).any { y ->
+            (0 until image.width step 13).any { x -> image.getPixel(x, y) != firstPixel }
+        }
         val target = File("build/reports/screenshots/$name.png")
         target.parentFile?.mkdirs()
         target.outputStream().use { stream ->
-            val node = if (tag == null) compose.onRoot() else compose.onNodeWithTag(tag)
-            check(node.captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, stream))
+            check(image.compress(Bitmap.CompressFormat.PNG, 100, stream))
         }
+        image.recycle()
+        check(containsUi) { "Screenshot must contain rendered UI, not a blank surface" }
     }
 }

@@ -76,6 +76,41 @@ object TodoRules {
         return batch(tasks, setOf(id), TodoBatchAction.SetPhase(phase))
     }
 
+    /** Reparent a subtree and reconcile both old and new ancestor chains. */
+    fun moveTask(tasks: JSONArray, id: String, parentID: String?): JSONArray {
+        val items = tasks.objects().map { JSONObject(it.toString()) }
+        val parsed = items.map(Todo::from)
+        val taskID = id.lowercase()
+        val newParent = parentID?.lowercase()
+        val item = items.find { it.getString("id").equals(taskID, true) } ?: error("找不到这条待办。")
+        validateParent(parsed, taskID, newParent)
+        val oldParent = item.optionalID("parentID")
+        if (oldParent == newParent) return items.jsonArray()
+        item.put("parentID", newParent ?: JSONObject.NULL).put("updatedAt", swiftNow())
+        val byID = items.associateBy { it.getString("id").lowercase() }
+        val children = items.filter { it.optionalID("parentID") != null }.groupBy { it.optionalID("parentID")!! }
+        val affected = mutableSetOf<String>()
+        for (seed in listOfNotNull(oldParent, newParent)) {
+            var current: String? = seed
+            val visited = mutableSetOf<String>()
+            while (current != null) {
+                require(visited.add(current)) { "待办层级存在循环。" }
+                affected.add(current)
+                current = byID[current]?.optionalID("parentID")
+            }
+        }
+        fun depth(id: String): Int {
+            var current = byID[id]?.optionalID("parentID")
+            var count = 0
+            while (current != null) { count++; current = byID[current]?.optionalID("parentID") }
+            return count
+        }
+        affected.sortedWith(compareByDescending<String>(::depth).thenBy { it }).forEach { ancestor ->
+            byID[ancestor]?.let { reconcileNode(it, children[ancestor].orEmpty()) }
+        }
+        return items.jsonArray()
+    }
+
     fun deletionIDs(tasks: List<Todo>, ids: Set<String>): Set<String> =
         ids.flatMap { descendants(tasks, it.lowercase()) }.toSet()
 

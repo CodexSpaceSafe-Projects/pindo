@@ -48,6 +48,35 @@ class TodoBatchTest {
         assertTrue(done.objects().all { it.getString("phase") == "completed" })
     }
 
+    @Test fun reparentingPendingTaskUnderCompletedParentReopensParentEvenWhenTargetPhaseIsUnchanged() {
+        val parent = task("已完成父项").put("phase", "completed").put("completedAt", 1.0)
+        val child = task("待移动")
+        val original = JSONArray().put(parent).put(child)
+        val moved = TodoRules.moveTask(original, child.getString("id"), parent.getString("id"))
+        val result = TodoRules.setPhase(moved, child.getString("id"), "pending")
+        assertEquals("pending", result.getJSONObject(0).getString("phase"))
+        assertEquals(parent.getString("id"), result.getJSONObject(1).getString("parentID"))
+        validateDocument(emptyDocument().put("tasks", result))
+        assertEquals("completed", original.getJSONObject(0).getString("phase"))
+        assertTrue(original.getJSONObject(1).isNull("parentID"))
+    }
+
+    @Test fun movingLastUnfinishedChildAwayCompletesOldAncestorsWithUnchangedTargetPhase() {
+        val grand = task("祖父项")
+        val oldParent = task("旧父项", grand.getString("id"))
+        val finished = task("已完成子项", oldParent.getString("id")).put("phase", "completed").put("completedAt", 1.0)
+        val moving = task("未完成子项", oldParent.getString("id"))
+        val original = JSONArray().put(grand).put(oldParent).put(finished).put(moving)
+        val moved = TodoRules.moveTask(original, moving.getString("id"), null)
+        val result = TodoRules.setPhase(moved, moving.getString("id"), "pending")
+        assertEquals("completed", result.getJSONObject(0).getString("phase"))
+        assertEquals("completed", result.getJSONObject(1).getString("phase"))
+        assertTrue(result.getJSONObject(3).isNull("parentID"))
+        assertEquals("pending", result.getJSONObject(3).getString("phase"))
+        validateDocument(emptyDocument().put("tasks", result))
+        assertEquals("pending", original.getJSONObject(1).getString("phase"))
+    }
+
     @Test fun deleteExpandsSelectedBranchesAndDeduplicatesParentAndChildSelection() {
         val parent = task("父项")
         val child = task("子项", parent.getString("id"))

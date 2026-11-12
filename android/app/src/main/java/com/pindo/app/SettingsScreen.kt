@@ -50,6 +50,7 @@ import java.time.LocalDate
     var groupsOpen by rememberSaveable { mutableStateOf(false) }
     var defaultMenu by remember { mutableStateOf(false) }
     var importText by remember { mutableStateOf<String?>(null) }
+    var importError by remember { mutableStateOf<String?>(null) }
     var restoring by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -70,6 +71,7 @@ import java.time.LocalDate
     val import = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch {
             busy = true
+            importError = null
             try {
                 importText = withContext(Dispatchers.IO) {
                     context.contentResolver.openInputStream(uri)?.use { input ->
@@ -166,10 +168,21 @@ import java.time.LocalDate
         }
     }
     if (groupsOpen) GroupDialog(store, state) { groupsOpen = false }
-    if (importText != null) AlertDialog(onDismissRequest = { importText = null }, icon = { Icon(Icons.Outlined.FileUpload, null) },
-        title = { Text("导入并替换当前资料？") }, text = { Text("当前 ${state.tasks.size} 条事项将被替换。操作前会自动保存一份本机保护备份；同步连接和密钥保持不变。") },
-        confirmButton = { TextButton(onClick = { val incoming = importText; if (incoming != null && store.importData(incoming)) { importText = null; message = "资料已导入，原资料已保留为保护备份。" } }) { Text("导入") } },
-        dismissButton = { TextButton(onClick = { importText = null }) { Text("取消") } })
+    if (importText != null) AlertDialog(onDismissRequest = { importText = null; importError = null }, icon = { Icon(Icons.Outlined.FileUpload, null) },
+        title = { Text("导入并替换当前资料？") }, text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("当前 ${state.tasks.size} 条事项将被替换。操作前会自动保存一份本机保护备份；同步连接和密钥保持不变。")
+                importError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
+            }
+        },
+        confirmButton = { TextButton(onClick = {
+            val incoming = importText
+            if (incoming != null) {
+                if (store.importData(incoming)) { importText = null; importError = null; message = "资料已导入，原资料已保留为保护备份。" }
+                else importError = store.state.value.error ?: "导入失败，当前资料未被替换。请检查文件后重试。"
+            }
+        }) { Text("导入") } },
+        dismissButton = { TextButton(onClick = { importText = null; importError = null }) { Text("取消") } })
     if (restoring) AlertDialog(onDismissRequest = { restoring = false }, icon = { Icon(Icons.Outlined.Restore, null) },
         title = { Text("恢复保护备份？") }, text = { Text("将替换当前清单，并保留当前资料作为新的保护备份。云同步会把恢复内容作为新修改合并。") },
         confirmButton = { TextButton(onClick = { if (store.restoreBackup()) { restoring = false; message = "保护备份已恢复。" } }) { Text("恢复") } },

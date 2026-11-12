@@ -47,6 +47,11 @@ dependencies {
 }
 
 tasks.withType<Test>().configureEach {
+    maxHeapSize = "1g"
+    testLogging {
+        events("failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
     systemProperty("robolectric.dependency.repo.url", "https://repo.maven.apache.org/maven2")
     // Keep the managed environment's Java proxy/CA settings for Robolectric's
     // runtime SDK downloads; regular local and GitHub builds need no override.

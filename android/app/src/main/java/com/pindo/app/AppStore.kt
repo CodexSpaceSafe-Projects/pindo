@@ -124,12 +124,11 @@ class AppStore(application: Application) : AndroidViewModel(application) {
 
     fun editTask(id: String, title: String, note: String, day: LocalDate, groupID: String?, parentID: String?, phase: String? = null): Boolean = mutate { next ->
         require(title.isNotBlank()) { "请填写事项内容。" }
-        val tasks = next.getJSONArray("tasks")
-        TodoRules.validateParent(tasks.objects().map(Todo::from), id, parentID)
+        val tasks = TodoRules.moveTask(next.getJSONArray("tasks"), id, parentID)
         val task = tasks.objects().firstOrNull { it.getString("id").equals(id, true) } ?: kotlin.error("找不到这条待办。")
         task.put("title", title.trim()).put("note", note).put("plannedDay", TodoRules.dayJSON(day))
-            .put("groupID", groupID ?: JSONObject.NULL).put("parentID", parentID ?: JSONObject.NULL).put("updatedAt", swiftNow())
-        next.put("tasks", if (phase == null) TodoRules.reconcile(tasks) else TodoRules.setPhase(tasks, id, phase))
+            .put("groupID", groupID ?: JSONObject.NULL).put("updatedAt", swiftNow())
+        next.put("tasks", if (phase == null) tasks else TodoRules.setPhase(tasks, id, phase))
     }
 
     fun advancePhase(id: String) = mutate { next ->
@@ -218,7 +217,14 @@ class AppStore(application: Application) : AndroidViewModel(application) {
 
     fun restoreBackup(): Boolean = try {
         val backup = document.optJSONObject("previousDocument") ?: kotlin.error("当前没有导入前的保护备份。")
-        importData(BackupCodec.encode(backup))
+        // The external file cap does not apply to an already protected local
+        // document. Large local notes must remain recoverable after a small import.
+        val replacement = BackupCodec.sanitized(backup)
+        mutate { next ->
+            val protection = BackupCodec.sanitized(next)
+            next.put("tasks", replacement.getJSONArray("tasks")).put("groups", replacement.getJSONArray("groups"))
+                .put("previousDocument", protection)
+        }
     } catch (failure: Exception) { error(failure.message?.take(180) ?: "无法恢复，原资料已保留。"); false }
 
     fun startForeground() {
