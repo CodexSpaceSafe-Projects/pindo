@@ -277,8 +277,19 @@ enum SyncS3Signer {
     }
 
     static func canonicalQuery(_ items: [(String, String)]) -> String {
-        items.map { (encode($0.0), encode($0.1)) }.sorted { $0.0 == $1.0 ? $0.1 < $1.1 : $0.0 < $1.0 }
-            .map { "\($0.0)=\($0.1)" }.joined(separator: "&")
+        var encoded: [(name: String, value: String)] = []
+        encoded.reserveCapacity(items.count)
+        for (name, value) in items {
+            encoded.append((name: encode(name), value: encode(value)))
+        }
+        encoded.sort { lhs, rhs in
+            if lhs.name == rhs.name { return lhs.value < rhs.value }
+            return lhs.name < rhs.name
+        }
+        var components: [String] = []
+        components.reserveCapacity(encoded.count)
+        for item in encoded { components.append(item.name + "=" + item.value) }
+        return components.joined(separator: "&")
     }
 
     static func sign(method: String, url: URL, host: String, body: Data, region: String,
