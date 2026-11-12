@@ -2,8 +2,8 @@
 
 ## 2026-11-12：缤纷云加密同步与 Android 初版
 
-- Linux Swift 6.0.3 的跨平台测试通过；本轮增加同步合并、墓碑、并发备注、层级修复、本地原子保存失败和共享协议向量测试。原生 macOS 测试另覆盖固定 AES-GCM / SigV4 向量、模拟 S3 网络和同步控制器重试、断开连接，执行结果以本次提交的 CI 为准。
-- Android 为 Kotlin + Compose，使用原子本地 JSON 文档与 Android Keystore。Gradle 工作流执行单元测试、lintDebug 和 assembleDebug；结果以本次提交的 CI 为准。
+- Linux Swift 6.0.3 的 64 项跨平台测试通过；本轮增加同步合并、墓碑、并发备注、层级修复、本地原子保存失败和共享协议向量测试。实际 Kotlin 输出经 Swift 解码验证一致。原生 macOS 测试另覆盖固定 AES-GCM / SigV4 向量、模拟 S3 网络和同步控制器重试、断开连接，执行结果以本次提交的 CI 为准。
+- Android 为 Kotlin + Compose，使用原子本地 JSON 文档与 Android Keystore。本地完整运行 `testDebugUnitTest lintDebug assembleDebug` 成功，25 项单元测试零失败，已实际生成 Debug APK；其中包括读取 Swift 生成的协议样本、密码学和签名测试。GitHub 同样运行这些检查。
 - 没有配置真实缤纷云桶或凭据，未进行真实云端联调；没有 macOS/Android 实机界面验收。模拟 HTTP、固定协议向量、源码解析和成功构建均不能代替真实双设备同步或后台调度验证。
 - 双设备验收：使用相同私有桶和恢复密钥，分别新增/修改/删除事项，检查离线并发备注保留、父子完成联动、重新联网合并，以及断开同步后本地仍可编辑。说明见 [docs/SYNC.md](docs/SYNC.md)。
 

@@ -260,11 +260,17 @@ final class SyncStateTests: XCTestCase {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("sync-vectors")
         let payload = try DocumentCodec.decode(SyncPayload.self, from: Data(contentsOf: directory.appendingPathComponent("payload-v1.json"))).validated()
         XCTAssertEqual(try DocumentCodec.decode(SyncPayload.self, from: DocumentCodec.encode(payload)).validated(), payload)
+        // This file is produced by the actual Kotlin JSONObject serializer in
+        // SyncInteropTest, rather than manually reproducing Android's encoding.
+        let kotlin = try DocumentCodec.decode(SyncPayload.self, from: Data(contentsOf: directory.appendingPathComponent("payload-v1-kotlin.json"))).validated()
+        XCTAssertEqual(kotlin, payload)
         struct Projection: Decodable { let tasks: [TodoItem]; let groups: [TaskGroup] }
         let expected = try DocumentCodec.decode(Projection.self, from: Data(contentsOf: directory.appendingPathComponent("projected-v1.json")))
         let actual = try payload.projected()
         XCTAssertEqual(actual.tasks, expected.tasks)
         XCTAssertEqual(actual.groups, expected.groups)
+        XCTAssertEqual(try kotlin.projected().tasks, expected.tasks)
+        XCTAssertEqual(try kotlin.projected().groups, expected.groups)
         XCTAssertEqual(actual.tasks.count, 2)
         XCTAssertEqual(payload.records.count, 4)
         XCTAssertTrue(actual.tasks.contains { $0.note.contains("[Sync conflict]") })

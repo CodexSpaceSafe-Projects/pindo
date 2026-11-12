@@ -31,6 +31,7 @@ class AppStore(application: Application) : AndroidViewModel(application) {
     private val secrets = SecretStorage(application)
     private var document = emptyDocument()
     private var cloud = CloudSettings()
+    private var cloudDraft: CloudSettings? = null
     private val mutable = MutableStateFlow(AppState())
     val state: StateFlow<AppState> = mutable
     private var poll: Job? = null
@@ -67,6 +68,8 @@ class AppStore(application: Application) : AndroidViewModel(application) {
     }
 
     fun settings(): CloudSettings = cloud.copy()
+    fun settingsDraft(): CloudSettings = cloudDraft ?: cloud.copy()
+    fun stageSettingsDraft(value: CloudSettings) { cloudDraft = value }
     fun dismissError() { if (!state.value.readOnly) mutable.value = state.value.copy(error = null) }
     fun generateRecoveryKey(): String = SyncCrypto.generateKey()
 
@@ -97,6 +100,7 @@ class AppStore(application: Application) : AndroidViewModel(application) {
             catch (failure: Exception) { runCatching { secrets.write(cloud) }; throw failure }
             document = next
             cloud = normalized
+            cloudDraft = null
             channelGeneration++
             etags.clear(); uploadedPayload = null; failures = 0
             mutable.value = state.value.copy(error = null, syncStatus = if (cloud.enabled) "等待同步" else "仅保存在本机")

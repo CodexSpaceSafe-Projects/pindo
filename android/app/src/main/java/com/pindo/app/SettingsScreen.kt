@@ -28,7 +28,9 @@ import androidx.compose.ui.unit.dp
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun CloudSettingsScreen(store: AppStore, state: AppState, onBack: () -> Unit) {
     val context = LocalContext.current
-    var draft by remember { mutableStateOf(store.settings()) }
+    var draft by remember { mutableStateOf(store.settingsDraft()) }
+    // Keep unsaved secrets in the ViewModel across rotation, never in an unencrypted saved-state Bundle.
+    SideEffect { store.stageSettingsDraft(draft) }
     var regenerate by remember { mutableStateOf(false) }
     var localError by remember { mutableStateOf<String?>(null) }
     BackHandler(onBack = onBack)

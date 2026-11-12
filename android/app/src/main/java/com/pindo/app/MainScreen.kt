@@ -43,7 +43,14 @@ private data class TaskEditor(val task: Todo? = null, val parent: Todo? = null)
     val state by store.state.collectAsStateWithLifecycle()
     var settings by rememberSaveable { mutableStateOf(false) }
     var groupsOpen by remember { mutableStateOf(false) }
-    var editor by remember { mutableStateOf<TaskEditor?>(null) }
+    var editorKey by rememberSaveable { mutableStateOf<String?>(null) }
+    val editor = editorKey?.let { key ->
+        when {
+            key.startsWith("edit:") -> state.tasks.find { it.id == key.removePrefix("edit:") }?.let { TaskEditor(task = it) }
+            key.startsWith("child:") -> state.tasks.find { it.id == key.removePrefix("child:") }?.let { TaskEditor(parent = it) }
+            else -> TaskEditor()
+        }
+    }
     var deleting by remember { mutableStateOf<Todo?>(null) }
     var dayText by rememberSaveable { mutableStateOf(LocalDate.now().toString()) }
     var filter by rememberSaveable { mutableStateOf<String?>(null) }
@@ -64,7 +71,7 @@ private data class TaskEditor(val task: Todo? = null, val parent: Todo? = null)
             })
         },
         floatingActionButton = {
-            if (!state.readOnly) FloatingActionButton(onClick = { editor = TaskEditor() }) { Text("＋", fontSize = 28.sp) }
+            if (!state.readOnly) FloatingActionButton(onClick = { editorKey = "new" }) { Text("＋", fontSize = 28.sp) }
         },
         bottomBar = {
             Surface(tonalElevation = 2.dp) {
@@ -88,7 +95,8 @@ private data class TaskEditor(val task: Todo? = null, val parent: Todo? = null)
             OutlinedTextField(value = query, onValueChange = { query = it }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
                 placeholder = { Text("搜索标题或备注") }, singleLine = true)
             val matching = state.tasks.filter { task ->
-                (if (completed) task.phase == "completed" && task.day == day else task.phase != "completed" && (task.day == day || task.phase == "inProgress")) &&
+                (if (completed) task.phase == "completed" && task.day == day else task.phase != "completed" &&
+                    (task.day == day || task.phase == "inProgress" || day == LocalDate.now() && task.day < day)) &&
                     (filter == null || if (filter == "ungrouped") task.groupID == null else task.groupID == filter) &&
                     (query.isBlank() || task.title.contains(query, true) || task.note.contains(query, true))
             }
@@ -121,7 +129,7 @@ private data class TaskEditor(val task: Todo? = null, val parent: Todo? = null)
                         enabled = !state.readOnly,
                         onToggle = { store.advancePhase(task.id) },
                         onDisclosure = { collapsed = if (task.id in collapsed) collapsed - task.id else collapsed + task.id },
-                        onEdit = { editor = TaskEditor(task) }, onAddChild = { editor = TaskEditor(parent = task) },
+                        onEdit = { editorKey = "edit:${task.id}" }, onAddChild = { editorKey = "child:${task.id}" },
                         onDelete = { deleting = task }, onMove = { store.move(task.id, it) })
                 }
             }
@@ -130,10 +138,10 @@ private data class TaskEditor(val task: Todo? = null, val parent: Todo? = null)
     editor?.let { value ->
         DisposableEffect(Unit) { store.setEditing(true); onDispose { store.setEditing(false) } }
         TaskEditorDialog(value, state, day,
-        onDismiss = { editor = null }, onSave = { title, note, date, group, parent ->
+        onDismiss = { editorKey = null }, onSave = { title, note, date, group, parent ->
             val saved = value.task?.let { store.editTask(it.id, title, note, date, group, parent) }
                 ?: store.addTask(title, note, date, group, parent)
-            if (saved) editor = null
+            if (saved) editorKey = null
         }) }
     deleting?.let { task ->
         val count = TodoRules.descendants(state.tasks, task.id).size
@@ -217,11 +225,11 @@ private data class TaskEditor(val task: Todo? = null, val parent: Todo? = null)
 
 @Composable private fun TaskEditorDialog(editor: TaskEditor, state: AppState, selectedDay: LocalDate, onDismiss: () -> Unit,
     onSave: (String, String, LocalDate, String?, String?) -> Unit) {
-    var title by remember { mutableStateOf(editor.task?.title ?: "") }
-    var note by remember { mutableStateOf(editor.task?.note ?: "") }
-    var day by remember { mutableStateOf((editor.task?.day ?: editor.parent?.day ?: selectedDay).toString()) }
-    var group by remember { mutableStateOf(editor.task?.groupID ?: editor.parent?.groupID) }
-    var parent by remember { mutableStateOf(editor.task?.parentID ?: editor.parent?.id) }
+    var title by rememberSaveable { mutableStateOf(editor.task?.title ?: "") }
+    var note by rememberSaveable { mutableStateOf(editor.task?.note ?: "") }
+    var day by rememberSaveable { mutableStateOf((editor.task?.day ?: editor.parent?.day ?: selectedDay).toString()) }
+    var group by rememberSaveable { mutableStateOf(editor.task?.groupID ?: editor.parent?.groupID) }
+    var parent by rememberSaveable { mutableStateOf(editor.task?.parentID ?: editor.parent?.id) }
     var parentMenu by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text(if (editor.task != null) "修改待办" else if (editor.parent != null) "添加子项" else "添加待办") },
