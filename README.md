@@ -2,7 +2,7 @@
 
 [![macOS build](https://github.com/CodexSpaceSafe-Projects/pindo/actions/workflows/macos.yml/badge.svg)](https://github.com/CodexSpaceSafe-Projects/pindo/actions/workflows/macos.yml)
 
-轻量的 macOS 菜单栏待办，支持分组、日期、备注和本地快照。清单可随时唤出，也可 pin 在前台持续查看。
+轻量的 macOS 菜单栏待办，支持分组、日期、备注、本地快照与可选的缤纷云端到端加密同步。清单可随时唤出，也可 pin 在前台持续查看。仓库同时提供 Android 客户端。
 
 原生实现使用 **SwiftUI + AppKit**，最低 macOS 14，无第三方运行时依赖。
 
@@ -22,6 +22,8 @@ open dist/Pindo.app
 
 ## GitHub 自动构建与下载
 
+Android 在 [Build Android app](https://github.com/CodexSpaceSafe-Projects/pindo/actions/workflows/android.yml) 运行单元测试、lint 和构建。成功后从该次运行的 **Artifacts → Pindo-Android-debug** 下载 APK。这是调试签名的安装包，尚未作为应用商店正式版本发布。最低 Android 8.0（API 26）。本地安装 JDK 17 和 Android SDK 35 后，在 `android/` 运行 `./gradlew testDebugUnitTest lintDebug assembleDebug`。
+
 每次推送 `main` 或在 `main` 上手动运行 [Actions](https://github.com/CodexSpaceSafe-Projects/pindo/actions/workflows/macos.yml)，通过测试、编译和打包后，都会自动创建 [GitHub Release](https://github.com/CodexSpaceSafe-Projects/pindo/releases/latest)。无需手动打标签：自动发布的标签为 `build-构建编号`，标题为 `Pindo 版本号 (build 构建编号)`，并附上对应提交和构建记录。
 
 在 Release 中下载 `Pindo-版本号-macOS-universal.zip`，解压得到 `Pindo.app`；同时提供 `SHA256SUMS` 校验文件。应用兼容 Apple Silicon 和 Intel。每次成功构建保留独立 Release，最新构建会更新 Releases 的 Latest 下载入口。
@@ -40,6 +42,8 @@ git push origin v0.1.0
 也可以在 Mac 上运行 `PINDO_UNIVERSAL=1 bash scripts/build-app.sh` 构建通用版。当前使用临时签名，尚未配置 Apple Developer ID 签名与公证；自动构建不会绕过 macOS 的安全检查。
 
 ## 使用
+
+- **缤纷云同步**：在「设置 → 云同步」填写自己的私有存储桶、子用户凭据及恢复密钥。默认在客户端进行 AES-256-GCM 加密，两端使用同一恢复密钥；凭据和密钥分别进入 macOS Keychain、Android Keystore，不进入云端或导出资料。离线编辑先保存到本地，前台定时检查并合并变化；详情、免费额度和验收范围见 [同步说明](docs/SYNC.md)。
 
 - **自适应清单**：拖动窗口边框调整大小，重新打开时保留尺寸。顶部保留 pin 和设置，待办占据主要区域；日期切换、日历和带下拉箭头的分组筛选位于底部。添加栏一直显示，点击文字区或上下留白均可聚焦输入；右侧可独立选择分组，Return 提交。
 - **日期概览**：点击底部日期展开月历，每天以橙色显示未完成数量、绿色显示已完成数量，按计划日期统计并跟随分组筛选；可以切换月份或回到今天。
@@ -85,6 +89,8 @@ git push origin v0.1.0
 ```text
 Sources/PindoCore/       数据模型、日期语义、文本差异、快照保留、原子保存和恢复日志
 Sources/Pindo/           原生菜单栏、自适应置顶面板、实时 Markdown 编辑器、月历、设置与全局热键
+android/                Kotlin Android 客户端、离线存储及相同的加密同步协议
+docs/SYNC.md            缤纷云配置、数据格式和同步边界
 Tests/PindoCoreTests/    可跨平台运行的数据与恢复测试
 Tests/PindoMacTests/     macOS 模型、编辑器组词、自动保存、管理列表及视图构造测试
 Resources/Info.plist     应用标识、菜单栏应用声明、最低系统版本

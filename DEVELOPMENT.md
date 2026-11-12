@@ -3,7 +3,8 @@
 - Swift tools 5.9+, macOS deployment target 14. Swift 6 is supported in Swift 5 language mode.
 - The app and native tests are declared conditionally in `Package.swift`; a Linux test run intentionally builds only the platform-independent core. Do not report that as a successful native build.
 - Run `swift test --jobs 4`, then `bash scripts/build-app.sh` on a Mac before releasing. Existing checkouts are isolated; no additional worktree is necessary.
-- No package dependencies or external services are needed. Never add credentials or session files to the repository.
+- macOS/core have no package dependencies. Android uses the pinned Gradle wrapper and Android SDK 35 / JDK 17. Builds and automated tests need no real cloud account; Bitiful is optional at runtime. Never add credentials or session files to the repository.
+- Sync wire changes must be mirrored in Swift and Kotlin and verified with shared fixtures in `sync-vectors/`. Persist replica and visible document atomically. Notes use causal multi-value registers, other fields use Lamport registers; retain deletion tombstones. Preferences and platform-specific settings never enter the cloud payload. Use OS AES-GCM and secure random APIs; keep recovery keys and S3 credentials in Keychain/Keystore. Do not replace encrypted heads owned by other installations.
 - Repository mutations are serialized by `AppModel` on MainActor. Note staging does not write disk. Primary file saves are debounced; snapshot diff/compaction runs only during the 30-second check or explicit import/recovery.
 - `data.json` and the bounded archive are separate files. Do not encode the archive into primary data on each keystroke.
 - Recovery and import write a durable redo journal before replacing both files. A pending journal blocks further updates until replay succeeds. Do not delete a pending journal as a workaround for an error.
