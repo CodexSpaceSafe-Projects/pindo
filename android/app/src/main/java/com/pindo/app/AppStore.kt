@@ -20,15 +20,20 @@ import org.json.JSONObject
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import java.text.Normalizer
 import java.util.UUID
 
 data class AppState(val tasks: List<Todo> = emptyList(), val groups: List<TodoGroup> = emptyList(),
     val error: String? = null, val readOnly: Boolean = false, val syncing: Boolean = false,
-    val syncEnabled: Boolean = false, val syncStatus: String = "仅保存在本机")
+    val syncEnabled: Boolean = false, val syncStatus: String = "仅保存在本机",
+    val preferences: AppPreferences = AppPreferences(), val hasLocalBackup: Boolean = false,
+    val lastSyncTime: String? = null)
 
 class AppStore(application: Application) : AndroidViewModel(application) {
     private val storage = DocumentStorage(application)
     private val secrets = SecretStorage(application)
+    private val preferenceStorage = PreferenceStorage(application)
+    private var preferences = runCatching { preferenceStorage.read() }.getOrDefault(AppPreferences())
     private var document = emptyDocument()
     private var cloud = CloudSettings()
     private var cloudDraft: CloudSettings? = null
@@ -117,14 +122,14 @@ class AppStore(application: Application) : AndroidViewModel(application) {
         next.put("tasks", TodoRules.reconcile(tasks))
     }
 
-    fun editTask(id: String, title: String, note: String, day: LocalDate, groupID: String?, parentID: String?): Boolean = mutate { next ->
+    fun editTask(id: String, title: String, note: String, day: LocalDate, groupID: String?, parentID: String?, phase: String? = null): Boolean = mutate { next ->
         require(title.isNotBlank()) { "请填写事项内容。" }
         val tasks = next.getJSONArray("tasks")
         TodoRules.validateParent(tasks.objects().map(Todo::from), id, parentID)
         val task = tasks.objects().firstOrNull { it.getString("id").equals(id, true) } ?: kotlin.error("找不到这条待办。")
         task.put("title", title.trim()).put("note", note).put("plannedDay", TodoRules.dayJSON(day))
             .put("groupID", groupID ?: JSONObject.NULL).put("parentID", parentID ?: JSONObject.NULL).put("updatedAt", swiftNow())
-        next.put("tasks", TodoRules.reconcile(tasks))
+        next.put("tasks", if (phase == null) TodoRules.reconcile(tasks) else TodoRules.setPhase(tasks, id, phase))
     }
 
     fun advancePhase(id: String) = mutate { next ->
@@ -153,7 +158,7 @@ class AppStore(application: Application) : AndroidViewModel(application) {
 
     fun addGroup(name: String, color: String): Boolean = mutate { next ->
         require(name.isNotBlank()) { "请填写分组名称。" }
-        require(next.getJSONArray("groups").objects().none { it.getString("name") == name.trim() }) { "分组名称已存在。" }
+        require(next.getJSONArray("groups").objects().none { canonicalGroupName(it.getString("name")) == canonicalGroupName(name.trim()) }) { "分组名称已存在。" }
         require(color.matches(Regex("#[0-9a-fA-F]{6}"))) { "分组颜色无效。" }
         next.getJSONArray("groups").put(JSONObject().put("id", UUID.randomUUID().toString()).put("name", name.trim()).put("colorHex", color))
     }
@@ -162,6 +167,59 @@ class AppStore(application: Application) : AndroidViewModel(application) {
         next.put("groups", next.getJSONArray("groups").objects().filter { !it.getString("id").equals(id, true) }.jsonArray())
         next.getJSONArray("tasks").objects().filter { it.optionalID("groupID") == id }.forEach { it.put("groupID", JSONObject.NULL) }
     }
+
+    fun updateGroup(id: String, name: String, color: String): Boolean = mutate { next ->
+        val normalized = name.trim()
+        require(normalized.isNotBlank()) { "请填写分组名称。" }
+        require(color.matches(Regex("#[0-9a-fA-F]{6}"))) { "分组颜色无效。" }
+        val groups = next.getJSONArray("groups").objects()
+        require(groups.none { !it.getString("id").equals(id, true) && canonicalGroupName(it.getString("name")) == canonicalGroupName(normalized) }) { "分组名称已存在。" }
+        val group = groups.find { it.getString("id").equals(id, true) } ?: kotlin.error("找不到这个分组。")
+        group.put("name", normalized).put("colorHex", color)
+    }
+
+    fun setTheme(theme: String): Boolean = savePreferences(preferences.copy(theme = theme))
+
+    fun setDefaultGroup(groupID: String?): Boolean {
+        if (groupID != null && state.value.groups.none { it.id.equals(groupID, true) }) {
+            error("找不到这个分组。"); return false
+        }
+        return savePreferences(preferences.copy(defaultGroupID = groupID?.lowercase()))
+    }
+
+    private fun savePreferences(value: AppPreferences): Boolean = try {
+        preferenceStorage.write(value); preferences = value; publish(); true
+    } catch (failure: Exception) { error(failure.message ?: "设置未能保存，请重试。"); false }
+
+    fun applyBatch(ids: Set<String>, action: TodoBatchAction): Boolean = mutate { next ->
+        next.put("tasks", TodoRules.batch(next.getJSONArray("tasks"), ids, action))
+    }
+    fun batchPhase(ids: Set<String>, phase: String): Boolean = applyBatch(ids, TodoBatchAction.SetPhase(phase))
+    fun batchGroup(ids: Set<String>, groupID: String?): Boolean = applyBatch(ids, TodoBatchAction.SetGroup(groupID))
+    fun batchDay(ids: Set<String>, day: LocalDate): Boolean = applyBatch(ids, TodoBatchAction.SetDay(day))
+    fun batchDelete(ids: Set<String>): Boolean = applyBatch(ids, TodoBatchAction.Delete)
+    fun deletionCount(ids: Set<String>): Int = TodoRules.deletionIDs(state.value.tasks, ids).size
+
+    fun exportData(): String {
+        check(!state.value.readOnly) { "本机资料暂不可读取，原文件已保留。" }
+        return BackupCodec.encode(document)
+    }
+
+    fun importData(text: String): Boolean = try {
+        val replacement = BackupCodec.decode(text)
+        mutate { next ->
+            // One atomic replacement protects the previous visible data together
+            // with the imported document and this installation's sync replica.
+            val protection = BackupCodec.sanitized(next)
+            next.put("tasks", replacement.getJSONArray("tasks")).put("groups", replacement.getJSONArray("groups"))
+                .put("previousDocument", protection)
+        }
+    } catch (failure: Exception) { error(failure.message?.take(180) ?: "无法导入，原资料已保留。"); false }
+
+    fun restoreBackup(): Boolean = try {
+        val backup = document.optJSONObject("previousDocument") ?: kotlin.error("当前没有导入前的保护备份。")
+        importData(BackupCodec.encode(backup))
+    } catch (failure: Exception) { error(failure.message?.take(180) ?: "无法恢复，原资料已保留。"); false }
 
     fun startForeground() {
         if (poll != null) return
@@ -221,7 +279,8 @@ class AppStore(application: Application) : AndroidViewModel(application) {
             }
             if (generation == channelGeneration) {
                 failures = 0
-                mutable.value = state.value.copy(error = null, syncStatus = "已同步 · ${LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))}")
+                val time = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))
+                mutable.value = state.value.copy(error = null, syncStatus = "已同步 · $time", lastSyncTime = time)
             }
         } catch (e: Exception) {
             failures = (failures + 1).coerceAtMost(4)
@@ -255,14 +314,22 @@ class AppStore(application: Application) : AndroidViewModel(application) {
             }
             storage.write(next)
             document = next
+            mutable.value = state.value.copy(error = null)
             publish(); requestSync()
             true
         } catch (e: Exception) { error(e.message?.take(180) ?: "无法保存，本机原资料已保留。"); false }
     }
 
     private fun publish() {
+        // A deleted or imported-away default group must not survive as a dangling preference.
+        val visibleGroups = document.getJSONArray("groups").objects().map(TodoGroup::from)
+        if (preferences.defaultGroupID != null && visibleGroups.none { it.id == preferences.defaultGroupID }) {
+            preferences = preferences.copy(defaultGroupID = null)
+            runCatching { preferenceStorage.write(preferences) }
+        }
         mutable.value = state.value.copy(tasks = document.getJSONArray("tasks").objects().map(Todo::from),
-            groups = document.getJSONArray("groups").objects().map(TodoGroup::from), syncEnabled = cloud.enabled)
+            groups = visibleGroups, syncEnabled = cloud.enabled, preferences = preferences,
+            hasLocalBackup = document.optJSONObject("previousDocument") != null)
     }
     private fun error(message: String) { mutable.value = state.value.copy(error = message) }
     private fun channelID(settings: CloudSettings): String = java.security.MessageDigest.getInstance("SHA-256")
@@ -278,7 +345,7 @@ internal fun validateDocument(value: JSONObject) {
     require(tasks.map { it.id }.toSet().size == tasks.size && groups.map { it.id }.toSet().size == groups.size) { "资料中存在重复标识。" }
     tasks.forEach { UUID.fromString(it.id) }; groups.forEach { UUID.fromString(it.id) }
     require(groups.all { it.name.isNotBlank() && it.color.matches(Regex("#[0-9a-fA-F]{6}")) }) { "分组资料无效。" }
-    require(groups.map { it.name }.toSet().size == groups.size) { "分组名称重复。" }
+    require(groups.map { canonicalGroupName(it.name) }.toSet().size == groups.size) { "分组名称重复。" }
     val groupIDs = groups.map { it.id }.toSet()
     for (task in tasks) {
         require(task.title.isNotBlank() && task.phase in listOf("pending", "inProgress", "completed")) { "待办资料无效。" }
@@ -287,3 +354,5 @@ internal fun validateDocument(value: JSONObject) {
         if (task.phase == "completed") require(tasks.filter { it.parentID == task.id }.all { it.phase == "completed" }) { "父项仍有未完成子项。" }
     }
 }
+
+internal fun canonicalGroupName(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFC)

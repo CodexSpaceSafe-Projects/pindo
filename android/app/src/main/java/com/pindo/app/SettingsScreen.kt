@@ -7,102 +7,323 @@ import android.content.Context
 import android.os.Build
 import android.os.PersistableBundle
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.graphics.toColorInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.time.LocalDate
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable internal fun AppSettingsScreen(store: AppStore, state: AppState, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var cloudOpen by rememberSaveable { mutableStateOf(false) }
+    var groupsOpen by rememberSaveable { mutableStateOf(false) }
+    var defaultMenu by remember { mutableStateOf(false) }
+    var importText by remember { mutableStateOf<String?>(null) }
+    var restoring by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) scope.launch {
+            busy = true
+            try {
+                val bytes = store.exportData().toByteArray(Charsets.UTF_8)
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+                        ?: error("无法打开所选文件。")
+                }
+                message = "资料已导出，包含待办、分组和备注。"
+            } catch (_: Exception) { message = "导出失败，请检查文件位置和可用空间。" }
+            finally { busy = false }
+        }
+    }
+    val import = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            busy = true
+            try {
+                importText = withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        val out = ByteArrayOutputStream()
+                        val chunk = ByteArray(8192)
+                        while (true) {
+                            val count = input.read(chunk)
+                            if (count < 0) break
+                            require(out.size() + count <= 10 * 1024 * 1024) { "文件超过 10 MiB 上限。" }
+                            out.write(chunk, 0, count)
+                        }
+                        Charsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(out.toByteArray())).toString()
+                    } ?: error("无法读取所选文件。")
+                }
+            } catch (_: Exception) { message = "无法读取此文件，请选择 10 MiB 以内的 Pindo JSON 资料。" }
+            finally { busy = false }
+        }
+    }
+    if (cloudOpen) {
+        CloudSettingsScreen(store, state) { cloudOpen = false }
+        return
+    }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(top = 18.dp, bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("设置", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
+            Text("让 Pindo 更适合你的每一天", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+        }
+        Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(24.dp)) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.primary.copy(alpha = .12f)) {
+                        Icon(Icons.Outlined.Security, null, Modifier.padding(13.dp).size(26.dp), tint = MaterialTheme.colorScheme.primary)
+                    }
+                    Column(Modifier.weight(1f).padding(start = 14.dp)) {
+                        Text(if (state.syncEnabled) "已连接加密同步" else "安心记录，本地优先", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text(if (state.syncEnabled) state.syncStatus else "离线也能随时记录和管理", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
+                    SettingsCount(state.tasks.size.toString(), "全部事项")
+                    SettingsCount(state.tasks.count { it.phase != "completed" }.toString(), "未完成")
+                    SettingsCount(state.groups.size.toString(), "我的分组")
+                }
+            }
+        }
+        SettingsSection("偏好设置") {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.Palette, null, tint = MaterialTheme.colorScheme.primary)
+                    Text("外观", Modifier.padding(start = 12.dp), style = MaterialTheme.typography.titleSmall)
+                }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(Triple("system", "跟随系统", Icons.Outlined.Smartphone), Triple("light", "浅色", Icons.Outlined.LightMode), Triple("dark", "深色", Icons.Outlined.DarkMode)).forEach { (value, label, icon) ->
+                        FilterChip(selected = state.preferences.theme == value, onClick = { store.setTheme(value) },
+                            label = { Text(label) }, leadingIcon = { Icon(icon, null, Modifier.size(17.dp)) })
+                    }
+                }
+            }
+            HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+            Box {
+                SettingsRow(Icons.Outlined.FolderOpen, "新待办默认分组", state.groups.find { it.id == state.preferences.defaultGroupID }?.name ?: "未分组") { defaultMenu = true }
+                DropdownMenu(defaultMenu, onDismissRequest = { defaultMenu = false }) {
+                    DropdownMenuItem(text = { Text("未分组") }, onClick = { store.setDefaultGroup(null); defaultMenu = false })
+                    state.groups.forEach { group ->
+                        DropdownMenuItem(text = { GroupName(group) }, onClick = { store.setDefaultGroup(group.id); defaultMenu = false })
+                    }
+                }
+            }
+            HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+            SettingsRow(Icons.Outlined.Folder, "分组管理", "名称、颜色与事项数量") { groupsOpen = true }
+        }
+        SettingsSection("数据与同步") {
+            SettingsRow(Icons.Outlined.CloudSync, "云同步", if (state.syncEnabled) "缤纷云 · 端到端加密" else "连接你自己的缤纷云账号") { cloudOpen = true }
+            HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+            SettingsRow(Icons.Outlined.FileDownload, "导出资料", "保存待办、分组与 Markdown 备注", !busy && !state.readOnly) { export.launch("Pindo-${LocalDate.now()}.json") }
+            HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+            SettingsRow(Icons.Outlined.FileUpload, "导入资料", "支持 Android 与 macOS 导出的 JSON", !busy && !state.readOnly) { import.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }
+            HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+            SettingsRow(Icons.Outlined.Restore, "恢复上次导入前的资料", if (state.hasLocalBackup) "已保留一份本机保护备份" else "导入资料时会自动建立保护备份", state.hasLocalBackup && !busy && !state.readOnly) { restoring = true }
+        }
+        Text("导出文件为明文，请自行保管；同步凭据和恢复密钥不会导出。导入会替换当前清单，并自动保留操作前的本机备份。", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        (message ?: state.error)?.let { text ->
+            Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(14.dp)) {
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(text, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                    IconButton(onClick = { message = null; store.dismissError() }) { Icon(Icons.Outlined.Close, "关闭提示") }
+                }
+            }
+        }
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text("Pindo", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+            Text("轻一点，专注每一件事", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+        }
+    }
+    if (groupsOpen) GroupDialog(store, state) { groupsOpen = false }
+    if (importText != null) AlertDialog(onDismissRequest = { importText = null }, icon = { Icon(Icons.Outlined.FileUpload, null) },
+        title = { Text("导入并替换当前资料？") }, text = { Text("当前 ${state.tasks.size} 条事项将被替换。操作前会自动保存一份本机保护备份；同步连接和密钥保持不变。") },
+        confirmButton = { TextButton(onClick = { val incoming = importText; if (incoming != null && store.importData(incoming)) { importText = null; message = "资料已导入，原资料已保留为保护备份。" } }) { Text("导入") } },
+        dismissButton = { TextButton(onClick = { importText = null }) { Text("取消") } })
+    if (restoring) AlertDialog(onDismissRequest = { restoring = false }, icon = { Icon(Icons.Outlined.Restore, null) },
+        title = { Text("恢复保护备份？") }, text = { Text("将替换当前清单，并保留当前资料作为新的保护备份。云同步会把恢复内容作为新修改合并。") },
+        confirmButton = { TextButton(onClick = { if (store.restoreBackup()) { restoring = false; message = "保护备份已恢复。" } }) { Text("恢复") } },
+        dismissButton = { TextButton(onClick = { restoring = false }) { Text("取消") } })
+}
+
+@Composable private fun SettingsCount(value: String, label: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
+        Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp) { Column(content = content) }
+    }
+}
+
+@Composable private fun SettingsRow(icon: ImageVector, title: String, subtitle: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick).padding(horizontal = 16.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
+        Column(Modifier.weight(1f).padding(horizontal = 13.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Icon(Icons.Outlined.ChevronRight, null, tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(20.dp))
+    }
+}
+
+@Composable private fun GroupName(group: TodoGroup) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(12.dp).background(Color(group.color.toColorInt()), CircleShape))
+        Text(group.name, Modifier.padding(start = 10.dp))
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun CloudSettingsScreen(store: AppStore, state: AppState, onBack: () -> Unit) {
     val context = LocalContext.current
     var draft by remember { mutableStateOf(store.settingsDraft()) }
-    // Keep unsaved secrets in the ViewModel across rotation, never in an unencrypted saved-state Bundle.
     SideEffect { store.stageSettingsDraft(draft) }
+    var advanced by rememberSaveable { mutableStateOf(false) }
     var regenerate by remember { mutableStateOf(false) }
+    var disconnect by remember { mutableStateOf(false) }
     var localError by remember { mutableStateOf<String?>(null) }
+    var copied by remember { mutableStateOf(false) }
     BackHandler(onBack = onBack)
-    Scaffold(topBar = { TopAppBar(title = { Text("同步设置") }, navigationIcon = { TextButton(onClick = onBack) { Text("返回") } }) }) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(15.dp)) {
-            Text("缤纷云 · 使用自己的账号", style = MaterialTheme.typography.titleLarge)
-            Text("待办和备注默认先在客户端进行端到端加密，再上传到私有存储桶。Access Key、Secret Key 和恢复密钥通过 Android Keystore 加密后保存在此设备。", style = MaterialTheme.typography.bodyMedium)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("启用云同步", Modifier.weight(1f)); Switch(draft.enabled, { draft = draft.copy(enabled = it) })
+    Scaffold(topBar = { TopAppBar(title = { Text("云同步") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Outlined.ArrowBack, "返回设置") } }) }) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.primaryContainer) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Icon(Icons.Outlined.Security, null, tint = MaterialTheme.colorScheme.primary)
+                    Text("只有你的设备能解密", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                    Text("使用自己的缤纷云账号，待办、分组与备注在上传前完成端到端加密。", style = MaterialTheme.typography.bodyMedium)
+                    Text(state.syncStatus, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                }
             }
-            OutlinedTextField(draft.endpoint, { draft = draft.copy(endpoint = it) }, label = { Text("S3 Endpoint") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-            OutlinedTextField(draft.bucket, { draft = draft.copy(bucket = it) }, label = { Text("Bucket 名称") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-            OutlinedTextField(draft.region, { draft = draft.copy(region = it) }, label = { Text("Region") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("启用云同步", style = MaterialTheme.typography.titleMedium)
+                    Text("离线修改会在联网后自动重试", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(draft.enabled, { draft = draft.copy(enabled = it) }, enabled = !state.readOnly)
+            }
+            OutlinedTextField(draft.bucket, { draft = draft.copy(bucket = it) }, label = { Text("存储桶名称") }, supportingText = { Text("各设备填写相同的私有 Bucket") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
             SecretField("Access Key", draft.accessKey) { draft = draft.copy(accessKey = it) }
             SecretField("Secret Key", draft.secretKey) { draft = draft.copy(secretKey = it) }
+            TextButton(onClick = { advanced = !advanced }) { Text("服务地址与区域"); Icon(if (advanced) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null) }
+            if (advanced) {
+                OutlinedTextField(draft.endpoint, { draft = draft.copy(endpoint = it) }, label = { Text("S3 Endpoint") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(draft.region, { draft = draft.copy(region = it) }, label = { Text("Region") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            }
             HorizontalDivider()
             Text("恢复密钥", style = MaterialTheme.typography.titleMedium)
-            Text("已有同步空间：在此粘贴另一台设备的同一份 64 位十六进制密钥。首次使用：生成新密钥并妥善保存；遗失后无法解密云端资料。", style = MaterialTheme.typography.bodySmall)
-            SecretField("恢复密钥（64 位十六进制）", draft.recoveryKey) { draft = draft.copy(recoveryKey = it) }
+            Text("已有同步空间请粘贴另一台设备的密钥；首次使用可生成。密钥遗失后，无法从云端找回明文。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            SecretField("64 位十六进制恢复密钥", draft.recoveryKey) { draft = draft.copy(recoveryKey = it); copied = false }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = {
-                    if (draft.recoveryKey.isBlank()) draft = draft.copy(recoveryKey = store.generateRecoveryKey()) else regenerate = true
-                }) { Text("生成新密钥") }
+                OutlinedButton(onClick = { if (draft.recoveryKey.isBlank()) draft = draft.copy(recoveryKey = store.generateRecoveryKey()) else regenerate = true }) { Icon(Icons.Outlined.Key, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text("生成密钥") }
                 OutlinedButton(enabled = draft.recoveryKey.isNotBlank(), onClick = {
                     val clip = ClipData.newPlainText("Pindo 恢复密钥", draft.recoveryKey)
                     if (Build.VERSION.SDK_INT >= 33) clip.description.extras = PersistableBundle().apply { putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true) }
                     (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(clip)
-                }) { Text("复制密钥") }
+                    copied = true
+                }) { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text(if (copied) "已复制" else "复制密钥") }
             }
-            Text("前台约每 30 秒检查一次变化，修改后立即尝试上传；失败时自动退避。切到后台后不保证实时同步。修改标题或备注期间会暂缓拉取，避免打断编辑。", style = MaterialTheme.typography.bodySmall)
-            Text("请给同步凭据仅授予该私有桶的列举、读取和写入权限。不同设备使用相同 Bucket、Region 和恢复密钥。", style = MaterialTheme.typography.bodySmall)
+            Text("凭据和恢复密钥由 Android Keystore 加密保存在此设备，不会进入导出资料。前台约每 30 秒检查，后台不保证即时同步。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             (localError ?: state.error)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            Button(onClick = { if (store.saveSettings(draft)) onBack() else localError = "配置未保存，请检查输入和错误提示。" }, enabled = !state.readOnly, modifier = Modifier.fillMaxWidth()) { Text("保存同步设置") }
-            Text("本机资料：应用私有目录中的 data.json。当前版本不向 Android 系统备份凭据或待办。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Button(onClick = { if (store.saveSettings(draft)) onBack() else localError = "配置未保存，请检查输入和错误提示。" }, enabled = !state.readOnly, modifier = Modifier.fillMaxWidth().height(50.dp)) { Text(if (draft.enabled) "保存并连接" else "保存设置") }
+            if (state.syncEnabled) {
+                OutlinedButton(onClick = { store.requestSync(true) }, enabled = !state.syncing, modifier = Modifier.fillMaxWidth()) { Text(if (state.syncing) "正在同步…" else "立即同步") }
+                TextButton(onClick = { disconnect = true }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("断开同步", color = MaterialTheme.colorScheme.error) }
+            }
         }
     }
     if (regenerate) AlertDialog(onDismissRequest = { regenerate = false }, title = { Text("生成新的恢复密钥？") },
-        text = { Text("新密钥对应独立的同步空间。其他设备需要改用新密钥；旧密钥仍是解密旧空间所必需的。请先保留旧密钥。") },
-        confirmButton = { TextButton(onClick = { draft = draft.copy(recoveryKey = store.generateRecoveryKey()); regenerate = false }) { Text("生成新密钥") } },
-        dismissButton = { TextButton(onClick = { regenerate = false }) { Text("取消") } })
+        text = { Text("新密钥对应独立的同步空间。请先保留旧密钥，其他设备也需要改用新密钥。") },
+        confirmButton = { TextButton(onClick = { draft = draft.copy(recoveryKey = store.generateRecoveryKey()); regenerate = false }) { Text("生成新密钥") } }, dismissButton = { TextButton(onClick = { regenerate = false }) { Text("取消") } })
+    if (disconnect) AlertDialog(onDismissRequest = { disconnect = false }, title = { Text("断开云同步？") }, text = { Text("将清除本机连接凭据，保留本地事项和云端加密资料。重新连接需要原恢复密钥。") },
+        confirmButton = { TextButton(onClick = { if (store.saveSettings(CloudSettings())) { disconnect = false; onBack() } }) { Text("断开", color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { disconnect = false }) { Text("取消") } })
 }
 
 @Composable private fun SecretField(label: String, value: String, changed: (String) -> Unit) {
     var visible by remember { mutableStateOf(false) }
     OutlinedTextField(value, changed, modifier = Modifier.fillMaxWidth(), label = { Text(label) }, singleLine = true,
-        visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-        trailingIcon = { TextButton(onClick = { visible = !visible }) { Text(if (visible) "隐藏" else "显示") } })
+        visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        trailingIcon = { IconButton(onClick = { visible = !visible }) { Icon(if (visible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, if (visible) "隐藏$label" else "显示$label") } })
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable internal fun GroupDialog(store: AppStore, state: AppState, onDismiss: () -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var color by remember { mutableStateOf("#4477AA") }
-    val colors = listOf("#4477AA", "#EE6677", "#228833", "#CCBB44", "#66CCEE", "#AA3377", "#BBBBBB")
+    var editingID by rememberSaveable { mutableStateOf<String?>(null) }
+    var name by rememberSaveable { mutableStateOf("") }
+    var color by rememberSaveable { mutableStateOf("#4477AA") }
+    var deleting by remember { mutableStateOf<TodoGroup?>(null) }
+    val colors = listOf("#4477AA" to "青蓝", "#EE6677" to "珊瑚", "#228833" to "松绿", "#CCBB44" to "姜黄", "#66CCEE" to "天青", "#AA3377" to "紫红", "#BBBBBB" to "岩灰")
     DisposableEffect(Unit) { store.setEditing(true); onDispose { store.setEditing(false) } }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("管理分组") }, text = {
-        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            state.groups.forEach { group ->
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.surface) {
+            Column(Modifier.heightIn(max = 640.dp).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(14.dp).background(Color(group.color.toColorInt()), CircleShape))
-                    Text(group.name, Modifier.weight(1f).padding(horizontal = 10.dp))
-                    TextButton(onClick = { store.deleteGroup(group.id) }) { Text("删除") }
+                    Column(Modifier.weight(1f)) { Text("我的分组", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold); Text("用颜色整理不同的生活片段", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "关闭分组管理") }
                 }
+                state.groups.forEach { group ->
+                    Row(Modifier.fillMaxWidth().background(if (editingID == group.id) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow, RoundedCornerShape(14.dp)).padding(start = 12.dp, top = 5.dp, bottom = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(14.dp).background(Color(group.color.toColorInt()), CircleShape))
+                        Column(Modifier.weight(1f).padding(start = 10.dp)) { Text(group.name, style = MaterialTheme.typography.bodyMedium); Text("${state.tasks.count { it.groupID == group.id }} 条事项", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        IconButton(onClick = { editingID = group.id; name = group.name; color = group.color }, enabled = !state.readOnly) { Icon(Icons.Outlined.Edit, "修改${group.name}", Modifier.size(19.dp)) }
+                        IconButton(onClick = { deleting = group }, enabled = !state.readOnly) { Icon(Icons.Outlined.DeleteOutline, "删除${group.name}", Modifier.size(19.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    }
+                }
+                if (state.groups.isEmpty()) Text("还没有分组。先为工作或生活选一种颜色。", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                HorizontalDivider()
+                Text(if (editingID == null) "新建分组" else "编辑分组", style = MaterialTheme.typography.titleSmall)
+                OutlinedTextField(name, { name = it }, label = { Text("分组名称") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    colors.forEach { (hex, label) ->
+                        FilterChip(selected = color.equals(hex, true), onClick = { color = hex }, label = { Text(label) }, leadingIcon = { Box(Modifier.size(14.dp).background(Color(hex.toColorInt()), CircleShape)) })
+                    }
+                }
+                OutlinedTextField(color, { color = it }, label = { Text("自定义颜色 #RRGGBB") }, modifier = Modifier.fillMaxWidth(), singleLine = true, isError = !color.matches(Regex("#[0-9a-fA-F]{6}")))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    if (editingID != null) TextButton(onClick = { editingID = null; name = "" }) { Text("取消编辑") }
+                    Button(onClick = {
+                        val saved = editingID?.let { store.updateGroup(it, name, color) } ?: store.addGroup(name, color)
+                        if (saved) { editingID = null; name = "" }
+                    }, enabled = !state.readOnly && name.isNotBlank() && color.matches(Regex("#[0-9a-fA-F]{6}"))) { Text(if (editingID == null) "添加分组" else "保存修改") }
+                }
+                state.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
             }
-            Text("删除分组保留待办和备注。", style = MaterialTheme.typography.bodySmall)
-            OutlinedTextField(name, { name = it }, label = { Text("新分组名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            Row(Modifier.horizontalScroll(rememberScrollState())) {
-                colors.forEach { hex -> FilterChip(selected = color == hex, onClick = { color = hex }, label = { Box(Modifier.size(18.dp).background(Color(hex.toColorInt()), CircleShape)) }, modifier = Modifier.padding(end = 5.dp)) }
-            }
-            TextButton(onClick = { if (store.addGroup(name, color)) name = "" }, enabled = name.isNotBlank()) { Text("添加分组") }
-            state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }
-    }, confirmButton = { TextButton(onClick = onDismiss) { Text("完成") } })
+    }
+    deleting?.let { group -> AlertDialog(onDismissRequest = { deleting = null }, title = { Text("删除「${group.name}」？") }, text = { Text("分组中的事项和备注会保留，并移入未分组。") },
+        confirmButton = { TextButton(onClick = { if (store.deleteGroup(group.id)) { deleting = null; if (editingID == group.id) { editingID = null; name = "" } } }) { Text("删除分组") } }, dismissButton = { TextButton(onClick = { deleting = null }) { Text("取消") } }) }
 }

@@ -24,6 +24,8 @@ open dist/Pindo.app
 
 Android 在 [Build Android app](https://github.com/CodexSpaceSafe-Projects/pindo/actions/workflows/android.yml) 运行单元测试、lint 和构建。`main` 构建成功后，在 [Android 下载列表](https://github.com/CodexSpaceSafe-Projects/pindo/releases?q=android-build-&expanded=true) 自动发布 `Pindo Android (build 构建号)`，点击附件 `Pindo-Android-debug.apk` 即可直接下载，不需要 GitHub 登录或解压。Android 使用独立的 `android-build-构建号` 标签，不影响 macOS 的 Latest。安装包使用调试签名，尚未作为应用商店正式版本发布；最低 Android 8.0（API 26）。Actions 的 Artifacts 仍保留 14 天作为备用，需要 GitHub 登录。本地安装 JDK 17 和 Android SDK 35 后，在 `android/` 运行 `./gradlew testDebugUnitTest lintDebug assembleDebug`。
 
+Android 0.2 提供「清单／日历／管理／设置」四个页面，包括今日进度、月历计数、批量操作、Markdown 预览、主题切换、分组编辑与保护备份。[安卓使用说明](android/README.md)
+
 每次推送 `main` 或在 `main` 上手动运行 [Actions](https://github.com/CodexSpaceSafe-Projects/pindo/actions/workflows/macos.yml)，通过测试、编译和打包后，都会自动创建 [GitHub Release](https://github.com/CodexSpaceSafe-Projects/pindo/releases/latest)。无需手动打标签：自动发布的标签为 `build-构建编号`，标题为 `Pindo 版本号 (build 构建编号)`，并附上对应提交和构建记录。
 
 在 Release 中下载 `Pindo-版本号-macOS-universal.zip`，解压得到 `Pindo.app`；同时提供 `SHA256SUMS` 校验文件。应用兼容 Apple Silicon 和 Intel。每次成功构建保留独立 Release，最新构建会更新 Releases 的 Latest 下载入口。

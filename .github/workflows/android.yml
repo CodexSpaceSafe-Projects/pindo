@@ -46,6 +46,7 @@ jobs:
             android/app/build/reports/tests/
             android/app/build/reports/lint-results-debug.html
             android/app/build/reports/lint-results-debug.xml
+            android/app/build/reports/screenshots/
           if-no-files-found: ignore
           retention-days: 7
   release:
@@ -60,6 +61,10 @@ jobs:
         with:
           name: Pindo-Android-debug
           path: release-files
+      - uses: actions/download-artifact@v6
+        with:
+          name: Android-test-and-lint-reports
+          path: preview-files
       - name: Publish APK and checksum
         env:
           GH_TOKEN: ${{ github.token }}
@@ -79,6 +84,11 @@ jobs:
             gh release create "$release_tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
               --title "$title" --notes-file release-notes.md --prerelease --latest=false \
               "release-files/$APK_NAME" release-files/SHA256SUMS-Android
+          fi
+          shopt -s nullglob
+          previews=(preview-files/screenshots/*.png)
+          if (( ${#previews[@]} > 0 )); then
+            gh release upload "$release_tag" --repo "$GITHUB_REPOSITORY" --clobber "${previews[@]}"
           fi
           release_url=$(gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url)
           apk_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$release_tag/$APK_NAME"

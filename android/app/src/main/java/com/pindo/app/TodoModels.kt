@@ -31,6 +31,13 @@ internal fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { ge
 internal fun List<JSONObject>.jsonArray(): JSONArray = JSONArray().also { a -> forEach(a::put) }
 internal fun swiftNow(): Double = Instant.now().toEpochMilli() / 1000.0 - 978307200.0
 
+sealed class TodoBatchAction {
+    data class SetPhase(val phase: String) : TodoBatchAction()
+    data class SetGroup(val groupID: String?) : TodoBatchAction()
+    data class SetDay(val day: LocalDate) : TodoBatchAction()
+    data object Delete : TodoBatchAction()
+}
+
 object TodoRules {
     fun newTask(title: String, note: String, day: LocalDate, groupID: String?, parentID: String?, order: Int): JSONObject {
         require(title.isNotBlank()) { "请填写事项内容。" }
@@ -66,14 +73,66 @@ object TodoRules {
     }
 
     fun setPhase(tasks: JSONArray, id: String, phase: String): JSONArray {
-        require(phase in listOf("pending", "inProgress", "completed"))
+        return batch(tasks, setOf(id), TodoBatchAction.SetPhase(phase))
+    }
+
+    fun deletionIDs(tasks: List<Todo>, ids: Set<String>): Set<String> =
+        ids.flatMap { descendants(tasks, it.lowercase()) }.toSet()
+
+    /** Build and validate a candidate before publishing any selected change. */
+    fun batch(tasks: JSONArray, ids: Set<String>, action: TodoBatchAction): JSONArray {
         val items = tasks.objects().map { JSONObject(it.toString()) }
+        val selected = ids.map(String::lowercase).toSet()
         val parsed = items.map(Todo::from)
-        require(parsed.any { it.id == id }) { "找不到这条待办。" }
-        if (phase == "completed") require(parsed.filter { it.parentID == id }.all { it.phase == "completed" }) { "请先完成所有子项。" }
-        val target = items.first { it.getString("id").equals(id, true) }
-        setPhaseValue(target, phase)
-        return reconcile(items.jsonArray())
+        require(selected.all { id -> parsed.any { it.id == id } }) { "所选事项已发生变化，请重新选择。" }
+        if (selected.isEmpty()) return items.jsonArray()
+        when (action) {
+            TodoBatchAction.Delete -> {
+                val removed = deletionIDs(parsed, selected)
+                return reconcile(items.filter { it.getString("id").lowercase() !in removed }.jsonArray())
+            }
+            is TodoBatchAction.SetPhase -> {
+                require(action.phase in listOf("pending", "inProgress", "completed")) { "事项状态无效。" }
+                val byID = items.associateBy { it.getString("id").lowercase() }
+                val children = items.filter { it.optionalID("parentID") != null }.groupBy { it.optionalID("parentID")!! }
+                fun depth(item: Todo): Int {
+                    var parent = item.parentID
+                    val visited = mutableSetOf(item.id)
+                    var count = 0
+                    while (parent != null) {
+                        require(visited.add(parent)) { "待办层级存在循环。" }
+                        count++
+                        parent = byID[parent]?.optionalID("parentID")
+                    }
+                    return count
+                }
+                val dirty = mutableSetOf<String>()
+                for (task in parsed.sortedWith(compareByDescending<Todo>(::depth).thenBy { it.id })) {
+                    val item = byID.getValue(task.id)
+                    val before = item.getString("phase")
+                    if (task.id in dirty) reconcileNode(item, children[task.id].orEmpty())
+                    if (task.id in selected && item.getString("phase") != action.phase) {
+                        require(action.phase != "completed" || children[task.id].orEmpty().all { it.getString("phase") == "completed" }) {
+                            "请同时选择未完成的子项，或先完成所有子项。"
+                        }
+                        setPhaseValue(item, action.phase)
+                    }
+                    if (item.getString("phase") != before) task.parentID?.let(dirty::add)
+                }
+                return items.jsonArray()
+            }
+            is TodoBatchAction.SetGroup -> {
+                val now = swiftNow()
+                items.filter { it.getString("id").lowercase() in selected && it.optionalID("groupID") != action.groupID?.lowercase() }
+                    .forEach { it.put("groupID", action.groupID?.lowercase() ?: JSONObject.NULL).put("updatedAt", now) }
+            }
+            is TodoBatchAction.SetDay -> {
+                val now = swiftNow()
+                items.filter { it.getString("id").lowercase() in selected && Todo.from(it).day != action.day }
+                    .forEach { it.put("plannedDay", dayJSON(action.day)).put("updatedAt", now) }
+            }
+        }
+        return items.jsonArray()
     }
 
     fun reconcile(tasks: JSONArray): JSONArray {
@@ -83,15 +142,22 @@ object TodoRules {
             require(seen.add(id)) { "待办层级存在循环。" }
             val children = items.filter { it.optionalID("parentID") == id }
             children.forEach { visit(it.getString("id").lowercase(), seen) }
-            if (children.isNotEmpty()) {
-                val item = byID.getValue(id)
-                if (children.all { it.getString("phase") == "completed" }) setPhaseValue(item, "completed")
-                else if (item.getString("phase") == "completed") setPhaseValue(item, "pending")
-            }
+            reconcileNode(byID.getValue(id), children)
             seen.remove(id)
         }
         items.filter { it.optionalID("parentID") == null }.forEach { visit(it.getString("id").lowercase(), mutableSetOf()) }
         return items.jsonArray()
+    }
+
+    private fun reconcileNode(item: JSONObject, children: List<JSONObject>) {
+        if (children.isEmpty()) return
+        val phase = when {
+            children.all { it.getString("phase") == "completed" } -> "completed"
+            children.any { it.getString("phase") != "pending" } -> "inProgress"
+            item.getString("phase") == "completed" -> "pending"
+            else -> item.getString("phase")
+        }
+        setPhaseValue(item, phase)
     }
 
     private fun setPhaseValue(item: JSONObject, phase: String) {
