@@ -140,6 +140,9 @@ public struct PindoDocument: Codable, Equatable, Sendable {
     public var tasks: [TodoItem] = []
     public var groups: [TaskGroup] = [TaskGroup(name: "工作", colorHex: "#6D94C4"), TaskGroup(name: "生活", colorHex: "#C49A68")]
     public var preferences = Preferences()
+    /// Local replica metadata is saved atomically with tasks; never sent as a
+    /// document backup or used as another installation's identity.
+    public var syncState: SyncReplica? = nil
     public init() {}
 
     public func validated() throws -> Self {
@@ -157,6 +160,7 @@ public struct PindoDocument: Codable, Equatable, Sendable {
         guard preferences.quickAddHotkey.isValid, preferences.listHotkey.isValid,
               !preferences.quickAddHotkey.matches(preferences.listHotkey) else { throw PindoError.invalidHotkey }
         try validateTaskHierarchy()
+        _ = try syncState?.validated()
         return self
     }
 

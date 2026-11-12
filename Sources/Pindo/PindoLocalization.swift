@@ -43,6 +43,7 @@ struct PindoLocalization {
     }
 
     func error(_ error: Error) -> String {
+        if error is CloudSyncError || error is SyncTransportError { return self(error.localizedDescription) }
         if let failure = error as? HotkeyRegistrationError {
             switch failure {
             case .handlerUnavailable: return self("系统热键处理器未能启动。")

@@ -44,6 +44,8 @@ public final class PindoRepository {
     public var dataURL: URL { directory.appendingPathComponent("data.json") }
     public var backupURL: URL { directory.appendingPathComponent("Backups/snapshots.json") }
     public var journalURL: URL { directory.appendingPathComponent("recovery.json") }
+    public var syncState: SyncReplica? { document.syncState }
+    public var syncPayload: SyncPayload? { document.syncState?.payload }
     private let io: StorageIO
     private var backupIsReadable = true
     private var lastSnapshotState: JSONValue
@@ -94,7 +96,11 @@ public final class PindoRepository {
         guard !needsRecovery else { throw PindoError.recoveryRequired }
         var next = document
         try change(&next)
+        // A document replacement cannot adopt metadata belonging to an imported
+        // file or another device. Every ordinary commit retains this identity.
+        next.syncState = document.syncState
         _ = try next.validated()
+        try next.captureSyncChanges()
         try io.write(DocumentCodec.encode(next), to: dataURL)
         document = next; hasUnsavedChanges = false
     }
@@ -111,8 +117,41 @@ public final class PindoRepository {
     public func flush() throws {
         guard !needsRecovery else { throw PindoError.recoveryRequired }
         guard hasUnsavedChanges else { return }
-        try io.write(DocumentCodec.encode(document.validated()), to: dataURL)
+        var next = try document.validated()
+        try next.captureSyncChanges()
+        try io.write(DocumentCodec.encode(next), to: dataURL)
+        document = next
         hasUnsavedChanges = false
+    }
+
+    /// Call reset only when moving this local document into a different vault.
+    /// Existing replica identities remain stable through launches and retries.
+    public func enableSync(deviceID: UUID = UUID(), reset: Bool = false) throws {
+        guard !needsRecovery else { throw PindoError.recoveryRequired }
+        if document.syncState != nil && !reset { try flush(); return }
+        var next = document
+        next.syncState = SyncReplica(deviceID: deviceID)
+        try next.captureSyncChanges()
+        _ = try next.validated()
+        try io.write(DocumentCodec.encode(next), to: dataURL)
+        document = next; hasUnsavedChanges = false
+    }
+
+    /// Pending committed note edits are captured before merging. The new CRDT
+    /// and its projection are one data.json replacement, with no cursor window
+    /// in which a crash could turn stale data back into new local edits.
+    public func applySync(_ payload: SyncPayload) throws {
+        guard !needsRecovery else { throw PindoError.recoveryRequired }
+        _ = try payload.validated()
+        var next = document
+        guard next.syncState != nil else { throw PindoError.invalidData("请先配置同步") }
+        try next.captureSyncChanges()
+        let projection = try next.syncState!.merge(payload)
+        next.tasks = projection.tasks; next.groups = projection.groups
+        if let id = next.preferences.defaultGroupID, !next.groups.contains(where: { $0.id == id }) { next.preferences.defaultGroupID = nil }
+        _ = try next.validated()
+        if next != document || hasUnsavedChanges { try io.write(DocumentCodec.encode(next), to: dataURL) }
+        document = next; hasUnsavedChanges = false
     }
 
     @discardableResult public func captureIfChanged(now: Date = Date()) throws -> Bool {
@@ -133,7 +172,9 @@ public final class PindoRepository {
         guard !needsRecovery else { throw PindoError.recoveryRequired }
         guard backupIsReadable else { throw PindoError.corruptFile("snapshots.json") }
         try flush()
-        let target = try PindoDocument.fromSnapshot(archive.state(at: snapshotID))
+        var target = try PindoDocument.fromSnapshot(archive.state(at: snapshotID))
+        target.syncState = document.syncState
+        try target.captureSyncChanges()
         guard target != document else { return }
         let next = try protectedArchive(replacingWith: target, beforeLabel: "恢复前的保护快照", afterLabel: "恢复后的快照", now: now)
         let transaction = RecoveryTransaction(document: target, archive: next)
@@ -150,16 +191,26 @@ public final class PindoRepository {
     }
 
     /// Export current data or the verified backup. Export never rewrites the originals.
-    public func exportDocument() throws -> Data { try flush(); return try DocumentCodec.encode(document) }
+    public func exportDocument() throws -> Data {
+        try flush()
+        var exported = document; exported.syncState = nil
+        return try DocumentCodec.encode(exported)
+    }
     public func exportSnapshots() throws -> Data {
         guard let bytes = try io.read(backupURL) else { throw PindoError.corruptFile("snapshots.json") }
         return bytes
     }
     public func importDocument(_ data: Data) throws {
-        let imported = try DocumentCodec.decode(PindoDocument.self, from: data).validated()
+        // Ignore foreign replica state, even if malformed. Identity and causal
+        // history always belong to this installation, not to an imported file.
+        guard case .object(var values) = try DocumentCodec.decode(JSONValue.self, from: data) else { throw PindoError.invalidData("导入资料格式无效") }
+        values.removeValue(forKey: "syncState")
+        var imported = try DocumentCodec.decode(PindoDocument.self, from: DocumentCodec.encode(JSONValue.object(values))).validated()
         guard !needsRecovery else { throw PindoError.recoveryRequired }
         try flush()
         guard backupIsReadable else { throw PindoError.corruptFile("snapshots.json") }
+        imported.syncState = document.syncState
+        try imported.captureSyncChanges()
         let next = try protectedArchive(replacingWith: imported, beforeLabel: "导入前的保护快照", afterLabel: "导入后的快照")
         let transaction = RecoveryTransaction(document: imported, archive: next)
         try io.write(DocumentCodec.encode(transaction), to: journalURL)
@@ -181,5 +232,12 @@ public final class PindoRepository {
         // Compaction must retain the previous document before we journal a replacement.
         guard next.records.contains(where: { $0.id == protectionID }) else { throw PindoError.protectionSnapshotTooLarge }
         return next
+    }
+}
+
+private extension PindoDocument {
+    mutating func captureSyncChanges() throws {
+        guard syncState != nil else { return }
+        try syncState!.capture(tasks: tasks, groups: groups)
     }
 }

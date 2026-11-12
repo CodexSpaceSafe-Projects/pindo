@@ -124,6 +124,7 @@ import PindoCore
                 button.sendAction(on: [.leftMouseDown, .rightMouseUp])
             }
             updateLanguage(); apply(model.document.preferences); installDismissalObservers()
+            model.cloudSync.start()
             NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didWake), name: NSWorkspace.didWakeNotification, object: nil)
             NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didActivateApplication(_:)), name: NSWorkspace.didActivateApplicationNotification, object: nil)
         } catch {

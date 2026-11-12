@@ -43,6 +43,7 @@ enum SaveState { case saved, saving, failed }
         return pasteboard.setString(text, forType: .string)
     }
     private(set) var repository: PindoRepository
+    private(set) lazy var cloudSync = CloudSyncController(model: self)
     private let defaults: UserDefaults
     private var noteSave: Task<Void, Never>?
     private var draftSave: Task<Void, Never>?
@@ -124,11 +125,13 @@ enum SaveState { case saved, saving, failed }
         noteSave?.cancel()
         do {
             let previousDefault = document.preferences.defaultGroupID
+            let previousTasks = document.tasks, previousGroups = document.groups
             try repository.update(change)
             document = repository.document; saveState = .saved
             if groupFilter == .all && listEntryGroupID == previousDefault { listEntryGroupID = document.preferences.defaultGroupID }
             if let id = listEntryGroupID, group(id) == nil { resetListEntryGroup() }
             preferencesChanged(document.preferences)
+            if previousTasks != document.tasks || previousGroups != document.groups { cloudSync.documentDidChange() }
             return true
         } catch { saveState = .failed; notice = .failure(error); return false }
     }
@@ -145,8 +148,21 @@ enum SaveState { case saved, saving, failed }
     }
     @discardableResult func flush() -> Bool {
         noteSave?.cancel(); persistDrafts()
-        do { try repository.flush(); saveState = .saved; return true }
+        let hadChanges = repository.hasUnsavedChanges
+        do {
+            try repository.flush(); document = repository.document; saveState = .saved
+            if hadChanges { cloudSync.documentDidChange() }
+            return true
+        }
         catch { saveState = .failed; notice = .failure(error); return false }
+    }
+
+    func refreshAfterCloudSync() {
+        guard document != repository.document else { return }
+        document = repository.document; saveState = .saved
+        if case .group(let id) = groupFilter, group(id) == nil { groupFilter = .all }
+        if let id = listEntryGroupID, group(id) == nil { resetListEntryGroup() }
+        preferencesChanged(document.preferences)
     }
     func scheduleDraftSave() {
         draftSave?.cancel(); draftSave = Task { [weak self] in
@@ -372,6 +388,7 @@ enum SaveState { case saved, saving, failed }
             resetListEntryGroup()
             if case .group(let groupID) = groupFilter, group(groupID) == nil { groupFilter = .all }
             preferencesChanged(document.preferences); refreshSnapshots()
+            cloudSync.documentDidChange()
             if oldLogin != document.preferences.launchAtLogin { do { try configureLogin?(document.preferences.launchAtLogin) } catch { notice = .failure(error, context: "资料已恢复，但登录启动未更新：%@") } }
         } catch { notice = .failure(error); refreshSnapshots() }
     }
@@ -383,6 +400,7 @@ enum SaveState { case saved, saving, failed }
             let oldLogin = document.preferences.launchAtLogin
             document = repository.document; noteID = nil; editingID = nil; groupFilter = .all; saveState = .saved
             preferencesChanged(document.preferences); refreshSnapshots(); notice = nil
+            cloudSync.documentDidChange()
             if oldLogin != document.preferences.launchAtLogin { try configureLogin?(document.preferences.launchAtLogin) }
         } catch { notice = .failure(error) }
     }
@@ -409,6 +427,7 @@ enum SaveState { case saved, saving, failed }
             let oldLogin = document.preferences.launchAtLogin
             try repository.importDocument(Data(contentsOf: url)); document = repository.document; noteID = nil; editingID = nil; groupFilter = .all
             preferencesChanged(document.preferences); refreshSnapshots()
+            cloudSync.documentDidChange()
             if oldLogin != document.preferences.launchAtLogin { try configureLogin?(document.preferences.launchAtLogin) }
         } catch { notice = .failure(error) }
     }

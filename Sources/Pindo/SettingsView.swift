@@ -3,7 +3,7 @@ import AppKit
 import PindoCore
 import ServiceManagement
 
-enum SettingsSection: String, CaseIterable { case general = "通用", todos = "管理待办", groups = "分组", shortcuts = "快捷记录", backup = "备份与恢复" }
+enum SettingsSection: String, CaseIterable { case general = "通用", todos = "管理待办", groups = "分组", sync = "云同步", shortcuts = "快捷记录", backup = "备份与恢复" }
 
 struct SettingsView: View {
     @Environment(\.pindoLocalization) private var l10n
@@ -37,6 +37,7 @@ struct SettingsView: View {
                         case .general: general
                         case .todos: EmptyView()
                         case .groups: GroupsSettings(model: model)
+                        case .sync: SyncSettings(controller: model.cloudSync)
                         case .shortcuts: ShortcutSettings(model: model)
                         case .backup: BackupSettings(model: model)
                         }
