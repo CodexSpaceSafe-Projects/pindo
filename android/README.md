@@ -11,7 +11,7 @@ cd android
 ./gradlew testDebugUnitTest lintDebug assembleDebug
 ```
 
-APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。GitHub 的 `Build Android app` 工作流也会运行上述检查并提供 `Pindo-Android-debug` 安装包产物。Debug APK 用于试用，不是商店发行签名。
+APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。GitHub 的 `Build Android app` 工作流也会运行上述检查，并在 `main` 成功后发布到 [Android 下载列表](https://github.com/CodexSpaceSafe-Projects/pindo/releases?q=android-build-&expanded=true)。打开对应版本，点击附件 `Pindo-Android-debug.apk` 可直接下载，不需要 GitHub 登录或解压。每个版本附带 `SHA256SUMS-Android`。Actions 的 `Pindo-Android-debug` 产物仅作为需要登录、保留 14 天的备用入口。Debug APK 用于试用，不是商店发行签名。
 
 ## 缤纷云同步
 

@@ -48,3 +48,39 @@ jobs:
             android/app/build/reports/lint-results-debug.xml
           if-no-files-found: ignore
           retention-days: 7
+  release:
+    name: Publish Android download
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: android
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          name: Pindo-Android-debug
+          path: release-files
+      - name: Publish APK and checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APK_NAME: Pindo-Android-debug.apk
+        run: |
+          set -euo pipefail
+          mv release-files/app-debug.apk "release-files/$APK_NAME"
+          (cd release-files && sha256sum "$APK_NAME" > SHA256SUMS-Android)
+          release_tag="android-build-$GITHUB_RUN_NUMBER"
+          title="Pindo Android (build $GITHUB_RUN_NUMBER)"
+          printf 'Android debug APK for testing.\n\nCommit: `%s`\n\n[Build and test results](%s/%s/actions/runs/%s)\n' \
+            "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > release-notes.md
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$release_tag" --repo "$GITHUB_REPOSITORY" --clobber \
+              "release-files/$APK_NAME" release-files/SHA256SUMS-Android
+          else
+            gh release create "$release_tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "$title" --notes-file release-notes.md --prerelease --latest=false \
+              "release-files/$APK_NAME" release-files/SHA256SUMS-Android
+          fi
+          release_url=$(gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url)
+          apk_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$release_tag/$APK_NAME"
+          printf '### Android download\n\n[Download APK](%s) · [Release details](%s)\n' \
+            "$apk_url" "$release_url" >> "$GITHUB_STEP_SUMMARY"
