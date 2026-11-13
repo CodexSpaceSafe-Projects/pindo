@@ -29,7 +29,10 @@ final class TaskTitleEditorTests: XCTestCase {
         coordinator.publish(field)
         XCTAssertEqual(stored, "原事项中文")
 
-        field.stringValue = ""
+        // While editing, NSTextField reads its value from the shared field editor.
+        editor.insertText("", replacementRange: NSRange(location: 0, length: (editor.string as NSString).length))
+        XCTAssertEqual(editor.string, "")
+        field.stringValue = editor.string
         coordinator.publish(field)
         coordinator.synchronize(field)
         XCTAssertEqual(field.stringValue, "")
