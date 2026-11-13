@@ -106,6 +106,17 @@ public final class PindoRepository {
     }
 
     /// Only stages text in memory. AppModel coalesces disk writes after 600 ms.
+    public func stageTitle(taskID: UUID, text: String, now: Date = Date()) throws {
+        guard !needsRecovery else { throw PindoError.recoveryRequired }
+        guard let index = document.tasks.firstIndex(where: { $0.id == taskID }) else { throw PindoError.missingTask }
+        let title = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { throw PindoError.emptyTitle }
+        guard document.tasks[index].title != title else { return }
+        document.tasks[index].title = title; document.tasks[index].updatedAt = now
+        hasUnsavedChanges = true
+    }
+
+    /// Only stages text in memory. AppModel coalesces disk writes after 600 ms.
     public func stageNote(taskID: UUID, text: String, now: Date = Date()) throws {
         guard !needsRecovery else { throw PindoError.recoveryRequired }
         guard let index = document.tasks.firstIndex(where: { $0.id == taskID }) else { throw PindoError.missingTask }

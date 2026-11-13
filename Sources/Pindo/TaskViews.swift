@@ -230,6 +230,7 @@ struct NoteView: View {
     @ObservedObject var model: AppModel
     let task: TodoItem
     var onBack: (() -> Void)? = nil
+    private var title: Binding<String> { Binding(get: { model.task(task.id)?.title ?? task.title }, set: { model.updateTitle(task.id, text: $0) }) }
     private var note: Binding<String> { Binding(get: { model.task(task.id)?.note ?? "" }, set: { model.updateNote(task.id, text: $0) }) }
     private func back() {
         if let onBack {
@@ -242,7 +243,8 @@ struct NoteView: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(task.title).font(model.fontPreferences.task.swiftUIFont(defaultSize: 20, variant: .semibold)).lineLimit(2)
+                TaskTitleEditor(text: title, fontChoice: model.fontPreferences.task, onSubmit: { model.flush() })
+                    .help(l10n("事项内容"))
                 Text("\(model.group(task.groupID)?.name ?? l10n("未分组")) · \(task.plannedDay.date().formatted(.dateTime.month().day().locale(l10n.locale)))")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }.frame(maxWidth: .infinity, alignment: .leading).padding(18)

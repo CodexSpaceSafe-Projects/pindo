@@ -44,7 +44,7 @@ enum SaveState { case saved, saving, failed }
     private(set) var repository: PindoRepository
     private(set) lazy var cloudSync = CloudSyncController(model: self)
     private let defaults: UserDefaults
-    private var noteSave: Task<Void, Never>?
+    private var textSave: Task<Void, Never>?
     private var draftSave: Task<Void, Never>?
     private var snapshotTimer: Timer?
 
@@ -135,7 +135,7 @@ enum SaveState { case saved, saving, failed }
             let previousDefault = document.preferences.defaultGroupID
             let previousTasks = document.tasks, previousGroups = document.groups
             try repository.update(change)
-            noteSave?.cancel()
+            textSave?.cancel()
             document = repository.document; saveState = .saved
             if groupFilter == .all && listEntryGroupID == previousDefault { listEntryGroupID = document.preferences.defaultGroupID }
             if let id = listEntryGroupID, group(id) == nil { resetListEntryGroup() }
@@ -145,18 +145,28 @@ enum SaveState { case saved, saving, failed }
         } catch { saveState = .failed; notice = .failure(error); return false }
     }
 
+    func updateTitle(_ id: UUID, text: String) {
+        guard task(id)?.title != text.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+        do { try repository.stageTitle(taskID: id, text: text); document = repository.document; saveState = .saving }
+        catch { notice = .failure(error); return }
+        scheduleTextSave()
+    }
+
     func updateNote(_ id: UUID, text: String) {
         guard task(id)?.note != text else { return }
         do { try repository.stageNote(taskID: id, text: text); document = repository.document; saveState = .saving }
         catch { notice = .failure(error); return }
-        noteSave?.cancel()
-        noteSave = Task { [weak self] in
+        scheduleTextSave()
+    }
+    private func scheduleTextSave() {
+        textSave?.cancel()
+        textSave = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: 600_000_000) } catch { return }
             self?.flush()
         }
     }
     @discardableResult func flush() -> Bool {
-        noteSave?.cancel(); persistDrafts()
+        textSave?.cancel(); persistDrafts()
         let hadChanges = repository.hasUnsavedChanges
         do {
             try repository.flush()

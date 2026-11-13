@@ -97,6 +97,40 @@ final class PindoCoreTests: XCTestCase {
         XCTAssertEqual(reopened.archive.count, repo.archive.count)
     }
 
+    func testTitleAndNoteEditsCoalesceAndSurviveWriteFailure() throws {
+        let io = MemoryStorage(), repo = try PindoRepository(directory: directory, io: io, now: now)
+        var item = task()
+        item.note = "原备注"; item.groupID = repo.document.groups.first?.id
+        try repo.update { $0.tasks.append(item) }
+        try repo.enableSync()
+        let writes = io.writes.count, snapshots = repo.archive.count
+        let editedAt = now.addingTimeInterval(10)
+        try repo.stageTitle(taskID: item.id, text: "修改", now: editedAt)
+        try repo.stageTitle(taskID: item.id, text: "  修改后的事项 ✅  ", now: editedAt)
+        try repo.stageNote(taskID: item.id, text: "修改后的备注", now: editedAt)
+        var expected = item
+        expected.title = "修改后的事项 ✅"; expected.note = "修改后的备注"; expected.updatedAt = editedAt
+        XCTAssertEqual(repo.document.tasks.first, expected)
+        XCTAssertTrue(repo.hasUnsavedChanges)
+        XCTAssertEqual(io.writes.count, writes)
+        XCTAssertThrowsError(try repo.stageTitle(taskID: item.id, text: " \n "))
+        XCTAssertThrowsError(try repo.stageTitle(taskID: UUID(), text: "不存在"))
+        XCTAssertEqual(repo.document.tasks.first, expected)
+
+        io.failNextWriteTo = repo.dataURL
+        XCTAssertThrowsError(try repo.flush())
+        XCTAssertTrue(repo.hasUnsavedChanges)
+        XCTAssertEqual(repo.document.tasks.first, expected)
+        try repo.flush()
+        XCTAssertFalse(repo.hasUnsavedChanges)
+        XCTAssertEqual(io.writes.count, writes + 1)
+        XCTAssertEqual(repo.archive.count, snapshots)
+        let reopened = try PindoRepository(directory: directory, io: io, now: now)
+        XCTAssertEqual(reopened.document.tasks.first, expected)
+        let key = "task:\(item.id.uuidString.lowercased())"
+        XCTAssertEqual(reopened.syncPayload?.records[key]?.fields["title"]?.value, .string(expected.title))
+    }
+
     func testFailedPrimaryWriteKeepsDocumentAndUnsavedNoteCanRetry() throws {
         let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
         let before = repo.document

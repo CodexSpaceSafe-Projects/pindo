@@ -167,6 +167,14 @@ struct NoteEditor: NSViewRepresentable {
             // include input-method candidates, menus and popovers, so ignore them.
             let contentPoint = content.convert(event.locationInWindow, from: nil)
             guard content.bounds.insetBy(dx: 7, dy: 7).contains(contentPoint) else { return false }
+            var hit = content.hitTest(contentPoint)
+            while let view = hit {
+                if view is TaskTitleTextField { return false }
+                hit = view.superview
+            }
+            // AppKit installs the title's shared field editor outside the field hierarchy.
+            if let fieldEditor = content.hitTest(contentPoint) as? NSTextView,
+               fieldEditor.isFieldEditor, (fieldEditor.delegate as AnyObject?) is TaskTitleTextField { return false }
             return !scroll.bounds.contains(scroll.convert(event.locationInWindow, from: nil))
         }
         func removeOutsideMonitor() {

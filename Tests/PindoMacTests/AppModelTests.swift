@@ -90,6 +90,35 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.repository.archive.count, snapshots + 1)
     }
 
+    @MainActor func testNotePageAutosavesTitleAndNoteWithoutChangingTaskMetadata() async throws {
+        let model = try makeModel()
+        defer { try? FileManager.default.removeItem(at: model.repository.directory) }
+        let group = model.document.groups.first?.id
+        XCTAssertTrue(model.addTask(title: "原事项", note: "原备注", day: DayKey().adding(days: 2), groupID: group))
+        let task = try XCTUnwrap(model.document.tasks.first)
+        let snapshots = model.repository.archive.count
+        model.updateTitle(task.id, text: "  修改后的事项  ")
+        model.updateNote(task.id, text: "修改后的备注")
+        // Invalid drafts must not cancel pending valid text saves.
+        model.updateTitle(task.id, text: " \n ")
+        XCTAssertTrue(model.repository.hasUnsavedChanges)
+        try await Task.sleep(nanoseconds: 850_000_000)
+        XCTAssertFalse(model.repository.hasUnsavedChanges)
+        XCTAssertEqual(model.repository.archive.count, snapshots)
+        var expected = task
+        expected.title = "修改后的事项"; expected.note = "修改后的备注"
+        expected.updatedAt = try XCTUnwrap(model.task(task.id)).updatedAt
+        let reopened = try PindoRepository(directory: model.repository.directory)
+        XCTAssertEqual(reopened.document.tasks.first, expected)
+
+        model.noteID = task.id
+        model.updateTitle(task.id, text: "返回前的修改")
+        model.leaveNote()
+        XCTAssertNil(model.noteID)
+        XCTAssertFalse(model.repository.hasUnsavedChanges)
+        XCTAssertEqual(try PindoRepository(directory: model.repository.directory).document.tasks.first?.title, "返回前的修改")
+    }
+
     @MainActor func testInvalidTaskEditDoesNotCancelPendingNoteAutosave() async throws {
         let model = try makeModel(), day = DayKey()
         XCTAssertTrue(model.addTask(title: "备注", day: day, groupID: nil))
@@ -860,6 +889,10 @@ final class AppModelTests: XCTestCase {
         }
         XCTAssertFalse(coordinator.isOutsideEditor(click(NSPoint(x: 200, y: 250)), scroll: scroll))
         XCTAssertTrue(coordinator.isOutsideEditor(click(NSPoint(x: 200, y: 550)), scroll: scroll))
+        let title = TaskTitleTextField(frame: NSRect(x: 20, y: 520, width: 460, height: 40))
+        window.contentView?.addSubview(title)
+        XCTAssertFalse(coordinator.isOutsideEditor(click(NSPoint(x: 200, y: 540)), scroll: scroll))
+        XCTAssertFalse(coordinator.isOutsideEditor(click(NSPoint(x: 22, y: 540)), scroll: scroll))
         XCTAssertTrue(coordinator.isOutsideEditor(click(NSPoint(x: 200, y: 30)), scroll: scroll))
         XCTAssertFalse(coordinator.isOutsideEditor(click(NSPoint(x: 2, y: 250)), scroll: scroll))
         XCTAssertFalse(coordinator.isOutsideEditor(click(NSPoint(x: 200, y: 550), windowNumber: other.windowNumber), scroll: scroll))
