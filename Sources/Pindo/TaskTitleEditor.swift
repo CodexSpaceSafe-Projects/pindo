@@ -28,15 +28,18 @@ struct TaskTitleEditor: NSViewRepresentable {
 
     func updateNSView(_ field: TaskTitleTextField, context: Context) {
         context.coordinator.parent = self
-        field.font = fontChoice.font(defaultSize: 20, variant: .semibold)
-        field.textColor = .labelColor
+        if (field.currentEditor() as? NSTextView)?.hasMarkedText() != true {
+            let font = fontChoice.font(defaultSize: 20, variant: .semibold)
+            if field.font != font { field.font = font }
+            if field.textColor != .labelColor { field.textColor = .labelColor }
+        }
         field.placeholderString = l10n("事项内容")
         field.setAccessibilityLabel(l10n("事项内容"))
         context.coordinator.synchronize(field)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: TaskTitleTextField, context: Context) -> NSSize? {
-        guard let width = proposal.width, let cell = nsView.cell else { return nil }
+        guard let width = proposal.width, width.isFinite, let cell = nsView.cell else { return nil }
         let size = cell.cellSize(forBounds: NSRect(x: 0, y: 0, width: width, height: .greatestFiniteMagnitude))
         return NSSize(width: width, height: max(26, size.height))
     }
