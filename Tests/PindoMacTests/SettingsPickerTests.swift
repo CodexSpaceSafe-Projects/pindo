@@ -111,7 +111,7 @@ final class SettingsPickerTests: XCTestCase {
         colorCoordinator.chooseGroupColor(colorButton); fontCoordinator.chooseFontFamily(fontButton)
         XCTAssertFalse(NSColorPanel.shared.isVisible); XCTAssertEqual(family, "Menlo")
         colorButton.isHidden = false; fontButton.isHidden = false
-        window.beginSheet(sheet)
+        window.beginSheet(sheet, completionHandler: nil)
         try await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertNotNil(window.attachedSheet)
         XCTAssertFalse(colorButton.canSendSettingsAction); XCTAssertFalse(fontButton.canSendSettingsAction)
