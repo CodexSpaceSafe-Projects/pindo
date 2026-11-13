@@ -18,6 +18,7 @@ struct GroupSelectionMenu: View {
     @Environment(\.pindoLocalization) private var l10n
     let groups: [TaskGroup]
     @Binding var selection: UUID?
+    var accessibilityName: String? = nil
     private var selected: TaskGroup? { groups.first { $0.id == selection } }
     var body: some View {
         Menu {
@@ -35,7 +36,7 @@ struct GroupSelectionMenu: View {
                 .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 7))
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(.primary.opacity(0.12)))
         }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-            .accessibilityLabel(l10n("新待办分组：%@", selected?.name ?? l10n("未分组")))
+            .accessibilityLabel(accessibilityName ?? l10n("新待办分组：%@", selected?.name ?? l10n("未分组")))
     }
 }
 

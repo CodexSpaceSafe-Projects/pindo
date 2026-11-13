@@ -92,7 +92,7 @@ private struct FontSettingsGroup: View {
     }
 }
 
-private struct FontFamilyPicker: NSViewRepresentable {
+struct FontFamilyPicker: NSViewRepresentable {
     @Environment(\.pindoLocalization) private var l10n
     let label: String
     let defaultLabel: String
@@ -102,36 +102,42 @@ private struct FontFamilyPicker: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeNSView(context: Context) -> NSPopUpButton {
-        let button = NSPopUpButton(frame: .zero, pullsDown: false)
-        button.target = context.coordinator
-        button.action = #selector(Coordinator.choose(_:))
+    func makeNSView(context: Context) -> FontFamilyPopUpButton {
+        let button = FontFamilyPopUpButton(frame: .zero, pullsDown: false)
         button.menu?.autoenablesItems = false
-        NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coordinator.prepareMenu(_:)),
+        NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coordinator.prepareFontFamilyMenu(_:)),
             name: NSPopUpButton.willPopUpNotification, object: button)
         return button
     }
 
-    func updateNSView(_ button: NSPopUpButton, context: Context) {
+    func updateNSView(_ button: FontFamilyPopUpButton, context: Context) {
         context.coordinator.update(self, button: button)
     }
 
-    static func dismantleNSView(_ button: NSPopUpButton, coordinator: Coordinator) {
+    static func dismantleNSView(_ button: FontFamilyPopUpButton, coordinator: Coordinator) {
         NotificationCenter.default.removeObserver(coordinator, name: NSPopUpButton.willPopUpNotification, object: button)
+        coordinator.detach(button)
     }
 
     @MainActor final class Coordinator: NSObject {
         private var picker: FontFamilyPicker?
+        private weak var button: FontFamilyPopUpButton?
+        private weak var renderedMenu: NSMenu?
         private var displayedFamily: String?
         private var displayedTitle: String?
+        private static let systemFontTag = 1
+        private static let familyFontTag = 2
 
-        fileprivate func update(_ picker: FontFamilyPicker, button: NSPopUpButton) {
-            self.picker = picker
+        func update(_ picker: FontFamilyPicker, button: FontFamilyPopUpButton) {
+            self.picker = picker; self.button = button
+            button.target = self; button.action = #selector(chooseFontFamily(_:))
             button.setAccessibilityLabel(picker.label)
             button.isEnabled = picker.options != nil
             let family = picker.selection
             let title = title(for: family, in: picker)
-            guard title != displayedTitle || family != displayedFamily, let menu = button.menu else { return }
+            guard title != displayedTitle || family != displayedFamily || renderedMenu !== button.menu,
+                  let menu = button.menu else { return }
+            renderedMenu = menu
             displayedTitle = title
             displayedFamily = family
             menu.removeAllItems()
@@ -140,9 +146,10 @@ private struct FontFamilyPicker: NSViewRepresentable {
         }
 
         // 字体名称由后台读取，只有展开菜单时才创建菜单项。
-        @objc func prepareMenu(_ notification: Notification) {
+        @objc func prepareFontFamilyMenu(_ notification: Notification) {
             guard let picker, let options = picker.options,
-                  let button = notification.object as? NSPopUpButton, let menu = button.menu else { return }
+                  let button, notification.object as AnyObject? === button, button.canSendSettingsAction,
+                  let menu = renderedMenu, button.menu === menu else { return }
             menu.removeAllItems()
             addItem(to: menu, title: picker.defaultLabel, family: nil)
             let available = options.filter { $0.id != picker.excludedFamily }
@@ -165,12 +172,26 @@ private struct FontFamilyPicker: NSViewRepresentable {
         private func addItem(to menu: NSMenu, title: String, family: String?) {
             let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             item.representedObject = family
+            item.tag = family == nil ? Self.systemFontTag : Self.familyFontTag
             menu.addItem(item)
         }
 
-        @objc func choose(_ button: NSPopUpButton) {
-            guard let picker, let selected = button.selectedItem else { return }
-            let family = selected.representedObject as? String
+        func detach(_ button: FontFamilyPopUpButton) {
+            guard self.button === button else { return }
+            button.menu?.cancelTrackingWithoutAnimation()
+            button.target = nil; button.action = nil
+            picker = nil; self.button = nil; renderedMenu = nil
+        }
+
+        @objc func chooseFontFamily(_ sender: NSPopUpButton) {
+            guard let picker, let button, sender === button, button.canSendSettingsAction,
+                  let menu = renderedMenu, button.menu === menu,
+                  let selected = button.selectedItem, menu.items.contains(where: { $0 === selected }) else { return }
+            let family: String?
+            if selected.tag == Self.systemFontTag, selected.representedObject == nil { family = nil }
+            else if selected.tag == Self.familyFontTag, let value = selected.representedObject as? String,
+                    picker.options?.contains(where: { $0.id == value && $0.id != picker.excludedFamily }) == true { family = value }
+            else { return }
             if picker.selection != family { picker.selection = family }
         }
     }

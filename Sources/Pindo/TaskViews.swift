@@ -276,7 +276,11 @@ struct EditTaskView: View {
             TextField(l10n("事项内容"), text: $title)
                 .font(model.fontPreferences.task.swiftUIFont(defaultSize: 13)).onSubmit(save)
             DatePicker(l10n("计划日期"), selection: $day, displayedComponents: .date)
-            Picker(l10n("分组"), selection: $groupID) { Text(l10n("未分组")).tag(UUID?.none); ForEach(model.document.groups) { Text($0.name).tag(Optional($0.id)) } }
+            HStack {
+                Text(l10n("分组"))
+                Spacer()
+                GroupSelectionMenu(groups: model.document.groups, selection: $groupID, accessibilityName: l10n("分组"))
+            }
             if let metadata = model.metadata(for: task.id) {
                 TaskMetadataView(metadata: metadata) { model.copyTaskMetadata(task.id) }
             }
