@@ -5,6 +5,85 @@ import MarkdownEngine
 @testable import Pindo
 
 final class NoteEditorTests: XCTestCase {
+    @MainActor func testChineseCompositionAddsBoundarySpacingAfterCommitWithoutChangingTheSource() async throws {
+        let editor = try await NoteEditorHarness.make("中文abc")
+        defer { editor.close() }
+        let view = editor.view
+        XCTAssertTrue(editor.window.makeFirstResponder(view))
+        view.setSelectedRange(NSRange(location: 5, length: 0))
+        view.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        let composing = NSAttributedString(attributedString: try XCTUnwrap(view.textStorage))
+        editor.bridge.applyTypography()
+        XCTAssertTrue(try XCTUnwrap(view.textStorage).isEqual(to: composing))
+        XCTAssertEqual(editor.buffer.text, "中文abc")
+        view.insertText("中", replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.unmarkText()
+        await editor.settle()
+        XCTAssertEqual(editor.buffer.text, "中文abc中")
+        XCTAssertGreaterThan((view.textStorage?.attribute(.kern, at: 4, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0, 0)
+    }
+
+    @MainActor func testSpacingIsStableBeforeLayoutWhileTypingOrMovingTheCaret() async throws {
+        // Mirrors the recording: editing a numeric line must not make the
+        // preceding OpenWRT line alternate between spaced and unspaced widths.
+        let source = "第一段保持不变：\n示例中的OpenWRT文字\n中文前缀也是OpenWRT正文\n321123321123"
+        let editor = try await NoteEditorHarness.make(source)
+        defer { editor.close() }
+        let view = editor.view, storage = try XCTUnwrap(editor.view.textStorage)
+        XCTAssertTrue(editor.window.makeFirstResponder(view))
+        let beforeLatin = (source as NSString).range(of: "是OpenWRT").location
+        let afterLatin = (source as NSString).range(of: "T正文").location
+        let anchors = [beforeLatin, afterLatin]
+        let baseline = anchors.map { (storage.attribute(.kern, at: $0, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0 }
+        XCTAssertTrue(baseline.allSatisfy { $0 > 0 })
+        view.textLayoutManager?.ensureLayout(for: try XCTUnwrap(view.textLayoutManager).documentRange)
+        let bounds = view.firstRect(forCharacterRange: NSRange(location: afterLatin + 1, length: 1), actualRange: nil)
+        XCTAssertGreaterThan(bounds.width, 0)
+        var unspacedPasses = 0
+        let observer = NotificationCenter.default.addObserver(forName: NSTextStorage.didProcessEditingNotification, object: storage, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                let current = anchors.map { (storage.attribute(.kern, at: $0, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0 }
+                if current != baseline { unspacedPasses += 1 }
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        for digit in ["3", "2", "1", "1", "2", "3"] {
+            view.setSelectedRange(NSRange(location: (view.string as NSString).length, length: 0))
+            view.insertText(digit, replacementRange: NSRange(location: NSNotFound, length: 0))
+            // Assert immediately, before an async correction could hide a flash.
+            XCTAssertEqual(anchors.map { (storage.attribute(.kern, at: $0, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0 }, baseline)
+            let rect = view.firstRect(forCharacterRange: NSRange(location: afterLatin + 1, length: 1), actualRange: nil)
+            XCTAssertEqual(rect.minX, bounds.minX, accuracy: 0.1)
+            view.setSelectedRange(NSRange(location: (view.string as NSString).length - 2, length: 0))
+            await editor.settle()
+        }
+        XCTAssertEqual(unspacedPasses, 0)
+        XCTAssertEqual(editor.buffer.text, source + "321123")
+        XCTAssertNotNil(view.textLayoutManager)
+    }
+
+    @MainActor func testRemovingAScriptBoundaryImmediatelyClearsOnlyItsSpacingAndKeepsUndo() async throws {
+        let source = "你好abc再见"
+        let editor = try await NoteEditorHarness.make(source)
+        defer { editor.close() }
+        let view = editor.view, storage = try XCTUnwrap(editor.view.textStorage)
+        XCTAssertTrue(editor.window.makeFirstResponder(view))
+        let undo = try XCTUnwrap(view.undoManager)
+        undo.removeAllActions()
+        view.setSelectedRange(NSRange(location: 2, length: 0))
+        view.insertText(" ", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual((storage.attribute(.kern, at: 1, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0, 0)
+        XCTAssertEqual(view.selectedRange(), NSRange(location: 3, length: 0))
+        await editor.settle()
+        XCTAssertEqual(editor.buffer.text, "你好 abc再见")
+        view.breakUndoCoalescing()
+        XCTAssertTrue(undo.canUndo)
+        undo.undo()
+        XCTAssertGreaterThan((storage.attribute(.kern, at: 1, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0, 0)
+        await editor.settle()
+        XCTAssertEqual(editor.buffer.text, source)
+    }
+
     @MainActor func testRealEngineUsesTextKit2AndStylesMarkdownWithoutChangingStoredSource() async throws {
         let source = "# Heading\n\n**Bold** and ~~gone~~ and `code`\n\n- [ ] Task\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n正文"
         let editor = try await NoteEditorHarness.make(source)

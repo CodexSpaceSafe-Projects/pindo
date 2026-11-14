@@ -3,7 +3,7 @@ import Foundation
 /// UTF-16 ranges of graphemes that need extra advance before the next visible
 /// grapheme. The source, including existing whitespace, is never rewritten.
 public enum MixedScriptSpacing {
-    public static let em = 0.25
+    public static let em = 0.125
 
     public static func kerningRanges(in text: String, hidden: [NSRange] = [], verbatim: [NSRange] = []) -> [NSRange] {
         let hidden = hidden.sorted { $0.location < $1.location }
