@@ -2,7 +2,7 @@ import AppKit
 import CoreText
 
 @MainActor enum NoteTypography {
-    static func applyFallback(to storage: NSTextStorage, range: NSRange, choice: PindoFontChoice) {
+    static func applyFallback(to storage: NSMutableAttributedString, range: NSRange, choice: PindoFontChoice) {
         guard let family = choice.fallbackFamily, range.length > 0 else { return }
         storage.enumerateAttribute(.font, in: range) { value, run, _ in
             guard let font = value as? NSFont, font.pointSize >= 1 else { return }

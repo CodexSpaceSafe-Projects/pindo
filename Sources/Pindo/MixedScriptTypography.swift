@@ -46,8 +46,16 @@ import PindoCore
             styled.addAttributes([.kern: spaced, appliedKern: spaced, originalKern: base ?? NSNull()], range: target)
         }
 
-        // Write only runs whose final attributes differ. Reapplying spacing to
-        // unchanged text is a true no-op, including TextKit invalidation.
+        return applyDifferences(from: original, to: styled, in: text, offset: range.location)
+    }
+
+    /// Transfer final attributes without exposing intermediate font/spacing
+    /// passes. A native IME's marked range is owned entirely by AppKit.
+    @discardableResult static func applyDifferences(from original: NSAttributedString, to styled: NSAttributedString,
+                                                    in text: NSMutableAttributedString, offset base: Int,
+                                                    excluding marked: NSRange? = nil) -> Bool {
+        let whole = NSRange(location: 0, length: styled.length)
+        // Reapplying unchanged text is a true no-op, including invalidation.
         var offset = 0, changed = false
         while offset < whole.length {
             var oldRun = NSRange(), newRun = NSRange()
@@ -55,8 +63,21 @@ import PindoCore
             let after = styled.attributes(at: offset, effectiveRange: &newRun)
             let end = min(NSMaxRange(oldRun), NSMaxRange(newRun))
             if !NSDictionary(dictionary: before).isEqual(to: after) {
-                text.setAttributes(after, range: NSRange(location: range.location + offset, length: end - offset))
-                changed = true
+                let run = NSRange(location: base + offset, length: end - offset)
+                var writable = [run]
+                if let marked, NSIntersectionRange(run, marked).length > 0 {
+                    writable = []
+                    if run.location < marked.location {
+                        writable.append(NSRange(location: run.location, length: marked.location - run.location))
+                    }
+                    if NSMaxRange(marked) < NSMaxRange(run) {
+                        writable.append(NSRange(location: NSMaxRange(marked), length: NSMaxRange(run) - NSMaxRange(marked)))
+                    }
+                }
+                for range in writable {
+                    text.setAttributes(after, range: range)
+                    changed = true
+                }
             }
             offset = end
         }
