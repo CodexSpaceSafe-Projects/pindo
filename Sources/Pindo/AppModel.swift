@@ -61,9 +61,15 @@ enum SaveState { case saved, saving, failed }
         return token
     }
 
-    func releaseSyncEditing(_ token: UUID) {
+    func releaseSyncEditing(_ token: UUID, deferNotifications: Bool = false) {
         guard syncEditingLeases.removeValue(forKey: token) != nil else { return }
-        cloudSync.editingDidEnd()
+        if deferNotifications {
+            // Native representable teardown can run inside SwiftUI graph
+            // invalidation. Release the resource now, publish after that stack.
+            DispatchQueue.main.async { [weak self] in self?.cloudSync.editingDidEnd() }
+        } else {
+            cloudSync.editingDidEnd()
+        }
     }
 
     init(directory: URL, defaults: UserDefaults = .standard) throws {

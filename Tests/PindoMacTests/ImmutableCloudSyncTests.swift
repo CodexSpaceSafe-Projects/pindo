@@ -124,11 +124,17 @@ final class ImmutableCloudSyncTests: XCTestCase {
         let item = TodoItem(title: "Durable pending upload")
         try repository.update { $0.tasks.append(item) }
         let transport = MemoryCloudTransport(); transport.loseNextUploadResponses = 1
+        // A lost PUT response alone is recoverable through exact GET read-back.
+        // Keep that confirmation unavailable too, making the outcome truly unknown.
+        transport.beforeDownload = { key in
+            if key.contains("/objects/") { throw SyncTransportError.networkUnavailable }
+        }
         do { _ = try await round(repository, transport); XCTFail("The unknown upload outcome must remain pending") }
         catch { XCTAssertEqual(error as? SyncTransportError, .networkUnavailable) }
         let frozen = try XCTUnwrap(repository.syncSession?.pendingObject)
         XCTAssertEqual(transport.objects[frozen.key], frozen.data)
         XCTAssertEqual(try PindoRepository(directory: repository.directory).syncSession?.pendingObject, frozen)
+        transport.beforeDownload = nil
         let complete = try await round(repository, transport)
         XCTAssertTrue(complete)
         XCTAssertEqual(transport.immutableUploads.count, 2)
@@ -136,6 +142,26 @@ final class ImmutableCloudSyncTests: XCTestCase {
         XCTAssertEqual(transport.immutableUploads[0].data, transport.immutableUploads[1].data)
         XCTAssertNil(repository.syncSession?.pendingObject)
         XCTAssertEqual(repository.document.tasks.first?.id, item.id)
+    }
+
+    @MainActor func testLostPutResponseIsAcknowledgedOnlyAfterSuccessfulExactReadBack() async throws {
+        let (repository, cleanup) = try makeRepository()
+        defer { cleanup() }
+        let item = TodoItem(title: "Confirmed despite lost PUT response")
+        try repository.update { $0.tasks.append(item) }
+        let transport = MemoryCloudTransport(); transport.loseNextUploadResponses = 1
+        let complete = try await round(repository, transport)
+        XCTAssertTrue(complete)
+        XCTAssertEqual(transport.immutableUploads.count, 1)
+        let uploaded = try XCTUnwrap(transport.immutableUploads.first)
+        XCTAssertTrue(transport.downloads.contains(uploaded.key))
+        XCTAssertEqual(transport.objects[uploaded.key], uploaded.data)
+        XCTAssertNil(repository.syncSession?.pendingObject)
+        XCTAssertEqual(repository.syncSession?.acknowledgedObjectKey, uploaded.key)
+        let reopened = try PindoRepository(directory: repository.directory)
+        XCTAssertNil(reopened.syncSession?.pendingObject)
+        XCTAssertEqual(reopened.syncSession?.acknowledgedObjectKey, uploaded.key)
+        XCTAssertEqual(reopened.document.tasks.first?.id, item.id)
     }
 
     @MainActor func testEditsDuringEachUploadCannotBeClearedByAnOlderAcknowledgement() async throws {

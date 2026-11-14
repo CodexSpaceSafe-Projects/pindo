@@ -281,4 +281,61 @@ final class SyncEditingTests: XCTestCase {
         XCTAssertNotNil(reopened.contentView)
         XCTAssertFalse(model.isSyncEditing)
     }
+
+    @MainActor func testDestroyingTheHostingGraphReleasesItsLeaseBeforeAReplacementDraft() async throws {
+        let (model, cleanup) = try makeModel()
+        defer { cleanup() }
+        _ = NSApplication.shared
+        XCTAssertTrue(model.addTask(title: "Teardown draft", note: "Committed", day: model.today, groupID: nil))
+        let task = try XCTUnwrap(model.document.tasks.first)
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 500, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        weak var destroyedHost: NSHostingView<NoteView>?
+        func install() {
+            let nativeHost = NSHostingView(rootView: NoteView(model: model, task: task))
+            destroyedHost = nativeHost; window.contentView = nativeHost
+        }
+        install(); window.orderFrontRegardless()
+        defer { window.orderOut(nil); window.contentView = nil }
+        try await waitUntil {
+            window.contentView.map { self.find(ComposingTextView.self, in: $0) != nil } ?? false
+        }
+        XCTAssertTrue(model.isSyncEditing)
+        // Keep the window alive while forcing NSHostingView/GraphHost deinit.
+        window.contentView = nil
+        try await waitUntil { destroyedHost == nil }
+        XCTAssertFalse(model.isSyncEditing)
+        let replacement = try XCTUnwrap(model.acquireSyncEditing(taskID: task.id))
+        await Task.yield()
+        XCTAssertTrue(model.isSyncEditing, "A queued callback from the old graph must not release the new draft")
+        model.releaseSyncEditing(replacement)
+        XCTAssertFalse(model.isSyncEditing)
+    }
+
+    @MainActor func testStaleNativeMountCallbacksCannotReleaseOrReacquireANewerTaskResource() async throws {
+        let (model, cleanup) = try makeModel()
+        defer { cleanup() }
+        let firstTask = UUID(), secondTask = UUID()
+        let lease = SyncEditingLease(model: model, taskID: firstTask)
+        let oldMount = UUID(), replacementMount = UUID()
+        lease.attach(oldMount, model: model, taskID: firstTask)
+        lease.visibilityChanged(true, owner: oldMount)
+        XCTAssertTrue(lease.isGranted)
+        lease.attach(replacementMount, model: model, taskID: secondTask)
+        XCTAssertFalse(lease.isGranted)
+        XCTAssertTrue(lease.matches(model: model, taskID: secondTask))
+        lease.visibilityChanged(true, owner: replacementMount)
+        lease.detach(oldMount)
+        lease.visibilityChanged(false, owner: oldMount)
+        XCTAssertNil(model.acquireSyncEditing(taskID: secondTask))
+        let availableFirstTask = try XCTUnwrap(model.acquireSyncEditing(taskID: firstTask))
+        model.releaseSyncEditing(availableFirstTask)
+        XCTAssertTrue(model.isSyncEditing)
+        lease.detach(replacementMount)
+        XCTAssertFalse(model.isSyncEditing)
+        lease.visibilityChanged(true, owner: replacementMount)
+        await Task.yield()
+        XCTAssertFalse(model.isSyncEditing, "A detached mount cannot reactivate itself")
+    }
 }
