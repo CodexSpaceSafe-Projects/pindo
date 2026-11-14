@@ -243,6 +243,7 @@ test('recovery requires maintenance, preserves old prefix under a lease and gate
  const info=await request('info');assert.equal(info.body.epoch,next);assert.equal(info.body.recoveryHead,2);assert.equal(info.body.head,0);
  assert.equal((await request('push',{...body(2),epoch:next})).body.error.code,'checkpoint_required');
  const cp=await request(`checkpoints?epoch=${epoch}`);assert.equal(cp.status,200);
+ assert.equal((await request(`leases/${cp.body.leaseID}`,{epoch,floor:0})).status,200);
  const old=await request(`pull?epoch=${epoch}&after=0&lease=${cp.body.leaseID}`);assert.equal(old.body.commits.length,2);
  const publish=await request('checkpoints',{epoch:next,id:id(221),covered:0,expectedID:null,ciphertext:body(9).ciphertext,artifactIDs:[]});assert.equal(publish.status,200);
  assert.equal((await request('push',{...body(2),epoch:next})).status,200);

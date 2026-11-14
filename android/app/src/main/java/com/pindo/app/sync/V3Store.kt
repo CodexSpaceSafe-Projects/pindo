@@ -77,7 +77,7 @@ internal class V3Store(context:Context) {
                             "null"->null
                             "blob"->{
                                 val size=c.getInt(at+2);require(size<=64*1024*1024){"本机单项资料超过安全读取上限。"}
-                                val out=java.io.ByteArrayOutputStream(size);out.write(c.getBlob(at))
+                                val out=java.io.ByteArrayOutputStream(size);if(size>0)out.write(requireNotNull(c.getBlob(at)))
                                 var offset=262144
                                 while(offset<size) {
                                     db.rawQuery("SELECT substr(${quoted(name)},${offset+1},262144) FROM ($sql) LIMIT 1 OFFSET $rowIndex",parameters).use{part->check(part.moveToFirst());out.write(part.getBlob(0))}
@@ -210,7 +210,7 @@ internal class V3Store(context:Context) {
     }
     @Synchronized fun chunks(id:String):List<V3Chunk> = rows("SELECT object_id,digest,ciphertext FROM v3_chunks WHERE batch_id=? ORDER BY digest",id).map{V3Chunk(it["object_id"].toString(),it["digest"].toString(),it["ciphertext"] as ByteArray)}
     @Synchronized fun acknowledge(b:V3Binding,id:String,digest:String,revision:Long)=transaction{
-        require(binding()==b);SyncV3.validateCounter(revision);val q=queue(b).first{it.id==id};require(q.wire!=null&&q.digest==digest)
+        require(binding()==b&&revision>0);SyncV3.validateCounter(revision);val q=queue(b).first{it.id==id};require(q.wire!=null&&q.digest==digest)
         exec("UPDATE v3_queue SET receipt=? WHERE id=? AND channel=? AND epoch=? AND digest=?",revision,id,b.channel,b.epoch,digest)
         exec("UPDATE v3_vaults SET anchor=? WHERE channel=? AND epoch=?",bytes(JSONObject().put("batchID",id).put("revision",revision).put("digest",digest)),b.channel,b.epoch)
     }
@@ -236,7 +236,7 @@ internal class V3Store(context:Context) {
         val before=read();val oldOpt=state(b,"optimistic")
         exec("DELETE FROM v3_records WHERE channel=? AND layer='confirmed'",b.channel);exec("DELETE FROM v3_seen WHERE channel=? AND layer='confirmed'",b.channel)
         saveState(b,"confirmed",payload,V3Delta.empty());exec("UPDATE v3_vaults SET fetch_cursor=?,apply_cursor=?,checkpoint_applied=? WHERE channel=? AND epoch=?",covered,covered,id,b.channel,b.epoch)
-        exec("DELETE FROM v3_inbox WHERE channel=? AND epoch=?",b.channel,b.epoch);project(b,payload,oldOpt,before)
+        exec("DELETE FROM v3_inbox WHERE channel=? AND epoch=?",b.channel,b.epoch);exec("DELETE FROM v3_queue WHERE channel=? AND epoch=? AND receipt IS NOT NULL AND receipt<=?",b.channel,b.epoch,covered);project(b,payload,oldOpt,before)
     }
     @Synchronized fun installedCheckpoint(b:V3Binding)=rows("SELECT checkpoint_applied FROM v3_vaults WHERE channel=? AND epoch=?",b.channel,b.epoch).firstOrNull()?.get("checkpoint_applied") as? String
     @Synchronized fun rebaseEpoch(old:V3Binding,epoch:String):V3Binding=transaction{

@@ -220,6 +220,7 @@ public final class SQLiteSyncStore {
     }
     public func acknowledge(_ b: SyncV3Binding, id: String, digest: String, revision: Int64) throws {
         try SyncV3.validateCounter(revision)
+        guard revision > 0 else { throw SyncV3Error.corruptData }
         try database.transaction {
             guard try binding == b, let current = try queue(b).first(where: { $0.id == id }), current.wire != nil, current.digest == digest else { throw SyncV3Error.batchConflict }
             try database.execute("UPDATE v3_queue SET receipt=? WHERE id=? AND channel=? AND epoch=? AND digest=?", [.integer(revision), .text(id), .text(b.channel), .text(b.epoch), .text(digest)])
@@ -278,6 +279,7 @@ public final class SQLiteSyncStore {
             try saveState(payload, previous: SyncPayload(version: 2), binding: b, layer: "confirmed")
             try database.execute("UPDATE v3_vaults SET fetch_cursor=?,apply_cursor=?,checkpoint_applied=? WHERE channel=? AND epoch=?", [.integer(covered), .integer(covered), checkpointID.map(SQLiteDatabase.Value.text) ?? .null, .text(b.channel), .text(b.epoch)])
             try database.execute("DELETE FROM v3_inbox WHERE channel=? AND epoch=?", [.text(b.channel), .text(b.epoch)])
+            try database.execute("DELETE FROM v3_queue WHERE channel=? AND epoch=? AND receipt IS NOT NULL AND receipt<=?", [.text(b.channel), .text(b.epoch), .integer(covered)])
             var optimistic = payload
             for item in try queue(b) { optimistic = try optimistic.applyingV3(DocumentCodec.decode(SyncV3Batch.self, from: item.plaintext)) }
             try saveState(optimistic, previous: oldOptimistic, binding: b, layer: "optimistic")

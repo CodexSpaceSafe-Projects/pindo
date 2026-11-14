@@ -46,6 +46,8 @@ internal data class V3SyncResult(val connection:V3Connection,val hasMore:Boolean
 internal class V3Engine(private val store:V3Store,private val transport:V3Transport,private val crypto:SyncCrypto,
                         private val check:()->Unit={},private val applied:()->Unit={}) {
     private val leases=mutableListOf<Pair<String,String>>()
+    private val renewed=mutableMapOf<String,Long>()
+    private suspend fun renew(c:V3Connection,id:String?,epoch:String){if(id!=null&&System.currentTimeMillis()-(renewed[id]?:0)>=60_000){call(c,"leases/$id","POST",JSONObject().put("epoch",epoch).put("floor",0));renewed[id]=System.currentTimeMillis()}}
     private fun body(j:JSONObject)=j.toString().toByteArray(Charsets.UTF_8)
     private fun context(c:V3Connection,kind:String,id:String,refs:List<String> = emptyList(),epoch:String=c.epoch)=SyncV3EnvelopeContext(SyncV3Identity(c.serviceID,c.vaultID),epoch,kind,id,refs)
     private suspend fun call(c:V3Connection,path:String,method:String="GET",value:JSONObject?=null):JSONObject{check();val r=transport.request(method,"/v3/vaults/${c.vaultID}/$path",value?.let(::body),c.token);check();return r}
@@ -77,6 +79,7 @@ internal class V3Engine(private val store:V3Store,private val transport:V3Transp
         require((0 until parts.length()).map{parts.getJSONObject(it).getString("digest")}.sorted()==refs&&refs.distinct().size==refs.size)
         val result=ByteArrayOutputStream()
         for(i in 0 until parts.length()){
+            renew(c,lease,epoch)
             val p=parts.getJSONObject(i);val digest=p.getString("digest");val objectID=p.getString("objectID");SyncV3.validateID(objectID)
             val r=call(c,"artifacts/$digest?epoch=$epoch"+(lease?.let{"&lease=$it"}?:""));val bytes=Base64.getDecoder().decode(r.getString("ciphertext"))
             require(r.getString("epoch")==epoch&&r.getString("digest")==digest&&r.getString("objectID")==objectID&&r.getInt("bytes")==p.getInt("bytes")&&bytes.size==p.getInt("bytes")&&bytes.size<=64*1024&&v3Hash(bytes)==digest)
@@ -91,7 +94,7 @@ internal class V3Engine(private val store:V3Store,private val transport:V3Transp
     private data class Checkpoint(val payload:JSONObject,val covered:Long,val response:JSONObject)
     private suspend fun readCheckpoint(c:V3Connection,epoch:String):Checkpoint {
         val r=call(c,"checkpoints?epoch=$epoch");require(r.getString("serviceID")==c.serviceID&&r.getString("vaultID")==c.vaultID&&r.getString("sourceEpoch")==epoch)
-        leases.add(r.getString("leaseID") to epoch);val cp=r.optJSONObject("checkpoint")?:return Checkpoint(V3Delta.empty(),0,r)
+        leases.add(r.getString("leaseID") to epoch);renewed[r.getString("leaseID")]=System.currentTimeMillis();val cp=r.optJSONObject("checkpoint")?:return Checkpoint(V3Delta.empty(),0,r)
         val sealed=Base64.getDecoder().decode(cp.getString("ciphertext"));val refs=strings(cp.getJSONArray("artifactIDs"));val id=cp.getString("id")
         require(cp.getString("epoch")==epoch&&digest(c,"checkpoint",id,refs,sealed,epoch)==cp.getString("digest"))
         val plain=JSONObject(decode(c,epoch,"checkpoint",id,sealed,refs,r.getString("leaseID")).toString(Charsets.UTF_8))
@@ -99,6 +102,7 @@ internal class V3Engine(private val store:V3Store,private val transport:V3Transp
         return Checkpoint(SyncReplica.validatedPayload(plain.getJSONObject("payload")),cp.getLong("covered"),r)
     }
     private suspend fun page(c:V3Connection,epoch:String,after:Long,lease:String?=null):Pair<JSONObject,List<V3Entry>> {
+        renew(c,lease,epoch)
         val r=call(c,"pull?epoch=$epoch&after=$after"+(lease?.let{"&lease=$it"}?:""));val commits=r.getJSONArray("commits");require(r.getString("epoch")==epoch&&commits.length()<=8)
         val entries=mutableListOf<V3Entry>();var cursor=after
         for(i in 0 until commits.length()){
@@ -110,7 +114,7 @@ internal class V3Engine(private val store:V3Store,private val transport:V3Transp
         require(r.getLong("nextCursor")==cursor&&r.getLong("head")>=cursor&&r.getBoolean("hasMore")== (cursor<r.getLong("head")))
         return r to entries
     }
-    private suspend fun release(c:V3Connection){for((id,epoch) in leases)runCatching{transport.request("DELETE","/v3/vaults/${c.vaultID}/leases/$id",body(JSONObject().put("epoch",epoch).put("floor",0)),c.token)};leases.clear()}
+    private suspend fun release(c:V3Connection){for((id,epoch) in leases)runCatching{transport.request("DELETE","/v3/vaults/${c.vaultID}/leases/$id",body(JSONObject().put("epoch",epoch).put("floor",0)),c.token)};leases.clear();renewed.clear()}
     private suspend fun publish(c:V3Connection,info:JSONObject,initial:Pair<JSONObject,Long>?=null){
         val b=c.binding
         if(store.pendingCheckpoint(b)==null){

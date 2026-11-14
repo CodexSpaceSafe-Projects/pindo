@@ -148,4 +148,20 @@ final class SQLiteSyncTests: XCTestCase {
         XCTAssertEqual(Set(merged.records[key]!.notes.map(\.value)),["New local note","Unseen earlier note"])
     }
 
+    func testCheckpointConfirmsCoveredReceiptsAndRetainsUnacknowledgedOfflineWork() throws {
+        let repository=try PindoRepository(directory:directory(),useSQLite:true),store=try XCTUnwrap(repository.sqlite),b=try binding()
+        try store.bind(b,importingLocal:false);try repository.reloadCurrentDocument()
+        try repository.update{$0.tasks.append(TodoItem(title:"Covered"))}
+        let first=try XCTUnwrap(store.queue(b).first),batch=try DocumentCodec.decode(SyncV3Batch.self,from:first.plaintext)
+        try store.freeze(b,id:first.id,wire:Data("frozen".utf8),digest:String(repeating:"a",count:64),chunks:[])
+        XCTAssertThrowsError(try store.acknowledge(b,id:first.id,digest:String(repeating:"a",count:64),revision:0))
+        try store.acknowledge(b,id:first.id,digest:String(repeating:"a",count:64),revision:1)
+        try repository.update{$0.tasks[0].title="Still offline"}
+        let confirmed=try SyncPayload(version:2).applyingV3(batch)
+        try store.installCheckpoint(b,payload:confirmed,covered:1,checkpointID:UUID().uuidString.lowercased())
+        XCTAssertEqual(try store.queue(b).count,1)
+        XCTAssertEqual(try store.readDocument().tasks[0].title,"Still offline")
+        XCTAssertEqual(try store.cursors(b).applied,1)
+    }
+
 }
