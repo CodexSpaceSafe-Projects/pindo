@@ -76,6 +76,7 @@ public final class PindoRepository {
     public var syncState: SyncReplica? { document.syncState }
     public var syncPayload: SyncPayload? { document.syncState?.payload }
     public var syncSession: SyncSessionState? { document.syncSession }
+    public private(set) var sqlite: SQLiteSyncStore?
     private let io: StorageIO
     private var backupIsReadable = true
     private var lastSnapshotState: JSONValue
@@ -84,13 +85,23 @@ public final class PindoRepository {
         try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("Pindo", isDirectory: true)
     }
 
-    public init(directory: URL, io: StorageIO = FileStorage(), now: Date = Date(), initialDocument: @autoclosure () -> PindoDocument = PindoDocument()) throws {
+    public init(directory: URL, io: StorageIO = FileStorage(), useSQLite: Bool = false, now: Date = Date(), initialDocument: @autoclosure () -> PindoDocument = PindoDocument()) throws {
         self.directory = directory; self.io = io
         try io.createDirectory(directory)
         try io.createDirectory(directory.appendingPathComponent("Backups"))
         let dataURL = directory.appendingPathComponent("data.json")
         let backupURL = directory.appendingPathComponent("Backups/snapshots.json")
         let journalURL = directory.appendingPathComponent("recovery.json")
+        let store = useSQLite ? try SQLiteSyncStore(directory: directory) : nil
+        self.sqlite = store
+        if let store, try store.initialized {
+            document = try store.readDocument()
+            if let pending = try store.pendingBackup() {
+                _ = try pending.validated()
+                try io.write(DocumentCodec.encode(pending), to: backupURL)
+                try store.completeBackupRecovery()
+            }
+        } else {
         if let journal = try io.read(journalURL) {
             let transaction: RecoveryTransaction
             do {
@@ -108,6 +119,16 @@ public final class PindoRepository {
         } else {
             document = try initialDocument().validated()
             try io.write(DocumentCodec.encode(document), to: dataURL)
+        }
+            if let store {
+                try store.initialize(document)
+                guard try store.readDocument() == document else { throw PindoError.corruptFile("pindo.sqlite") }
+                // Commit is durable before preserving the old authority as a recovery source.
+                if io is FileStorage, FileManager.default.fileExists(atPath: dataURL.path),
+                   !FileManager.default.fileExists(atPath: directory.appendingPathComponent("data.pre-sqlite.json").path) {
+                    try? FileManager.default.moveItem(at: dataURL, to: directory.appendingPathComponent("data.pre-sqlite.json"))
+                }
+            }
         }
         archive = try SnapshotArchive(document: document, now: now)
         lastSnapshotState = try document.snapshotValue()
@@ -131,8 +152,8 @@ public final class PindoRepository {
         next.syncState = document.syncState
         next.syncSession = document.syncSession; next.syncChannels = document.syncChannels
         _ = try next.validated()
-        try next.captureSyncChanges()
-        try io.write(DocumentCodec.encode(next), to: dataURL)
+        try captureLegacyChanges(&next)
+        try persistDocument(next)
         document = next; hasUnsavedChanges = false
     }
 
@@ -140,6 +161,7 @@ public final class PindoRepository {
     /// Callers must flush first when discarding in-memory edits is not intended.
     public func reloadCurrentDocument() throws {
         guard !needsRecovery else { throw PindoError.recoveryRequired }
+        if let sqlite { document = try sqlite.readDocument(); hasUnsavedChanges = false; return }
         guard let bytes = try io.read(dataURL) else { throw PindoError.corruptFile("data.json") }
         let current: PindoDocument
         do { current = try DocumentCodec.decode(PindoDocument.self, from: bytes).validated() }
@@ -171,8 +193,8 @@ public final class PindoRepository {
         guard !needsRecovery else { throw PindoError.recoveryRequired }
         guard hasUnsavedChanges else { return }
         var next = try document.validated()
-        try next.captureSyncChanges()
-        try io.write(DocumentCodec.encode(next), to: dataURL)
+        try captureLegacyChanges(&next)
+        try persistDocument(next)
         document = next
         hasUnsavedChanges = false
     }
@@ -184,19 +206,20 @@ public final class PindoRepository {
         if document.syncState != nil && !reset { try flush(); return }
         var next = document
         next.syncState = SyncReplica(deviceID: deviceID)
-        try next.captureSyncChanges()
+        try captureLegacyChanges(&next)
         _ = try next.validated()
-        try io.write(DocumentCodec.encode(next), to: dataURL)
+        try persistDocument(next)
         document = next; hasUnsavedChanges = false
     }
 
     /// Called by the application before any edits, even when credentials are disconnected.
     public func beginSyncSession(actorID: UUID = UUID()) throws {
+        if sqlite != nil { try flush(); return }
         guard !needsRecovery else { throw PindoError.recoveryRequired }
         guard document.syncState != nil else { return }
         var next = document
         try next.syncState!.rotateActor(actorID)
-        try next.captureSyncChanges()
+        try captureLegacyChanges(&next)
         try saveSyncDocument(next)
     }
 
@@ -205,7 +228,7 @@ public final class PindoRepository {
         guard !needsRecovery else { throw PindoError.recoveryRequired }
         _ = try SyncSessionState(channelID: channelID, connectionTransaction: transactionID).validated()
         var next = document
-        try next.captureSyncChanges()
+        try captureLegacyChanges(&next)
         if next.syncSession?.channelID != channelID {
             var channels = next.syncChannels ?? [:]
             if let session = next.syncSession, let replica = next.syncState {
@@ -226,12 +249,12 @@ public final class PindoRepository {
         }
         if next.syncState == nil {
             next.syncState = SyncReplica(deviceID: actorID, version: 2)
-            try next.captureSyncChanges()
+            try captureLegacyChanges(&next)
         } else {
             next.syncState = try next.syncState!.upgraded()
             try next.syncState!.rotateActor(actorID)
         }
-        try next.captureSyncChanges()
+        try captureLegacyChanges(&next)
         let projection = try next.syncState!.merge(SyncPayload(version: 2))
         next.tasks = projection.tasks; next.groups = projection.groups
         next.syncSession?.connectionTransaction = transactionID
@@ -250,7 +273,7 @@ public final class PindoRepository {
             return
         }
         var next = document
-        try next.captureSyncChanges()
+        try captureLegacyChanges(&next)
         session.pendingObject = pending; next.syncSession = session
         try saveSyncDocument(next)
     }
@@ -261,7 +284,7 @@ public final class PindoRepository {
             throw PindoError.invalidData("同步确认不匹配待上传资料")
         }
         var next = document
-        try next.captureSyncChanges()
+        try captureLegacyChanges(&next)
         session.pendingObject = nil
         session.acknowledgedObjects = Array(Set(session.acknowledgedObjects).union([key])).sorted()
         session.objectETags.removeValue(forKey: key)
@@ -272,7 +295,7 @@ public final class PindoRepository {
 
     private func saveSyncDocument(_ next: PindoDocument) throws {
         _ = try next.validated()
-        try io.write(DocumentCodec.encode(next), to: dataURL)
+        try persistDocument(next)
         document = next; hasUnsavedChanges = false
     }
 
@@ -285,7 +308,7 @@ public final class PindoRepository {
         _ = try payload.validated()
         var next = document
         guard next.syncState != nil else { throw PindoError.invalidData("请先配置同步") }
-        try next.captureSyncChanges()
+        try captureLegacyChanges(&next)
         let projection = try next.syncState!.merge(payload)
         next.tasks = projection.tasks; next.groups = projection.groups
         if var session = next.syncSession {
@@ -296,7 +319,7 @@ public final class PindoRepository {
         } else if acknowledgedObjects != nil || legacyETags != nil || objectETags != nil { throw PindoError.invalidData("同步缓存缺少会话") }
         if let id = next.preferences.defaultGroupID, !next.groups.contains(where: { $0.id == id }) { next.preferences.defaultGroupID = nil }
         _ = try next.validated()
-        if next != document || hasUnsavedChanges { try io.write(DocumentCodec.encode(next), to: dataURL) }
+        if next != document || hasUnsavedChanges { try persistDocument(next) }
         document = next; hasUnsavedChanges = false
     }
 
@@ -321,9 +344,10 @@ public final class PindoRepository {
         var target = try PindoDocument.fromSnapshot(archive.state(at: snapshotID))
         target.syncState = document.syncState
         target.syncSession = document.syncSession; target.syncChannels = document.syncChannels
-        try target.captureSyncChanges()
+        try captureLegacyChanges(&target)
         guard target != document else { return }
         let next = try protectedArchive(replacingWith: target, beforeLabel: "恢复前的保护快照", afterLabel: "恢复后的快照", now: now)
+        if sqlite != nil { try commitSQLiteRecovery(target, archive: next); return }
         let transaction = RecoveryTransaction(document: target, archive: next)
         // The redo journal makes a crash between the two replacements recoverable.
         try io.write(DocumentCodec.encode(transaction), to: journalURL)
@@ -359,8 +383,9 @@ public final class PindoRepository {
         guard backupIsReadable else { throw PindoError.corruptFile("snapshots.json") }
         imported.syncState = document.syncState
         imported.syncSession = document.syncSession; imported.syncChannels = document.syncChannels
-        try imported.captureSyncChanges()
+        try captureLegacyChanges(&imported)
         let next = try protectedArchive(replacingWith: imported, beforeLabel: "导入前的保护快照", afterLabel: "导入后的快照")
+        if sqlite != nil { try commitSQLiteRecovery(imported, archive: next); return }
         let transaction = RecoveryTransaction(document: imported, archive: next)
         try io.write(DocumentCodec.encode(transaction), to: journalURL)
         needsRecovery = true
@@ -370,6 +395,25 @@ public final class PindoRepository {
             try io.remove(journalURL)
             document = imported; archive = next; lastSnapshotState = try imported.snapshotValue()
             needsRecovery = false; hasUnsavedChanges = false
+        } catch { throw PindoError.recoveryRequired }
+    }
+
+    private func captureLegacyChanges(_ next: inout PindoDocument) throws {
+        if sqlite == nil { try next.captureSyncChanges() }
+    }
+    private func persistDocument(_ next: PindoDocument) throws {
+        if let sqlite { try sqlite.commit(next, previous: document) }
+        else { try io.write(DocumentCodec.encode(next), to: dataURL) }
+    }
+    private func commitSQLiteRecovery(_ next: PindoDocument, archive nextArchive: SnapshotArchive) throws {
+        guard let sqlite else { throw PindoError.recoveryRequired }
+        needsRecovery = true
+        do {
+            try sqlite.commit(next, previous: document, recoveryArchive: nextArchive)
+            try io.write(DocumentCodec.encode(nextArchive), to: backupURL)
+            try sqlite.completeBackupRecovery()
+            document = next; archive = nextArchive; lastSnapshotState = try next.snapshotValue()
+            needsRecovery = false; hasUnsavedChanges = false; backupWarning = nil
         } catch { throw PindoError.recoveryRequired }
     }
 

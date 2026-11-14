@@ -15,7 +15,10 @@ export default defineConfig(({ mode }) => {
       env: {
         DB: bindings.d1(remote ? { id: staging.databaseId, name: staging.databaseName } : { name: "pindo-sync-v3-development" }),
         SERVICE_ID: bindings.text(remote ? staging.serviceID : "00000000-0000-4000-8000-000000000001"),
-        LOG_CORE_ENABLED: bindings.text("development-only")
+        LOG_CORE_ENABLED: bindings.text("development-only"),
+        SYNC_ENABLED: bindings.text("true"),
+        BOOTSTRAP_SECRET: bindings.secret(),
+        RECOVERY_SECRET: bindings.secret()
       },
       observability: {
         enabled: staging.observability.enabled, redactQueryString: staging.observability.redact_query_string,

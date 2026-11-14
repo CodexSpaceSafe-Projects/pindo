@@ -160,3 +160,12 @@ private extension Data {
         self.init(result)
     }
 }
+
+extension SyncEncryption: SyncV3Cryptography {
+    func digestV3(_ bytes: Data) -> String { Data(SHA256.hash(data: bytes)).map { String(format: "%02x", $0) }.joined() }
+    static func deviceToken() throws -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { throw SyncTransportError.randomGenerationFailed }
+        return Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+    }
+}

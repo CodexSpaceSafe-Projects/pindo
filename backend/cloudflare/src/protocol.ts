@@ -6,7 +6,7 @@ export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 export type ErrorCode = "authentication_required" | "unsupported_version" | "epoch_mismatch" |
   "batch_conflict" | "checkpoint_required" | "corrupt_data" | "quota_unavailable" |
   "storage_unavailable" | "maintenance" | "invalid_request" | "cursor_mismatch" |
-  "not_found" | "unsupported_feature";
+  "not_found" | "unsupported_feature" | "bootstrap_closed" | "pairing_invalid" | "checkpoint_conflict" | "artifact_missing" | "lease_expired";
 
 export class ProtocolError extends Error {
   constructor(readonly code: ErrorCode, readonly status: number) { super(code); }
@@ -23,7 +23,7 @@ export function counter(value: string | null): number {
 }
 export function aad(serviceID: string, vaultID: string, epoch: string, kind: string, objectID: string, artifactIDs: string[] = []): Uint8Array {
   [serviceID, vaultID, epoch, objectID].forEach(uuid);
-  if (!["batch", "checkpoint", "chunk"].includes(kind) || artifactIDs.length > 50 ||
+  if (!["batch", "checkpoint", "chunk"].includes(kind) || artifactIDs.length > 512 ||
       artifactIDs.some((x, i) => !/^[0-9a-f]{64}$/.test(x) || (i > 0 && artifactIDs[i - 1] >= x))) {
     throw new ProtocolError("invalid_request", 400);
   }

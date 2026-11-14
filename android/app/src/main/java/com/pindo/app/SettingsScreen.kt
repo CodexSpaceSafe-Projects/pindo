@@ -80,7 +80,7 @@ import java.time.LocalDate
         }
     }
     if (cloudOpen) {
-        CloudSettingsScreen() { cloudOpen = false }
+        CloudSettingsScreen(store, state) { cloudOpen = false }
         return
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(top = 18.dp, bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -211,14 +211,45 @@ import java.time.LocalDate
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable internal fun CloudSettingsScreen(onBack: () -> Unit) {
+@Composable internal fun CloudSettingsScreen(store: AppStore, state: AppState, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
+    var endpoint by rememberSaveable { mutableStateOf("https://pindo-sync-v3-staging.zhchain.workers.dev") }
+    var secret by remember { mutableStateOf("") }
+    var invite by remember { mutableStateOf("") }
+    val context=LocalContext.current
+    val sync=store.sync
     Scaffold(topBar = { TopAppBar(title = { Text("云同步") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Outlined.ArrowBack, "返回设置") } }) }) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            Text("Cloudflare", style = MaterialTheme.typography.titleLarge)
-            Text("Cloudflare 同步正在开发，当前仅保存在本机。")
-            Text("旧云服务已停用。本机资料、离线修改和恢复信息会继续保留。")
-            Text("可在设置中导出待办、分组和备注。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            Text("Cloudflare 加密同步", style = MaterialTheme.typography.titleLarge)
+            Text(state.syncStatus)
+            Text("离线修改会保存在本机。配对信息包含恢复密钥，请仅通过可信渠道传给自己的设备。", color=MaterialTheme.colorScheme.onSurfaceVariant)
+            if (state.syncEnabled) {
+                Button(onClick={sync.sync()},enabled=!state.syncing){Text("立即同步")}
+                Button(onClick={sync.pair()},enabled=!state.syncing){Text("生成设备配对信息")}
+                if(sync.invitation!=null) Button(onClick={
+                    val clip=android.content.ClipData.newPlainText("Pindo 加密配对",sync.invitation)
+                    if(android.os.Build.VERSION.SDK_INT>=33) clip.description.extras=android.os.PersistableBundle().apply{putBoolean("android.content.extra.IS_SENSITIVE",true)}
+                    (context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(clip)
+                }){Text("复制配对信息（10 分钟内有效）")}
+                OutlinedButton(onClick={sync.listDevices()},enabled=!state.syncing){Text("刷新设备列表")}
+                val devices=sync.devices
+                for(i in 0 until devices.length()) { val device=devices.getJSONObject(i);val id=device.getString("id")
+                    Row(verticalAlignment=Alignment.CenterVertically){Text(id,Modifier.weight(1f),style=MaterialTheme.typography.bodySmall)
+                        if(device.isNull("revoked_at")) TextButton(onClick={sync.revoke(id)},enabled=!state.syncing){Text("撤销授权")} else Text("已撤销")}
+                }
+                OutlinedButton(onClick={sync.rotate()},enabled=!state.syncing){Text("轮换此设备凭据")}
+                TextButton(onClick={sync.disconnect()}){Text("暂停同步")}
+            } else {
+                if(sync.active!=null||sync.pending) Button(onClick={sync.reconnect()},enabled=!state.syncing){Text("继续同步")}
+                Text("加入已有同步库",style=MaterialTheme.typography.titleMedium)
+                OutlinedTextField(invite,{invite=it},label={Text("粘贴设备配对信息")},modifier=Modifier.fillMaxWidth(),visualTransformation=androidx.compose.ui.text.input.PasswordVisualTransformation())
+                Button(onClick={sync.join(invite);invite=""},enabled=!state.syncing&&invite.isNotBlank()){Text("连接并合并本机资料")}
+                HorizontalDivider()
+                Text("首次初始化服务",style=MaterialTheme.typography.titleMedium)
+                OutlinedTextField(endpoint,{endpoint=it},label={Text("服务地址")},modifier=Modifier.fillMaxWidth(),singleLine=true)
+                OutlinedTextField(secret,{secret=it},label={Text("服务初始化密钥")},modifier=Modifier.fillMaxWidth(),singleLine=true,visualTransformation=androidx.compose.ui.text.input.PasswordVisualTransformation())
+                Button(onClick={sync.create(endpoint.trim(),secret);secret=""},enabled=!state.syncing&&secret.isNotBlank()){Text("创建加密同步库")}
+            }
         }
     }
 }

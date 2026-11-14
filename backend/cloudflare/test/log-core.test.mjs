@@ -1,6 +1,6 @@
 import { after, before, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile,readdir } from 'node:fs/promises';
 import { createHash, createCipheriv } from 'node:crypto';
 import { Miniflare, Log, LogLevel } from 'miniflare';
 import { appendBatch } from '../../../work/cloudflare-worker.mjs';
@@ -26,15 +26,19 @@ before(async () => {
   mf = new Miniflare({ modules: true, modulesRoot: new URL('../../../work/', import.meta.url).pathname, scriptPath: new URL('../../../work/cloudflare-worker.mjs', import.meta.url).pathname,
     // Pinned local runtime supports this date; deployment target is separately versioned.
     compatibilityDate: '2026-07-30', d1Databases: ['DB'],
-    bindings: { SERVICE_ID: serviceID, LOG_CORE_ENABLED: 'development-only' }, log: new Log(LogLevel.ERROR) });
+    bindings: { SERVICE_ID: serviceID, LOG_CORE_ENABLED: 'development-only',BOOTSTRAP_SECRET:'test-bootstrap-secret',RECOVERY_SECRET:'test-recovery-secret' }, log: new Log(LogLevel.ERROR) });
   db = await mf.getD1Database('DB');
-  const schema = await readFile(new URL('../migrations/0001_log_core.sql', import.meta.url), 'utf8');
-  await db.exec(schema.replace(/--[^\n]*/g, '').replace(/\n/g, ' '));
+  for(const file of (await readdir(new URL('../migrations/',import.meta.url))).filter(x=>x.endsWith('.sql')).sort()) {
+    const schema=await readFile(new URL('../migrations/'+file,import.meta.url),'utf8');
+    await db.exec(schema.replace(/--[^\n]*/g,'').replace(/\n/g,' '));
+  }
 });
 after(async () => { await mf?.dispose(); });
 beforeEach(async () => {
   await db.batch([
     db.prepare('DROP TRIGGER IF EXISTS fail_receipt'), db.prepare('DROP TRIGGER IF EXISTS fail_counter'),
+    ...['commit_artifacts','checkpoint_artifacts','artifacts','checkpoints','leases','pairing','mutations'].map(t=>db.prepare('DELETE FROM '+t)),
+    db.prepare('UPDATE service_state SET bootstrapped=0'),
     db.prepare('DELETE FROM commits'), db.prepare('DELETE FROM receipts'), db.prepare('DELETE FROM devices'), db.prepare('DELETE FROM vaults'),
     db.prepare('INSERT INTO vaults(id,epoch) VALUES(?,?)').bind(vaultID, epoch),
     db.prepare('INSERT INTO devices(id,vault_id,token_hash) VALUES(?,?,?)').bind(deviceID, vaultID, tokenHash)
@@ -131,7 +135,7 @@ test('malformed, oversized, unknown version and unauthorized requests fail close
   assert.equal((await request('push', body(), 'invalid')).body.error.code,'authentication_required');
   assert.equal((await request('push',{...body(),version:2})).body.error.code,'unsupported_version');
   assert.equal((await request('push',{...body(),ciphertext:'invalid'})).body.error.code,'corrupt_data');
-  assert.equal((await request('push',{...body(),artifactIDs:['a'.repeat(64)]})).body.error.code,'unsupported_feature');
+  assert.equal((await request('push',{...body(),artifactIDs:['a'.repeat(64)]})).body.error.code,'artifact_missing');
   assert.equal((await request('push',{...body(),ciphertext:Buffer.alloc(128*1024+1).toString('base64')})).status,400);
   assert.equal((await request('push',{...body(),padding:'a'.repeat(176*1024)})).status,413);
   for (const after of ['-1','01','1.0','9007199254740992']) assert.equal((await request(`pull?epoch=${epoch}&after=${after}`)).status,400);
@@ -154,4 +158,76 @@ test('shared AAD and encryption vector is bound to service, vault, epoch and bat
   assert.equal(sealed.toString('base64'),fixture.ciphertext);
   const result=await request('push',{version:3,epoch:c.epoch,batchID:c.objectID,ciphertext:fixture.ciphertext});
   assert.equal(result.body.receipt.digest,fixture.digest);
+});
+
+test('bootstrap closes after one vault and pairing consumes once atomically with retry proof', async () => {
+  await db.batch([db.prepare('DELETE FROM devices'),db.prepare('DELETE FROM vaults')]);
+  const created={version:3,vaultID,epoch,deviceID,deviceToken:token};
+  const init=await mf.dispatchFetch('https://sync.test/v3/bootstrap',{method:'POST',headers:{Authorization:'Bearer test-bootstrap-secret','Content-Type':'application/json'},body:JSON.stringify(created)});
+  assert.equal(init.status,200);assert.equal((await init.json()).vaultID,vaultID);
+  const second=await mf.dispatchFetch('https://sync.test/v3/bootstrap',{method:'POST',headers:{Authorization:'Bearer test-bootstrap-secret','Content-Type':'application/json'},body:JSON.stringify({...created,vaultID:id(90),deviceID:id(91)})});
+  assert.equal(second.status,409);
+  const pairID=id(80),code=Buffer.alloc(32,9).toString('base64url');
+  assert.equal((await request('pairings',{epoch,id:pairID,code})).status,200);
+  const newToken=Buffer.alloc(32,10).toString('base64url'),newDevice=id(81);
+  const consume={epoch,code,deviceID:newDevice,deviceToken:newToken};
+  const a=await request(`pairings/${pairID}/consume`,consume);assert.equal(a.status,200);
+  assert.deepEqual(await request(`pairings/${pairID}/consume`,consume),a);
+  assert.equal((await request('info',undefined,newToken)).status,200);
+  assert.equal((await request(`pairings/${pairID}/consume`,{...consume,deviceID:id(82),deviceToken:Buffer.alloc(32,11).toString('base64url')})).status,401);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM devices').first()).n,2);
+});
+
+test('pair attempt cap, expired codes, token rotation and self revocation', async () => {
+  const pairID=id(80),code=Buffer.alloc(32,9).toString('base64url');
+  await request('pairings',{epoch,id:pairID,code});
+  const consume={epoch,code:Buffer.alloc(32,8).toString('base64url'),deviceID:id(81),deviceToken:Buffer.alloc(32,10).toString('base64url')};
+  for(let i=0;i<8;i++)assert.equal((await request(`pairings/${pairID}/consume`,consume)).status,401);
+  assert.equal((await request(`pairings/${pairID}/consume`,{...consume,code})).status,401);
+  const rotated=Buffer.alloc(32,12).toString('base64url');
+  assert.equal((await request(`devices/${deviceID}/rotate`,{epoch,deviceToken:rotated})).status,200);
+  assert.equal((await request('info')).status,401);
+  assert.equal((await request('info',undefined,rotated)).status,200);
+  assert.equal((await request(`devices/${deviceID}/revoke`,{epoch},rotated)).status,200);
+  assert.equal((await request('info',undefined,rotated)).status,401);
+});
+
+test('immutable chunk integrity, checkpoint CAS, two recovery entries and safe GC', async () => {
+  const chunk=Buffer.alloc(64,6),digest=createHash('sha256').update(chunk).digest('hex'),objectID=id(70);
+  const upload={epoch,objectID,ciphertext:chunk.toString('base64')};
+  assert.equal((await request(`artifacts/${digest}`,upload)).status,200);
+  assert.equal((await request(`artifacts/${digest}`,upload)).status,200);
+  assert.equal((await request(`artifacts/${digest}?epoch=${epoch}`)).body.ciphertext,upload.ciphertext);
+  const first=await request('push',{...body(),artifactIDs:[digest]});assert.equal(first.status,200);
+  const cp=(n,covered,expectedID)=>({epoch,id:id(100+n),covered,expectedID,ciphertext:Buffer.alloc(64,n+1).toString('base64'),artifactIDs:[digest]});
+  const c1=await request('checkpoints',cp(0,1,null));assert.equal(c1.status,200);
+  assert.equal((await request('checkpoints',cp(0,1,null))).status,200);
+  await request('push',body(1));
+  assert.equal((await request('checkpoints',cp(1,2,null))).body.error.code,'checkpoint_conflict');
+  assert.equal((await request('checkpoints',cp(1,2,id(100)))).status,200);
+  await request('push',body(2));
+  assert.equal((await request('checkpoints',cp(2,3,id(101)))).status,200);
+  const gc=await request('gc',{epoch});assert.equal(gc.status,200);assert.equal(gc.body.gcFloor,2);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM checkpoints').first()).n,2);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM commits').first()).n,1);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM receipts').first()).n,3);
+  assert.equal((await request('push',body(3))).body.receipt.revision,4);
+  assert.equal((await request(`pull?epoch=${epoch}&after=0`)).body.error.code,'checkpoint_required');
+  assert.equal((await request(`artifacts/${digest}?epoch=${epoch}`)).status,200);
+});
+
+test('read lease keeps old checkpoint tail; chunk GC respects every retained reference', async () => {
+  await request('push',body());await request('push',body(1));await request('push',body(2));
+  const leaseID=id(60);assert.equal((await request(`leases/${leaseID}`,{epoch,floor:0})).status,200);
+  const cp=(n,covered,expectedID)=>({epoch,id:id(100+n),covered,expectedID,ciphertext:Buffer.alloc(64,n+1).toString('base64')});
+  assert.equal((await request('checkpoints',cp(0,1,null))).status,200);
+  assert.equal((await request('checkpoints',cp(1,2,id(100)))).status,200);
+  assert.equal((await request('gc',{epoch})).body.gcFloor,0);
+  await db.prepare('UPDATE leases SET expires_at=0').run();
+  assert.equal((await request('gc',{epoch})).body.gcFloor,1);
+  const chunk=Buffer.alloc(64,6),digest=createHash('sha256').update(chunk).digest('hex');
+  await request(`artifacts/${digest}`,{epoch,objectID:id(70),ciphertext:chunk.toString('base64')});
+  await db.prepare('UPDATE artifacts SET lease_until=0').run();
+  assert.equal((await request('gc',{epoch})).status,200);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM artifacts').first()).n,0);
 });

@@ -1,42 +1,24 @@
-# Pindo Cloudflare v3：开发日志核心
+# Cloudflare encrypted sync v3
 
-当前交付包含协议原语、D1 schema、Worker 日志接口与本地运行时测试。支持独立 staging 部署；本地测试没有真实云账号依赖，桌面和 Android 客户端尚未连接此服务。完整协议与后续清单见 [CLOUDFLARE-V3.md](../../docs/CLOUDFLARE-V3.md)。
+Workers + D1 提供设备配对、每设备凭据、不可变密文分块、顺序日志、永久轻量回执、检查点 CAS、读取租约和分批 GC。内容和恢复密钥仅存在客户端；服务端只见密文及必要元数据。macOS 和 Android 使用同一协议与 SQLite 持久化队列。
 
-## 验证
-
-Node 22+，使用锁定依赖：
-
-```sh
-cd backend/cloudflare
+```
 npm ci
 npm run types
 npm run typecheck
 npm test
+# 提交 backend 后：
+npm run build:staging
 ```
 
-`npm test` 在 `work/` 生成 Worker 测试 bundle，用 Miniflare 启动真实 workerd / 本地 D1 SQLite 并自动应用 migration，在每个测试前重建隔离的假库和设备。测试不访问 Cloudflare 账号。运行时测试覆盖提交、幂等、相同 ID 的摘要冲突、并发 revision、撤销后的 SQL 条件校验、事务后步失败回滚、epoch / 维护 / 预算错误、分页、日志缺口、模拟 GC 后独立 head / 保留回执及共享加密向量。
+部署包在 `work/cloudflare-staging/`，CI 上传同名服务端构建产物。`metadata.json` 继承已安装的 `BOOTSTRAP_SECRET` / `RECOVERY_SECRET`，不包含密钥。首次部署必须通过 Cloudflare Secrets API 独立设置两个随机密钥，然后上传 bundle 并应用按名称及 SHA-256 登记的 migrations。已有库不可重复执行 ALTER TABLE。默认库容量预算 64 MiB，保留日志最多 1000 批；不启用 R2 或付费计划。
 
-CLI 固定为 `cf@1.0.0-beta.32`，配置为 `cloudflare.config.ts`，本地模式为 `development`，独立线上测试模式为 `staging`，生产模式仍直接拒绝。部署兼容日期为 2026-11-14；锁定的 Miniflare 4.20260730.0 本地运行时目前只支持到 2026-07-30，因此测试单独固定为该日期。后续发布前必须升级本地运行时并在部署兼容日期重跑，再进行专用 D1 真云验证；本地通过不替代此项。
+首次客户端使用服务地址和初始化密钥创建库；服务在同一 D1 事务内关闭后续 bootstrap。客户端生成自己的恢复密钥、设备 token 和密钥验证探针，先持久化待连接凭据，再注册、校验探针和提交本地库绑定。以后从已连接设备生成 10 分钟一次性配对信息。配对信息包含客户端恢复密钥，应仅在自己的设备之间传递。
 
-## 运维边界
+暂停同步仍记录离线 outbox。上传冻结确切字节后重试；ACK 不推进下载游标。下载持久化 inbox 后按创建依赖应用，单独维护 fetched / applied 游标。大批量动作与大备注作为不可变分块和认证 manifest 原子应用。字段 LWW、生命周期原子、备注按记录保存因果 MV 寄存器；保留删除墓碑。
 
-- 本批不提供 bootstrap / pairing HTTP 接口，绝不开放匿名建库。开发测试通过本地 D1 fixtures 创建假身份。真实初始化必须等到独立 bootstrap 秘密、一次性配对与设备注册事务完成。
-- 本地配置使用固定假身份；`deployments/staging.json` 记录线上测试库的独立稳定身份。未来生产必须使用新的稳定 serviceID 和独立 D1，测试与生产不能共用。令牌、管理秘密和内容密钥不进入配置、仓库、日志或应用包。
-- 使用 D1 binding，不启用读复制。所有成功回执来自提交完成后的结果；pull 的 metadata / page 同批读取。未来启用复制前增加 session / bookmark 和游标不回退测试。
-- 当前 `batch_budget=1000`、`byte_budget=16 MiB` 只是开发硬门槛。保守记账为每批 base64 长度加 2048 字节，保留元数据和索引余量，不代替真实 D1 磁盘测量。接近预算停止追加，不能通过删回执、归零 counter 或提高预算绕过恢复设计。
-- 不运行真正 GC，不修改服务 epoch，不将模拟测试中的直接 SQL 删除用于真实库。首次发布前必须实现分块完整性、两个可恢复检查点、CAS、读取 / 上传租约、日志与 artifact 回收和旧游标恢复。
-- D1 恢复必须先维护停写，轮换 epoch 后客户端重基；不能回滚 counter 后继续确认旧请求。应用正常备份独立保留。
-- 日志仅输出 route、实际 D1 rows_read / rows_written 和不含正文的故障事件。启用 Workers Logs 和 Traces，查询串脱敏。日志数据仍按账号的保留和额度策略管理。
-- 本地测试尚未测量 Worker CPU、实际 D1 存储、设备 I/O 或恢复时间，不能宣称达到 Free 的 10 ms CPU 容量目标。
+检查点只覆盖已应用连续前缀，分块上传后逐块读回，CAS 发布并读取验证。保留两个检查点及所需尾日志；读取租约阻止 GC 越过使用中的前缀。日志回执、墓碑和备注因果上下文不按 TTL 删除。管理员恢复必须先维护模式，再通过独立恢复密钥切换 epoch；客户端保留旧冻结队列，恢复旧前缀并在新 epoch 显式重建基线。
 
-## 通过 Cloudflare 插件部署 staging
+`POST /v3/admin/maintenance` body `{vaultID, enabled: true}`；`POST /v3/admin/recover` body `{vaultID, epoch: 新UUID}`，均使用恢复密钥作为 Bearer。D1 时间点恢复后也必须切换 epoch，避免历史回执混用。
 
-部署资源与 URL 在 `deployments/staging.json` 中版本化保存；该文件只包含非秘密配置。线上入口为 `https://pindo-sync-v3-staging.zhchain.workers.dev`，`GET /` 与 `GET /health` 返回健康状态及 `clientSyncAvailable:false`，资料 API 仍要求每设备令牌。
-
-1. 运行本地测试，提交 backend 改动，再执行 `npm run build:staging`。脚本只打包并在仓库 `work/cloudflare-staging/` 生成 `worker.mjs`、Cloudflare API `metadata.json` 和带源提交 / SHA-256 的 `build.json`，不会创建资源或发布。存在未提交的 backend 修改时拒绝构建。
-2. 通过 Cloudflare 插件确认账号和资源。在新的独立 D1 应用 `migrations/0001_log_core.sql`，随后记录 `pindo_migrations` 的文件名与摘要。已有 schema 先检查迁移账本，不重复执行非幂等 DDL。
-3. 使用插件的 Worker multipart 上传 API，上传同一构建的源码和 metadata，并启用该 Worker 的 workers.dev 路由。metadata 启用日志、追踪和查询串脱敏；不修改账号计费方案，也不启用 R2。
-4. 从线上检查健康接口、未授权 401，以及一次性随机测试库 / 设备下的 push、回执、重复提交、冲突、pull、epoch 和撤销。测试令牌只在执行期间存在，不进入文件、仓库和输出；结束后撤销并清理仅属于本轮测试的记录。
-5. 从 Cloudflare API 读回版本、绑定和迁移账本，核对源提交与 bundle SHA-256。检查结果由本次部署记录说明。
-
-staging 仅供开发联调，保留 1,000 批 / 16 MiB 的停止门槛，未开放匿名建库。P2 / P4 / P5 完成并通过专用测试库与实机验证后才能增加正式生产发布流程；部署 staging 不代表客户端已经可用。
+线上地址见 `deployments/staging.json`。本地 Miniflare 锁定版本仅支持 2026-07-30，云部署兼容日期 2026-11-14；本地验证和线上验证在交付中分别记录。`test/http-server.mjs` 只绑定 loopback，使用公开测试凭据，供 CryptoKit / Java AES-GCM 客户端互通测试，不能部署到公网。

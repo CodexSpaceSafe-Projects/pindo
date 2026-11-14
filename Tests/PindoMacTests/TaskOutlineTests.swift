@@ -25,7 +25,7 @@ private struct OutlineFixture: View {
 
 final class TaskOutlineTests: XCTestCase {
     @MainActor private func model(defaults: UserDefaults = .standard) throws -> AppModel {
-        let model = try AppModel(directory: FileManager.default.temporaryDirectory.appendingPathComponent("PindoOutline-\(UUID().uuidString)"),
+        let model = try AppModel(useSQLite: false, directory: FileManager.default.temporaryDirectory.appendingPathComponent("PindoOutline-\(UUID().uuidString)"),
                                  defaults: defaults)
         model.playFeedback = { _ in }
         return model

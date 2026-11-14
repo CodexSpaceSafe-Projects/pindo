@@ -136,7 +136,7 @@ class AndroidUiTest {
             val largeNote = "x".repeat(BackupCodec.MAX_BYTES + 1024)
             val original = emptyDocument().put("tasks", JSONArray().put(
                 TodoRules.newTask("保留完整的大备注", largeNote, LocalDate.now(), null, null, 0)))
-            File(app.filesDir, "data.json").writeText(original.toString())
+            DocumentStorage(app).write(original)
             val restoredStore = AppStore(app)
             assertEquals(largeNote.length, restoredStore.state.value.tasks.single().note.length)
             assertTrue(restoredStore.importData(emptyDocument().toString()))

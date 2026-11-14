@@ -7,7 +7,7 @@ import PindoCore
 final class AppModelTests: XCTestCase {
     @MainActor private func makeModel() throws -> AppModel {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("PindoMacTests-\(UUID().uuidString)")
-        let model = try AppModel(directory: path)
+        let model = try AppModel(useSQLite: false, directory: path)
         model.playFeedback = { _ in }
         return model
     }
@@ -883,7 +883,7 @@ final class AppModelTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(suite, isDirectory: true)
         defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: folder) }
-        let model = try AppModel(directory: folder, defaults: defaults)
+        let model = try AppModel(useSQLite: false, directory: folder, defaults: defaults)
         model.playFeedback = { _ in }
         model.quickTitle = "待提交事项"; model.quickNote = "已输入的备注"
         let delegate = AppDelegate(model: model, quickPosition: QuickPanelPosition(defaults: defaults))

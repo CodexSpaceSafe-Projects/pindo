@@ -21,7 +21,7 @@ data class SyncV3EnvelopeContext(val identity: SyncV3Identity, val epoch: String
     fun associatedData(): ByteArray {
         listOf(identity.serviceID, identity.vaultID, epoch, objectID).forEach(SyncV3::validateID)
         require(kind in listOf("batch", "checkpoint", "chunk"))
-        require(artifactIDs.size <= 50 && artifactIDs == artifactIDs.sorted().distinct() && artifactIDs.all { it.matches(Regex("[0-9a-f]{64}")) })
+        require(artifactIDs.size <= 512 && artifactIDs == artifactIDs.sorted().distinct() && artifactIDs.all { it.matches(Regex("[0-9a-f]{64}")) })
         return listOf("PindoSync/v3", identity.serviceID, identity.vaultID, epoch, kind, objectID, artifactIDs.joinToString(",")).joinToString("\n").toByteArray(Charsets.UTF_8)
     }
 }
@@ -31,7 +31,8 @@ enum class SyncV3Error(val wire: String) {
     EPOCH_MISMATCH("epoch_mismatch"), BATCH_CONFLICT("batch_conflict"), CHECKPOINT_REQUIRED("checkpoint_required"),
     CORRUPT_DATA("corrupt_data"), QUOTA_UNAVAILABLE("quota_unavailable"), STORAGE_UNAVAILABLE("storage_unavailable"),
     MAINTENANCE("maintenance"), INVALID_REQUEST("invalid_request"), CURSOR_MISMATCH("cursor_mismatch"),
-    NOT_FOUND("not_found"), UNSUPPORTED_FEATURE("unsupported_feature")
+    NOT_FOUND("not_found"), UNSUPPORTED_FEATURE("unsupported_feature"),
+    BOOTSTRAP_CLOSED("bootstrap_closed"), PAIRING_INVALID("pairing_invalid"), CHECKPOINT_CONFLICT("checkpoint_conflict"), ARTIFACT_MISSING("artifact_missing"), LEASE_EXPIRED("lease_expired")
 }
 
 data class SyncV3NoteDot(val actorID: String, val counter: Long) {

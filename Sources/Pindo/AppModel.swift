@@ -72,13 +72,13 @@ enum SaveState { case saved, saving, failed }
         }
     }
 
-    init(directory: URL, defaults: UserDefaults = .standard) throws {
+    init(useSQLite: Bool = true, directory: URL, defaults: UserDefaults = .standard) throws {
         self.defaults = defaults
         let language = InterfaceLanguage(defaults: defaults)
         interfaceLanguage = language
         fontPreferences = defaults.data(forKey: PindoFontPreferences.defaultsKey)
             .flatMap { try? JSONDecoder().decode(PindoFontPreferences.self, from: $0) } ?? PindoFontPreferences()
-        repository = try PindoRepository(directory: directory, initialDocument: PindoLocalization(language).initialDocument)
+        repository = try PindoRepository(directory: directory, useSQLite: useSQLite, initialDocument: PindoLocalization(language).initialDocument)
         try repository.beginSyncSession()
         document = repository.document
         listEntryGroupID = repository.document.preferences.defaultGroupID

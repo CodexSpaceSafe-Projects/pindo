@@ -188,6 +188,53 @@ class SyncReplica private constructor(
             return validatedPayload(payload)
         }
 
+        internal fun applyingV3(base:JSONObject,batch:JSONObject):JSONObject {
+            require(batch.getInt("version")==3)
+            val operations=batch.getJSONArray("operations");require(operations.length()<=20_000)
+            if(batch.getString("type")=="baseline") {
+                require(operations.length()==0)
+                return fresh(version=2).apply { merge(upgradedPayload(base));merge(upgradedPayload(batch.getJSONObject("payload"))) }.payload
+            }
+            require(batch.getString("type")=="batch"&&!batch.has("payload"))
+            val next=upgradedPayload(base);val records=next.getJSONObject("records");val seen=next.getJSONObject("seen")
+            for(i in 0 until operations.length()) {
+                val op=operations.getJSONObject(i);val key=op.getString("recordKey");val parts=key.split(':')
+                require(parts.size==2&&parts[0] in setOf("task","group")&&uuid(parts[1])==parts[1])
+                val allowed=(if(parts[0]=="task")taskFields(2) else GROUP_FIELDS).toSet()+ALIVE
+                val fields=op.getJSONObject("fields");val names=fields.keys().asSequence().toSet();val notes=op.getJSONArray("notes");val kind=op.getString("kind")
+                require(names.all { it in allowed } && (names.isNotEmpty()||notes.length()>0) && (parts[0]=="task"||notes.length()==0))
+                when(kind) {
+                    "patch" -> require(ALIVE !in names)
+                    "delete" -> require(names==setOf(ALIVE)&&fields.getJSONObject(ALIVE).get("value")==false&&notes.length()==0)
+                    "create","restore" -> require(names==allowed&&fields.getJSONObject(ALIVE).get("value")==true)
+                    else -> error("Invalid operation")
+                }
+                if(!records.has(key)&&kind!in setOf("create","restore"))throw MissingV3Create(key)
+                val record=records.optJSONObject(key)?:JSONObject().put("fields",JSONObject()).put("notes",JSONArray())
+                val target=record.getJSONObject("fields")
+                for(name in fields.keys()) {
+                    val incoming=fields.getJSONObject(name);val stamp=Stamp.parse(incoming.getJSONObject("stamp"));val old=target.optJSONObject(name)
+                    seen.put(stamp.deviceID,maxOf(seen.optLong(stamp.deviceID),stamp.counter))
+                    if(name==LIFECYCLE&&old!=null) {
+                        if(!old.isNull("value")&&incoming.isNull("value"))continue
+                        if(old.isNull("value")&&!incoming.isNull("value")){target.put(name,copy(incoming));continue}
+                    }
+                    if(old==null||Stamp.parse(old.getJSONObject("stamp"))<stamp)target.put(name,copy(incoming))
+                    else if(Stamp.parse(old.getJSONObject("stamp"))==stamp)require(jsonEqual(old.get("value"),incoming.get("value")))
+                }
+                val combined=copy(record.getJSONArray("notes"))
+                for(j in 0 until notes.length()) {
+                    val note=notes.getJSONObject(j);val stamp=Stamp.parse(note.getJSONObject("stamp"));val context=note.getJSONObject("seen")
+                    validateSeen(context);require(context.keys().asSequence().all { context.getLong(it)<stamp.counter })
+                    seen.put(stamp.deviceID,maxOf(seen.optLong(stamp.deviceID),stamp.counter))
+                    for(actor in context.keys())seen.put(actor,maxOf(seen.optLong(actor),context.getLong(actor)))
+                    combined.put(copy(note))
+                }
+                record.put("notes",mergedNotes(combined));records.put(key,record)
+            }
+            return validatedPayload(next)
+        }
+
         fun validatedPayload(value: JSONObject): JSONObject {
             val rawVersion = long(value.get("version"))
             require(rawVersion == 1L || rawVersion == 2L) { "不支持此同步资料版本。" }
@@ -481,8 +528,8 @@ class SyncReplica private constructor(
             catch (error: ArithmeticException) { throw IllegalArgumentException("同步计数值无效。", error) }
         }
         private fun mapsEqual(a: Map<String, JSONObject>, b: Map<String, JSONObject>): Boolean = a.keys == b.keys && a.all { (key, value) -> jsonEqual(value, b[key]) }
-        private fun copy(value: JSONObject) = JSONObject(value.toString())
-        private fun copy(value: JSONArray) = JSONArray(value.toString())
+        private fun copy(value: JSONObject) = copyV3(value) as JSONObject
+        private fun copy(value: JSONArray) = copyV3(value) as JSONArray
         private fun array(values: Collection<JSONObject>): JSONArray = JSONArray().also { out -> values.forEach { out.put(copy(it)) } }
         private fun jsonEqual(a: Any?, b: Any?): Boolean = when {
             a == null || b == null -> a == b

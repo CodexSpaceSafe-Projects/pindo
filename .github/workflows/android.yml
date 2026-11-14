@@ -30,7 +30,24 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Install Android SDK
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Start real Worker and D1
+        working-directory: .
+        run: |
+          npm --prefix backend/cloudflare ci
+          npm --prefix backend/cloudflare run build:test
+          node backend/cloudflare/test/http-server.mjs > /tmp/pindo-worker.log 2>&1 &
+          for attempt in {1..40}; do
+            if curl -fsS http://127.0.0.1:8787/health; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/pindo-worker.log
+          exit 1
       - name: Unit tests, lint and debug APK
+        env:
+          PINDO_SYNC_TEST_ENDPOINT: http://127.0.0.1:8787
         run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug
       - uses: actions/upload-artifact@v6
         with:

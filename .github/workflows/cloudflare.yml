@@ -27,6 +27,13 @@ jobs:
       - run: npm run types
       - run: npm run typecheck
       - run: npm test
+      - run: npm run build:staging
+      - uses: actions/upload-artifact@v6
+        with:
+          name: Pindo-Cloudflare-server
+          path: work/cloudflare-staging/
+          if-no-files-found: error
+          retention-days: 14
   staging-smoke:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: log-core

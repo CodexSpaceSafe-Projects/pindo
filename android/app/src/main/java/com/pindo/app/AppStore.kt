@@ -2,6 +2,7 @@ package com.pindo.app
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import com.pindo.app.sync.SyncReplica
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,22 +34,15 @@ class AppStore(application: Application) : AndroidViewModel(application) {
         try {
             document = storage.read() ?: emptyDocument().also(storage::write)
             validateDocument(document)
-            // Rotate before any local edit, including while disconnected. Copied data files
-            // must not let two installations write the same actor/counter pair offline.
-            document.optJSONObject("syncReplica")?.let {
-                val replica = SyncReplica.fromJson(it).upgraded()
-                replica.rotateActor()
-                replica.capture(document.getJSONArray("tasks"), document.getJSONArray("groups"))
-                replica.merge(SyncReplica.fresh(version = 2).payload())
-                val projected = replica.projected()
-                val next = JSONObject(document.toString()).put("tasks", projected.first).put("groups", projected.second).put("syncReplica", replica.toJson())
-                persist(next)
-            }
             if (!state.value.readOnly) publish()
         } catch (_: Exception) {
             mutable.value = AppState(error = "无法读取本机资料，原文件已保留。请先备份应用数据，再检查或重新安装。", readOnly = true)
         }
     }
+
+    internal val sync by lazy { SyncCoordinator(storage.sqlite, V3SecretStorage(getApplication()), viewModelScope,
+        { networkUiReady() && !state.value.readOnly }, { document=storage.sqlite.read();publish() },
+        { enabled,busy,text -> mutable.value=state.value.copy(syncEnabled=enabled,syncing=busy,syncStatus=text) }) }
 
     fun dismissError() { if (!state.value.readOnly) mutable.value = state.value.copy(error = null) }
     internal fun noteDraftHandle(): NoteDraftHandle = NoteDraftHandle(noteDraftFiles)
@@ -175,23 +169,18 @@ class AppStore(application: Application) : AndroidViewModel(application) {
         foreground = true; uiReady = false
         mutable.value = state.value.copy(lifecycleRevision = state.value.lifecycleRevision + 1)
     }
-    fun markUiReady() { if (foreground) uiReady = true }
+    fun markUiReady() { if (foreground) { uiReady = true; sync.foreground() } }
     internal fun networkUiReady(): Boolean = foreground && uiReady && editingLeases.isEmpty()
-    fun stopForeground() { foreground = false; uiReady = false }
-    fun beginEditing(): String = UUID.randomUUID().toString().also(editingLeases::add)
-    fun endEditing(token: String) { editingLeases.remove(token) }
+    fun stopForeground() { foreground = false; uiReady = false; sync.background() }
+    fun beginEditing(): String = UUID.randomUUID().toString().also { editingLeases.add(it);sync.pause() }
+    fun endEditing(token: String) { editingLeases.remove(token); if (networkUiReady()) sync.sync(false) }
 
     private fun mutate(change: (JSONObject) -> Unit): Boolean {
         if (state.value.readOnly) return false
         return try {
-            val next = JSONObject(document.toString())
+            val next = com.pindo.app.sync.copyV3(document) as JSONObject
             change(next)
             validateDocument(next)
-            next.optJSONObject("syncReplica")?.let { raw ->
-                val replica = SyncReplica.fromJson(raw)
-                replica.capture(next.getJSONArray("tasks"), next.getJSONArray("groups"))
-                next.put("syncReplica", replica.toJson())
-            }
             persist(next)
             mutable.value = state.value.copy(error = null)
             publish()
@@ -207,9 +196,9 @@ class AppStore(application: Application) : AndroidViewModel(application) {
             runCatching { preferenceStorage.write(preferences) }
         }
         mutable.value = state.value.copy(tasks = document.getJSONArray("tasks").objects().map(Todo::from),
-            groups = visibleGroups, syncEnabled = false, preferences = preferences,
+            groups = visibleGroups, preferences = preferences,
             hasLocalBackup = document.optJSONObject("previousDocument") != null)
     }
     private fun error(message: String) { mutable.value = state.value.copy(error = message) }
-    private fun persist(next: JSONObject) { storage.write(next); document = next }
+    private fun persist(next: JSONObject) { storage.write(next); document = next; sync.changed() }
 }

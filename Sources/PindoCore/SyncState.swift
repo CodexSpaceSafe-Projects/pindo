@@ -419,7 +419,16 @@ private func decodeTask(id: UUID, record: SyncRecord, version: Int = 1) throws -
     for field in ["groupID", "parentID"] {
         if case .string(let value) = values[field], !isCanonicalID(value) { throw invalidSync() }
     }
-    let item = try DocumentCodec.decode(TodoItem.self, from: DocumentCodec.encode(JSONValue.object(values)))
+    func string(_ field: String) throws -> String { guard case .string(let v) = values[field] else { throw invalidSync() }; return v }
+    func number(_ value: JSONValue?) throws -> Double { guard case .number(let v) = value, v.isFinite else { throw invalidSync() }; return v }
+    func identifier(_ field: String) throws -> UUID? { if values[field] == .null || values[field] == nil { return nil }; guard let id = UUID(uuidString: try string(field)) else { throw invalidSync() }; return id }
+    func date(_ field: String) throws -> Date? { if values[field] == .null || values[field] == nil { return nil }; return Date(timeIntervalSinceReferenceDate: try number(values[field])) }
+    guard case .object(let rawDay) = values["plannedDay"], let phase = TaskPhase(rawValue: try string("phase")) else { throw invalidSync() }
+    func integer(_ value: JSONValue?) throws -> Int { let n = try number(value); guard n.rounded(.towardZero) == n, abs(n) <= Double(maximumCounter) else { throw invalidSync() }; return Int(n) }
+    let day = try DayKey(year: integer(rawDay["year"]), month: integer(rawDay["month"]), day: integer(rawDay["day"]))
+    var item = try TodoItem(id: id, title: string("title"), note: string("note"), plannedDay: day, groupID: identifier("groupID"), parentID: identifier("parentID"), order: integer(values["order"]), now: date("createdAt") ?? { throw invalidSync() }())
+    guard let updatedAt = try date("updatedAt") else { throw invalidSync() }; item.updatedAt = updatedAt; item.phase = phase; item.startedAt = try date("startedAt"); item.completedAt = try date("completedAt")
+    if case .bool(let explicit) = values["isProgressExplicit"] { item.isProgressExplicit = explicit }
     guard !item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
           item.order >= -9_007_199_254_740_991, item.order <= 9_007_199_254_740_991,
           item.createdAt.timeIntervalSinceReferenceDate.isFinite, item.updatedAt.timeIntervalSinceReferenceDate.isFinite,
@@ -472,7 +481,55 @@ private func mergeLifecycle(_ current: SyncRegister, _ incoming: SyncRegister) t
 private func decodeGroup(id: UUID, record: SyncRecord) throws -> TaskGroup {
     var values = record.fields.mapValues(\.value)
     values.removeValue(forKey: "$alive"); values["id"] = .string(canonicalID(id))
-    let group = try DocumentCodec.decode(TaskGroup.self, from: DocumentCodec.encode(JSONValue.object(values)))
+    guard case .string(let name) = values["name"], case .string(let color) = values["colorHex"] else { throw invalidSync() }
+    let group = TaskGroup(id: id, name: name, colorHex: color)
     guard !group.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, group.isValidColor else { throw invalidSync() }
     return group
+}
+
+extension SyncPayload {
+    /// Partial operations become visible only after every create dependency in
+    /// the logical batch is satisfied. The caller commits replica+projection.
+    public func applyingV3(_ batch: SyncV3Batch, maximumOperations: Int = 20_000) throws -> Self {
+        guard batch.version == 3, batch.operations.count <= maximumOperations else { throw SyncV3ApplyError.corrupt }
+        if batch.type == "baseline" {
+            guard batch.operations.isEmpty, let payload = batch.payload else { throw SyncV3ApplyError.corrupt }
+            return try upgraded().merging(payload.upgraded())
+        }
+        guard batch.type == "batch", batch.payload == nil else { throw SyncV3ApplyError.corrupt }
+        var next = try upgraded()
+        for op in batch.operations {
+            let (kind, _) = try parseRecordKey(op.recordKey)
+            let allowed = kind == "task" ? taskFields.union(["$alive", "lifecycle"]) : groupFields.union(["$alive"])
+            guard Set(op.fields.keys).isSubset(of: allowed), !op.fields.isEmpty || !op.notes.isEmpty,
+                  kind == "task" || op.notes.isEmpty else { throw SyncV3ApplyError.corrupt }
+            switch op.kind {
+            case .patch: guard op.fields["$alive"] == nil else { throw SyncV3ApplyError.corrupt }
+            case .delete: guard Set(op.fields.keys) == ["$alive"], op.fields["$alive"]?.value == .bool(false), op.notes.isEmpty else { throw SyncV3ApplyError.corrupt }
+            case .create, .restore: guard Set(op.fields.keys) == allowed, op.fields["$alive"]?.value == .bool(true) else { throw SyncV3ApplyError.corrupt }
+            }
+            if next.records[op.recordKey] == nil, op.kind != .create, op.kind != .restore { throw SyncV3ApplyError.missingCreate(op.recordKey) }
+            var record = next.records[op.recordKey] ?? SyncRecord()
+            for (name, incoming) in op.fields {
+                try validateStamp(incoming.stamp)
+                next.seen[incoming.stamp.deviceID] = max(next.seen[incoming.stamp.deviceID] ?? 0, incoming.stamp.counter)
+                if let current = record.fields[name] {
+                    if name == "lifecycle" { record.fields[name] = try mergeLifecycle(current, incoming) }
+                    else {
+                        if current.stamp == incoming.stamp, current.value != incoming.value { throw SyncV3ApplyError.corrupt }
+                        if current.stamp < incoming.stamp { record.fields[name] = incoming }
+                    }
+                } else { record.fields[name] = incoming }
+            }
+            for note in op.notes {
+                try validateStamp(note.stamp); try validateVector(note.seen)
+                guard note.seen.allSatisfy({ $0.value < note.stamp.counter }) else { throw SyncV3ApplyError.corrupt }
+                next.seen[note.stamp.deviceID] = max(next.seen[note.stamp.deviceID] ?? 0, note.stamp.counter)
+                for (actor, count) in note.seen { next.seen[actor] = max(next.seen[actor] ?? 0, count) }
+            }
+            record.notes = try mergedNotes(record.notes + op.notes)
+            next.records[op.recordKey] = record
+        }
+        return try next.validated()
+    }
 }

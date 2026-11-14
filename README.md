@@ -97,7 +97,7 @@ git push origin v0.1.0
 Sources/PindoCore/       数据模型、日期语义、文本差异、快照保留、原子保存和恢复日志
 Sources/Pindo/           原生菜单栏、自适应置顶面板、实时 Markdown 编辑器、月历、设置与全局热键
 android/                Kotlin Android 客户端、离线存储及相同的加密同步协议
-backend/cloudflare/     开发中的 Workers / D1 日志核心、迁移与隔离测试
+backend/cloudflare/     Workers / D1 加密同步服务、迁移与端到端测试
 docs/SYNC.md            当前同步状态与 Cloudflare v3 开发边界
 Tests/PindoCoreTests/    可跨平台运行的数据与恢复测试
 Tests/PindoMacTests/     macOS 模型、编辑器组词、自动保存、管理列表及视图构造测试
