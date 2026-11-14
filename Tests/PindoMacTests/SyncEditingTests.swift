@@ -52,7 +52,7 @@ final class SyncEditingTests: XCTestCase {
 
     @MainActor private func find<T: NSView>(_ type: T.Type, in view: NSView) -> T? {
         if let match = view as? T { return match }
-        return view.subviews.lazy.compactMap { find(type, in: $0) }.first
+        return view.subviews.lazy.compactMap { self.find(type, in: $0) }.first
     }
 
     @MainActor private func waitUntil(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
