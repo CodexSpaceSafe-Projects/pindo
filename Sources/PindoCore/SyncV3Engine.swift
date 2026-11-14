@@ -53,6 +53,13 @@ public final class SyncV3Engine {
     private let check: () throws -> Void
     private let applied: () throws -> Void
     private var leases: [(String, String)] = []
+    private var leaseRenewed: [String: Date] = [:]
+    private func renewLease(_ c: SyncV3Connection, id: String?, epoch: String) async throws {
+        guard let id, Date().timeIntervalSince(leaseRenewed[id] ?? .distantPast) >= 60 else { return }
+        let body: JSONValue = .object(["epoch": .string(epoch), "floor": .number(0)])
+        let _: JSONValue = try await call(c, "leases/\(id)", method: "POST", body: DocumentCodec.encode(body))
+        leaseRenewed[id] = Date()
+    }
     public init(store: SQLiteSyncStore, transport: any SyncV3Transport, cipher: any SyncV3Cryptography,
                 check: @escaping () throws -> Void = {}, applied: @escaping () throws -> Void = {}) {
         self.store = store; self.transport = transport; self.cipher = cipher; self.check = check; self.applied = applied
@@ -102,6 +109,7 @@ public final class SyncV3Engine {
         struct PartResponse: Decodable { var epoch: String; var digest: String; var objectID: String; var bytes: Int; var ciphertext: String }
         var result = Data()
         for part in manifest.parts {
+            try await renewLease(c, id: lease, epoch: epoch)
             try SyncV3.validateID(part.objectID)
             let response: PartResponse = try await call(c, "artifacts/\(part.digest)?epoch=\(epoch)" + (lease.map { "&lease=\($0)" } ?? ""))
             guard response.epoch == epoch, response.digest == part.digest, response.objectID == part.objectID, response.bytes == part.bytes,
@@ -124,7 +132,7 @@ public final class SyncV3Engine {
     private func readCheckpoint(_ c: SyncV3Connection, epoch: String) async throws -> (payload: SyncPayload, covered: Int64, response: V3CheckpointResponse) {
         let response: V3CheckpointResponse = try await call(c, "checkpoints?epoch=\(epoch)")
         guard response.serviceID == c.serviceID, response.vaultID == c.vaultID, response.sourceEpoch == epoch else { throw SyncV3Error.corruptData }
-        leases.append((response.leaseID, epoch))
+        leases.append((response.leaseID, epoch)); leaseRenewed[response.leaseID] = Date()
         guard let cp = response.checkpoint else { return (.init(version: 2), 0, response) }
         guard cp.epoch == epoch, let sealed = Data(base64Encoded: cp.ciphertext), try boundDigest(c, epoch: epoch, kind: .checkpoint, id: cp.id, refs: cp.artifactIDs, sealed: sealed) == cp.digest else { throw SyncV3Error.corruptData }
         let content = try await decode(c, epoch: epoch, kind: .checkpoint, id: cp.id, sealed: sealed, refs: cp.artifactIDs, lease: response.leaseID)
@@ -133,6 +141,7 @@ public final class SyncV3Engine {
         return (try checkpoint.payload.validated(), cp.covered, response)
     }
     private func readPage(_ c: SyncV3Connection, epoch: String, after: Int64, lease: String? = nil) async throws -> (V3Page, [(revision: Int64, id: String, batch: SyncV3Batch)]) {
+        try await renewLease(c, id: lease, epoch: epoch)
         let page: V3Page = try await call(c, "pull?epoch=\(epoch)&after=\(after)" + (lease.map { "&lease=\($0)" } ?? ""))
         guard page.epoch == epoch, page.commits.count <= 8 else { throw SyncV3Error.corruptData }
         var entries: [(revision: Int64, id: String, batch: SyncV3Batch)] = [], cursor = after
@@ -152,7 +161,7 @@ public final class SyncV3Engine {
             let body: JSONValue = .object(["epoch": .string(epoch), "floor": .number(0)])
             _ = try? await transport.request(method: "DELETE", path: path(c, "leases/\(id)"), body: DocumentCodec.encode(body), token: c.token)
         }
-        leases = []
+        leases = []; leaseRenewed = [:]
     }
     private func publish(_ c: SyncV3Connection, info: SyncV3Info, initial: (SyncPayload, Int64)? = nil) async throws {
         let binding = try c.binding
