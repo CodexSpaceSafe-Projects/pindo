@@ -32,7 +32,9 @@ struct SyncEditingScope<Content: View>: View {
     }
 
     var body: some View {
-        Group {
+        // Group distributes its background into the conditional branches. Keep
+        // the native window observer mounted while readiness changes the child.
+        ZStack {
             if lease.matches(model: model, taskID: taskID) && lease.isGranted { content }
             else if lease.matches(model: model, taskID: taskID) && lease.attempted {
                 VStack(spacing: 14) {
@@ -54,6 +56,7 @@ struct SyncEditingScope<Content: View>: View {
     private var taskID: UUID?
     private var token: UUID?
     private var owner: UUID?
+    private var publicationScheduled = false
     private(set) var attempted = false
     var isGranted: Bool { token != nil }
 
@@ -66,6 +69,7 @@ struct SyncEditingScope<Content: View>: View {
             self.model = model; self.taskID = taskID
         }
         self.owner = owner
+        schedulePublication()
     }
     func owns(_ owner: UUID) -> Bool { self.owner == owner }
 
@@ -78,10 +82,20 @@ struct SyncEditingScope<Content: View>: View {
             guard token != nil || attempted else { return }
             releaseToken(); attempted = false
         }
-        // A window notification can itself be delivered during graph removal.
-        // Publish only after that stack, and only to the current native mount.
+        schedulePublication()
+    }
+
+    private func schedulePublication() {
+        guard !publicationScheduled else { return }
+        publicationScheduled = true
+        // A window notification can arrive during graph removal. Publish after
+        // that stack to whichever mount is current, rather than dropping a
+        // pending readiness change when the original mount has been replaced.
+        // This callback only publishes state; it cannot revive an old lease.
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.owns(owner) else { return }
+            guard let self else { return }
+            self.publicationScheduled = false
+            guard self.owner != nil else { return }
             self.objectWillChange.send()
         }
     }
@@ -102,7 +116,7 @@ struct SyncEditingScope<Content: View>: View {
 
 /// SwiftUI may cache an NSHostingView after orderOut. Window visibility owns
 /// this lease independently of SwiftUI's onDisappear delivery.
-private struct SyncEditingWindowObserver: NSViewRepresentable {
+struct SyncEditingWindowObserver: NSViewRepresentable {
     let lease: SyncEditingLease
     let model: AppModel
     let taskID: UUID?
