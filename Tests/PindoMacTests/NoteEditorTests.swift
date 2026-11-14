@@ -5,6 +5,99 @@ import MarkdownEngine
 @testable import Pindo
 
 final class NoteEditorTests: XCTestCase {
+    @MainActor func testRepeatedChineseCompositionKeepsCommittedTextInAWrappedListStable() async throws {
+        // Mirrors the recording: composition in the middle of a wrapped list
+        // item must not remove spacing from the already committed prefix.
+        let source = "1. 前项OpenWRT文字\n2. 本项abc正文；这里是输入位置，后文def文字" + String(repeating: "长句中文与text混排", count: 5)
+        let editor = try await NoteEditorHarness.make(source)
+        defer { editor.close() }
+        let view = editor.view, storage = try XCTUnwrap(editor.view.textStorage)
+        XCTAssertTrue(editor.window.makeFirstResponder(view))
+        let firstAnchor = (source as NSString).range(of: "项abc").location
+        let secondAnchor = (source as NSString).range(of: "c正文").location
+        let anchors = [firstAnchor, secondAnchor]
+        let baseline = anchors.map { (storage.attribute(.kern, at: $0, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0 }
+        XCTAssertTrue(baseline.allSatisfy { $0 > 0 })
+        let position = (source as NSString).range(of: "输入位置").location
+        view.setSelectedRange(NSRange(location: position, length: 0))
+        let referenceRect = view.firstRect(forCharacterRange: NSRange(location: secondAnchor + 1, length: 1), actualRange: nil)
+        XCTAssertGreaterThan(referenceRect.width, 0)
+        var unspacedCompositionPasses = 0
+        let observer = NotificationCenter.default.addObserver(forName: NSTextStorage.didProcessEditingNotification, object: storage, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                if view.hasMarkedText(), anchors.map({ (storage.attribute(.kern, at: $0, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0 }) != baseline {
+                    unspacedCompositionPasses += 1
+                }
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        var inserted = ""
+        for _ in 0..<3 {
+            let insertion = position + (inserted as NSString).length
+            view.setSelectedRange(NSRange(location: insertion, length: 0))
+            for pinyin in ["w", "wo", "wo'm", "wo'men"] {
+                view.setMarkedText(pinyin, selectedRange: NSRange(location: (pinyin as NSString).length, length: 0),
+                                   replacementRange: NSRange(location: NSNotFound, length: 0))
+                XCTAssertTrue(view.hasMarkedText())
+                let marked = view.markedRange()
+                XCTAssertEqual(marked, NSRange(location: insertion, length: (pinyin as NSString).length))
+                XCTAssertEqual(view.selectedRange(), NSRange(location: NSMaxRange(marked), length: 0))
+                XCTAssertEqual((view.string as NSString).substring(with: marked), pinyin)
+                XCTAssertEqual(anchors.map { (storage.attribute(.kern, at: $0, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0 }, baseline)
+                let rect = view.firstRect(forCharacterRange: NSRange(location: secondAnchor + 1, length: 1), actualRange: nil)
+                XCTAssertEqual(rect.minX, referenceRect.minX, accuracy: 0.1)
+                XCTAssertEqual(rect.minY, referenceRect.minY, accuracy: 0.1)
+                let markedAttributes = storage.attributedSubstring(from: marked)
+                editor.bridge.applyTypography(in: NSRange(location: 0, length: storage.length))
+                XCTAssertTrue(storage.attributedSubstring(from: marked).isEqual(to: markedAttributes))
+                editor.bridge.synchronize()
+                await editor.settle()
+                XCTAssertEqual(editor.buffer.text, (source as NSString).replacingCharacters(in: NSRange(location: position, length: 0), with: inserted))
+                XCTAssertEqual(view.markedRange(), marked)
+            }
+            view.insertText("我们", replacementRange: NSRange(location: NSNotFound, length: 0))
+            view.unmarkText()
+            inserted += "我们"
+            await editor.settle()
+            XCTAssertEqual(view.selectedRange(), NSRange(location: position + (inserted as NSString).length, length: 0))
+            XCTAssertEqual(editor.buffer.text, (source as NSString).replacingCharacters(in: NSRange(location: position, length: 0), with: inserted))
+        }
+        view.insertText("312321", replacementRange: NSRange(location: NSNotFound, length: 0))
+        inserted += "312321"
+        await editor.settle()
+        XCTAssertEqual(view.string, (source as NSString).replacingCharacters(in: NSRange(location: position, length: 0), with: inserted))
+        XCTAssertEqual(editor.buffer.text, view.string)
+        XCTAssertEqual(unspacedCompositionPasses, 0)
+        XCTAssertNotNil(view.textLayoutManager)
+    }
+
+    @MainActor func testCompositionPreservesFallbackFontsAndWikiIDsWithoutPublishingPreedit() async throws {
+        let source = "1. 中文abc前缀；输入点 [[资料|opaque-id]] 后文def结尾"
+        let font = PindoFontChoice(primaryFamily: "Menlo", fallbackFamily: "PingFang SC", pointSize: 18)
+        let editor = try await NoteEditorHarness.make(source, font: font)
+        defer { editor.close() }
+        let view = editor.view, storage = try XCTUnwrap(editor.view.textStorage)
+        XCTAssertTrue(editor.window.makeFirstResponder(view))
+        let anchor = (view.string as NSString).range(of: "前缀").location
+        let baselineFont = try XCTUnwrap(storage.attribute(.font, at: anchor, effectiveRange: nil) as? NSFont)
+        let insertion = (view.string as NSString).range(of: "输入点").location
+        view.setSelectedRange(NSRange(location: insertion, length: 0))
+        for pinyin in ["z", "zh", "zhong", "zhong'wen"] {
+            view.setMarkedText(pinyin, selectedRange: NSRange(location: (pinyin as NSString).length, length: 0),
+                               replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertTrue(view.hasMarkedText())
+            XCTAssertEqual(storage.attribute(.font, at: anchor, effectiveRange: nil) as? NSFont, baselineFont)
+            await editor.settle()
+            XCTAssertEqual(editor.buffer.text, source)
+        }
+        view.insertText("中文", replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.unmarkText()
+        await editor.settle()
+        editor.bridge.commit()
+        XCTAssertEqual(editor.buffer.text, (source as NSString).replacingCharacters(in: NSRange(location: insertion, length: 0), with: "中文"))
+        XCTAssertEqual(view.selectedRange(), NSRange(location: insertion + 2, length: 0))
+    }
+
     @MainActor func testChineseCompositionAddsBoundarySpacingAfterCommitWithoutChangingTheSource() async throws {
         let editor = try await NoteEditorHarness.make("中文abc")
         defer { editor.close() }

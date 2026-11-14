@@ -153,7 +153,7 @@ struct NoteEditor: NSViewRepresentable {
         }
 
         private func storageChanged(_ storage: NSTextStorage) {
-            guard !stopped, !applyingTypography, let view = textView, !view.hasMarkedText() else { return }
+            guard !stopped, !applyingTypography, let view = textView else { return }
             if storage.editedMask.contains(.editedCharacters) {
                 let edited = storage.editedRange, delta = storage.changeInLength
                 let oldEnd = edited.location + max(0, edited.length - delta)
@@ -195,25 +195,38 @@ struct NoteEditor: NSViewRepresentable {
         }
 
         func applyTypography(in editedRange: NSRange? = nil) {
-            guard !stopped, !applyingTypography, let view = textView, !view.hasMarkedText(), let storage = view.textStorage else { return }
+            guard !stopped, !applyingTypography, let view = textView, let storage = view.textStorage else { return }
+            let composing = view.hasMarkedText()
+            // External/full font updates still wait for composition to finish.
+            // Engine restyles during setMarkedText, however, wipe attributes on
+            // the whole paragraph. Repair committed text in that same pass,
+            // without writing a single attribute inside the marked range.
+            guard !composing || editedRange != nil else { return }
+            let marked = composing ? view.markedRange() : nil
+            if let marked, marked.location == NSNotFound || marked.length == 0 { return }
             applyingTypography = true
             defer { applyingTypography = false }
             let undo = view.undoManager, registering = view.undoManager?.isUndoRegistrationEnabled == true
             if registering { undo?.disableUndoRegistration() }
-            storage.beginEditing()
             let whole = NSRange(location: 0, length: storage.length)
             let scope: NSRange
             if let editedRange, editedRange.location != NSNotFound {
                 let safe = NSIntersectionRange(whole, editedRange)
                 scope = (storage.string as NSString).paragraphRange(for: safe)
             } else { scope = whole }
-            NoteTypography.applyFallback(to: storage, range: scope, choice: parent.fontChoice)
-            MixedScriptTypography.apply(to: storage, range: scope)
-            storage.enumerateAttribute(.link, in: scope) { value, range, _ in
+            let original = storage.attributedSubstring(from: scope)
+            let styled = NSMutableAttributedString(attributedString: original)
+            let local = NSRange(location: 0, length: styled.length)
+            let choice = composing ? typographyFont ?? parent.fontChoice : parent.fontChoice
+            NoteTypography.applyFallback(to: styled, range: local, choice: choice)
+            MixedScriptTypography.apply(to: styled, range: local)
+            styled.enumerateAttribute(.link, in: local) { value, range, _ in
                 if let url = value as? URL, !["http", "https"].contains(url.scheme?.lowercased() ?? "") {
-                    storage.removeAttribute(.link, range: range)
+                    styled.removeAttribute(.link, range: range)
                 }
             }
+            storage.beginEditing()
+            MixedScriptTypography.applyDifferences(from: original, to: styled, in: storage, offset: scope.location, excluding: marked)
             storage.endEditing()
             if registering { undo?.enableUndoRegistration() }
             if editedRange == nil { typographyFont = parent.fontChoice }
