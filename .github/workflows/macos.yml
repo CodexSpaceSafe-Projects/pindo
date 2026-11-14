@@ -57,10 +57,19 @@ jobs:
         env:
           PINDO_SYNC_TEST_ENDPOINT: http://127.0.0.1:8787
           PINDO_TEST_CJK_FONT_PATH: ${{ runner.temp }}/pindo-fonts/SourceHanSerifSC-Regular.otf
+          PINDO_TEST_SCREENSHOT_DIRECTORY: /tmp/pindo-squirrel-snapshots
         run: |
           set -euo pipefail
           bash scripts/prepare-macos-font-test.sh "$PINDO_TEST_CJK_FONT_PATH"
           swift test --jobs 4 2>&1 | tee /tmp/pindo-tests.log
+      - name: Upload native IME font snapshots
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: macOS-squirrel-font-snapshots
+          path: /tmp/pindo-squirrel-snapshots/*.png
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

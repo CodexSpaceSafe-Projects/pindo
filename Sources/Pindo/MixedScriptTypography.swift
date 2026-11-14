@@ -58,10 +58,11 @@ import PindoCore
     }
 
     /// Transfer final attributes without exposing intermediate font/spacing
-    /// passes. A native IME's marked range is owned entirely by AppKit.
+    /// passes. Native IME clauses keep their attributes; a caller can opt into
+    /// repairing only the font of attributed Chinese preedit.
     @discardableResult static func applyDifferences(from original: NSAttributedString, to styled: NSAttributedString,
                                                     in text: NSMutableAttributedString, offset base: Int,
-                                                    excluding marked: NSRange? = nil) -> Bool {
+                                                    excluding marked: NSRange? = nil, repairMarkedFont: Bool = false) -> Bool {
         let whole = NSRange(location: 0, length: styled.length)
         // Reapplying unchanged text is a true no-op, including invalidation.
         var offset = 0, changed = false
@@ -75,6 +76,10 @@ import PindoCore
                 var writable = [run]
                 if let marked, NSIntersectionRange(run, marked).length > 0 {
                     writable = []
+                    if repairMarkedFont, let font = after[.font] as? NSFont, font != (before[.font] as? NSFont) {
+                        text.addAttribute(.font, value: font, range: NSIntersectionRange(run, marked))
+                        changed = true
+                    }
                     if run.location < marked.location {
                         writable.append(NSRange(location: run.location, length: marked.location - run.location))
                     }

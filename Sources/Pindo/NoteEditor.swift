@@ -200,7 +200,8 @@ struct NoteEditor: NSViewRepresentable {
             // External/full font updates still wait for composition to finish.
             // Engine restyles during setMarkedText, however, wipe attributes on
             // the whole paragraph. Repair committed text in that same pass,
-            // without writing a single attribute inside the marked range.
+            // repairing only fonts inside attributed Chinese preedit. IME
+            // clause/underline/color attributes and its selection stay intact.
             guard !composing || editedRange != nil else { return }
             let marked = composing ? view.markedRange() : nil
             if let marked, marked.location == NSNotFound || marked.length == 0 { return }
@@ -218,12 +219,12 @@ struct NoteEditor: NSViewRepresentable {
             let styled = NSMutableAttributedString(attributedString: original)
             let local = NSRange(location: 0, length: styled.length)
             let choice = composing ? typographyFont ?? parent.fontChoice : parent.fontChoice
-            NoteTypography.applyFallback(to: styled, range: local, choice: choice)
             let localMarked: NSRange? = marked.flatMap {
                 let clipped = NSIntersectionRange($0, scope)
                 guard clipped.length > 0 else { return nil }
                 return NSRange(location: clipped.location - scope.location, length: clipped.length)
             }
+            NoteTypography.applyFonts(to: styled, range: local, choice: choice, composition: localMarked)
             MixedScriptTypography.apply(to: styled, range: local, ignoring: localMarked)
             styled.enumerateAttribute(.link, in: local) { value, range, _ in
                 if let url = value as? URL, !["http", "https"].contains(url.scheme?.lowercased() ?? "") {
@@ -231,7 +232,8 @@ struct NoteEditor: NSViewRepresentable {
                 }
             }
             storage.beginEditing()
-            MixedScriptTypography.applyDifferences(from: original, to: styled, in: storage, offset: scope.location, excluding: marked)
+            MixedScriptTypography.applyDifferences(from: original, to: styled, in: storage, offset: scope.location,
+                                                   excluding: marked, repairMarkedFont: composing)
             storage.endEditing()
             if registering { undo?.enableUndoRegistration() }
             if editedRange == nil { typographyFont = parent.fontChoice }
