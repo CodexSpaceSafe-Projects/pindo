@@ -43,6 +43,8 @@ final class NoteEditorTests: XCTestCase {
                 XCTAssertEqual(marked, NSRange(location: insertion, length: (pinyin as NSString).length))
                 XCTAssertEqual(view.selectedRange(), NSRange(location: NSMaxRange(marked), length: 0))
                 XCTAssertEqual((view.string as NSString).substring(with: marked), pinyin)
+                XCTAssertEqual((storage.attribute(.kern, at: insertion - 1, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0, 0,
+                               "Uncommitted pinyin must not add a gap at the input-method insertion point")
                 XCTAssertEqual(anchors.map { (storage.attribute(.kern, at: $0, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0 }, baseline)
                 let rect = view.firstRect(forCharacterRange: NSRange(location: secondAnchor + 1, length: 1), actualRange: nil)
                 XCTAssertEqual(rect.minX, referenceRect.minX, accuracy: 0.1)
@@ -72,8 +74,9 @@ final class NoteEditorTests: XCTestCase {
     }
 
     @MainActor func testCompositionPreservesFallbackFontsAndWikiIDsWithoutPublishingPreedit() async throws {
-        let source = "1. 中文abc前缀；输入点 [[资料|opaque-id]] 后文def结尾"
-        let font = PindoFontChoice(primaryFamily: "Menlo", fallbackFamily: "PingFang SC", pointSize: 18)
+        let source = "1. 中文abc前缀这里输入点 [[资料|opaque-id]] 后文def结尾"
+        let fallback = NSFontManager.shared.availableFontFamilies.contains("Songti SC") ? "Songti SC" : "PingFang SC"
+        let font = PindoFontChoice(primaryFamily: "Menlo", fallbackFamily: fallback, pointSize: 18)
         let editor = try await NoteEditorHarness.make(source, font: font)
         defer { editor.close() }
         let view = editor.view, storage = try XCTUnwrap(editor.view.textStorage)
@@ -81,21 +84,42 @@ final class NoteEditorTests: XCTestCase {
         let anchor = (view.string as NSString).range(of: "前缀").location
         let baselineFont = try XCTUnwrap(storage.attribute(.font, at: anchor, effectiveRange: nil) as? NSFont)
         let insertion = (view.string as NSString).range(of: "输入点").location
+        let beforeCaretFont = try XCTUnwrap(storage.attribute(.font, at: insertion - 1, effectiveRange: nil) as? NSFont)
+        let afterCaretFont = try XCTUnwrap(storage.attribute(.font, at: insertion, effectiveRange: nil) as? NSFont)
+        XCTAssertNotEqual(baselineFont.fontName, try XCTUnwrap(NSFont(name: "Menlo", size: 18)).fontName)
         view.setSelectedRange(NSRange(location: insertion, length: 0))
         for pinyin in ["z", "zh", "zhong", "zhong'wen"] {
             view.setMarkedText(pinyin, selectedRange: NSRange(location: (pinyin as NSString).length, length: 0),
                                replacementRange: NSRange(location: NSNotFound, length: 0))
             XCTAssertTrue(view.hasMarkedText())
             XCTAssertEqual(storage.attribute(.font, at: anchor, effectiveRange: nil) as? NSFont, baselineFont)
+            XCTAssertEqual(storage.attribute(.font, at: insertion - 1, effectiveRange: nil) as? NSFont, beforeCaretFont)
+            let suffix = (view.string as NSString).range(of: "输入点").location
+            XCTAssertEqual(storage.attribute(.font, at: suffix, effectiveRange: nil) as? NSFont, afterCaretFont)
             await editor.settle()
             XCTAssertEqual(editor.buffer.text, source)
         }
         view.insertText("中文", replacementRange: NSRange(location: NSNotFound, length: 0))
         view.unmarkText()
+        // Check before the asynchronous binding/save cycle can hide a font
+        // flash on newly committed Chinese characters beside the caret.
+        XCTAssertEqual(storage.attribute(.font, at: insertion, effectiveRange: nil) as? NSFont, baselineFont)
         await editor.settle()
         editor.bridge.commit()
         XCTAssertEqual(editor.buffer.text, (source as NSString).replacingCharacters(in: NSRange(location: insertion, length: 0), with: "中文"))
         XCTAssertEqual(view.selectedRange(), NSRange(location: insertion + 2, length: 0))
+        view.insertText("a", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual((storage.attribute(.font, at: insertion + 2, effectiveRange: nil) as? NSFont)?.fontName,
+                       try XCTUnwrap(NSFont(name: "Menlo", size: 18)).fontName)
+        view.setMarkedText("w", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(storage.attribute(.font, at: insertion + 1, effectiveRange: nil) as? NSFont, baselineFont)
+        view.insertText("我", replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.unmarkText()
+        XCTAssertEqual(storage.attribute(.font, at: insertion + 3, effectiveRange: nil) as? NSFont, baselineFont)
+        await editor.settle()
+        editor.bridge.commit()
+        XCTAssertEqual(editor.buffer.text, (source as NSString).replacingCharacters(in: NSRange(location: insertion, length: 0), with: "中文a我"))
+        XCTAssertEqual(view.selectedRange(), NSRange(location: insertion + 4, length: 0))
     }
 
     @MainActor func testChineseCompositionAddsBoundarySpacingAfterCommitWithoutChangingTheSource() async throws {
