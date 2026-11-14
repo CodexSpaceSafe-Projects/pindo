@@ -56,8 +56,10 @@ jobs:
       - name: Core tests and native compilation
         env:
           PINDO_SYNC_TEST_ENDPOINT: http://127.0.0.1:8787
+          PINDO_TEST_CJK_FONT_PATH: ${{ runner.temp }}/pindo-fonts/SourceHanSerifSC-Regular.otf
         run: |
           set -euo pipefail
+          bash scripts/prepare-macos-font-test.sh "$PINDO_TEST_CJK_FONT_PATH"
           swift test --jobs 4 2>&1 | tee /tmp/pindo-tests.log
       - uses: actions/setup-java@v4
         with:
