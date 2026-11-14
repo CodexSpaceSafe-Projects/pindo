@@ -59,8 +59,43 @@ internal class V3Store(context:Context) {
         catch(e:Exception){cached=old;throw e}finally{db.endTransaction()}
     }
     private fun exec(sql:String,vararg args:Any?){db.execSQL(sql,args)}
-    private fun rows(sql:String,vararg args:Any?):List<Map<String,Any?>> = db.rawQuery(sql,args.map{it?.toString()}.toTypedArray()).use{c->
-        buildList{while(c.moveToNext()){val row=mutableMapOf<String,Any?>();for(i in 0 until c.columnCount)row[c.getColumnName(i)]=when(c.getType(i)){android.database.Cursor.FIELD_TYPE_NULL->null;android.database.Cursor.FIELD_TYPE_BLOB->c.getBlob(i);android.database.Cursor.FIELD_TYPE_INTEGER->c.getLong(i);else->c.getString(i)};add(row)}}}
+    // Android CursorWindow is small on API 26/27. Read large BLOBs through
+    // bounded SQL slices, including notes, backup metadata and logical batches.
+    // Never require a whole multi-megabyte row to fit in a CursorWindow.
+    private fun rows(sql:String,vararg args:Any?):List<Map<String,Any?>> {
+        val parameters=args.map{it?.toString()}.toTypedArray()
+        val columns=db.rawQuery(sql,parameters).use{it.columnNames.toList()}
+        fun quoted(name:String)="\""+name.replace("\"","\"\"")+"\""
+        val projection=columns.mapIndexed{i,name->val q=quoted(name);"CASE WHEN typeof($q)='blob' THEN substr($q,1,262144) ELSE $q END AS $q,typeof($q) AS __t$i,length($q) AS __n$i"}.joinToString(",")
+        return db.rawQuery("SELECT $projection FROM ($sql)",parameters).use{c->
+            buildList { var rowIndex=0
+                while(c.moveToNext()) {
+                    val row=mutableMapOf<String,Any?>()
+                    for((i,name) in columns.withIndex()) {
+                        val at=i*3
+                        row[name]=when(c.getString(at+1)) {
+                            "null"->null
+                            "blob"->{
+                                val size=c.getInt(at+2);require(size<=64*1024*1024){"本机单项资料超过安全读取上限。"}
+                                val out=java.io.ByteArrayOutputStream(size);out.write(c.getBlob(at))
+                                var offset=262144
+                                while(offset<size) {
+                                    db.rawQuery("SELECT substr(${quoted(name)},${offset+1},262144) FROM ($sql) LIMIT 1 OFFSET $rowIndex",parameters).use{part->check(part.moveToFirst());out.write(part.getBlob(0))}
+                                    offset+=262144
+                                }
+                                out.toByteArray()
+                            }
+                            "integer"->c.getLong(at)
+                            "real"->c.getDouble(at)
+                            else->c.getString(at)
+                        }
+                    }
+                    add(row);rowIndex++
+                }
+            }
+        }
+    }
+
     private fun meta(key:String)=rows("SELECT value FROM app_meta WHERE key=?",key).firstOrNull()?.get("value") as? ByteArray
     private fun put(key:String,value:Any?){if(value==null)exec("DELETE FROM app_meta WHERE key=?",key)else exec("INSERT OR REPLACE INTO app_meta VALUES(?,?)",key,bytes(value))}
     fun initialized()=meta("document")!=null

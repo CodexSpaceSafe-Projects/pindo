@@ -141,7 +141,7 @@ public final class SyncV3Engine {
                   try boundDigest(c, epoch: epoch, kind: .batch, id: item.batchID, refs: item.artifactIDs, sealed: sealed) == item.digest else { throw SyncV3Error.corruptData }
             let plain = try await decode(c, epoch: epoch, kind: .batch, id: item.batchID, sealed: sealed, refs: item.artifactIDs, lease: lease)
             let batch = try DocumentCodec.decode(SyncV3Batch.self, from: plain)
-            guard !item.artifactIDs.isEmpty || batch.operations.count <= SyncV3.maximumOperations else { throw SyncV3Error.corruptData }
+            guard !item.artifactIDs.isEmpty || max(batch.operations.count,batch.payload?.records.count ?? 0) <= SyncV3.maximumOperations else { throw SyncV3Error.corruptData }
             entries.append((item.revision, item.batchID, batch)); cursor = item.revision
         }
         guard page.nextCursor == cursor, page.head >= cursor, page.hasMore == (cursor < page.head) else { throw SyncV3Error.corruptData }
@@ -239,7 +239,7 @@ public final class SyncV3Engine {
                     }
                     if first.wire == nil {
                         let batch = try DocumentCodec.decode(SyncV3Batch.self, from: first.plaintext)
-                        let frame = try encode(first.plaintext, c: c, kind: .batch, id: first.id, forceChunks: batch.operations.count > SyncV3.maximumOperations)
+                        let frame = try encode(first.plaintext, c: c, kind: .batch, id: first.id, forceChunks: max(batch.operations.count,batch.payload?.records.count ?? 0) > SyncV3.maximumOperations)
                         let object: JSONValue = .object(["version": .number(3), "epoch": .string(c.epoch), "batchID": .string(first.id),
                             "ciphertext": .string(frame.sealed.base64EncodedString()), "artifactIDs": .array(frame.refs.map(JSONValue.string))])
                         try check(); try store.freeze(binding, id: first.id, wire: DocumentCodec.encode(object), digest: boundDigest(c, epoch: c.epoch, kind: .batch, id: first.id, refs: frame.refs, sealed: frame.sealed), chunks: frame.chunks)

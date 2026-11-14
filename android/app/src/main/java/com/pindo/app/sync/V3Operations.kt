@@ -45,7 +45,7 @@ internal object V3Delta {
                         return result
                     }
                     val all=values(value);val prev=previous?.let(::values)?:JSONObject()
-                    for(name in all.keys())if(!equalV3(all.get(name),prev.opt(name)))fields.put(name,register(all.get(name)))
+                    for(name in all.keys())if(previous==null||!equalV3(all.get(name),prev.opt(name)))fields.put(name,register(all.get(name)))
                     if(previous==null)fields.put("\$alive",register(true))
                     if(fields.has("lifecycle"))for(name in listOf("phase","startedAt","completedAt"))fields.put(name,register(all.get(name)))
                     if(kind=="task"&&(previous==null||previous.optString("note")!=value.optString("note"))) {
