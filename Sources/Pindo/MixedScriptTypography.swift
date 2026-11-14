@@ -12,7 +12,7 @@ import PindoCore
 
     /// Run after Markdown styling so hidden delimiters do not interrupt visible
     /// script boundaries. Code retains its fixed character advances.
-    @discardableResult static func apply(to text: NSMutableAttributedString, range: NSRange) -> Bool {
+    @discardableResult static func apply(to text: NSMutableAttributedString, range: NSRange, ignoring composition: NSRange? = nil) -> Bool {
         guard range.length > 0 else { return false }
         // Compose the final attributes off the live storage. Restoring old kerns
         // and adding new ones must never expose an intermediate unspaced layout.
@@ -34,6 +34,14 @@ import PindoCore
         var hidden: [NSRange] = [], verbatim: [NSRange] = []
         styled.enumerateAttribute(.font, in: whole) { value, range, _ in
             if let font = value as? NSFont, font.pointSize < 1 { hidden.append(range) }
+        }
+        // Pinyin is an input-method preview, not committed Western text. Keep
+        // its native metrics rather than adding a new gap beside each preview.
+        if let composition {
+            let clipped = NSIntersectionRange(range, composition)
+            if clipped.length > 0 {
+                hidden.append(NSRange(location: clipped.location - range.location, length: clipped.length))
+            }
         }
         styled.enumerateAttribute(.backgroundColor, in: whole) { value, range, _ in
             if value != nil { verbatim.append(range) }

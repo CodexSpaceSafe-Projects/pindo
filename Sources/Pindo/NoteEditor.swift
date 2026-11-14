@@ -219,7 +219,12 @@ struct NoteEditor: NSViewRepresentable {
             let local = NSRange(location: 0, length: styled.length)
             let choice = composing ? typographyFont ?? parent.fontChoice : parent.fontChoice
             NoteTypography.applyFallback(to: styled, range: local, choice: choice)
-            MixedScriptTypography.apply(to: styled, range: local)
+            let localMarked: NSRange? = marked.flatMap {
+                let clipped = NSIntersectionRange($0, scope)
+                guard clipped.length > 0 else { return nil }
+                return NSRange(location: clipped.location - scope.location, length: clipped.length)
+            }
+            MixedScriptTypography.apply(to: styled, range: local, ignoring: localMarked)
             styled.enumerateAttribute(.link, in: local) { value, range, _ in
                 if let url = value as? URL, !["http", "https"].contains(url.scheme?.lowercased() ?? "") {
                     styled.removeAttribute(.link, range: range)
