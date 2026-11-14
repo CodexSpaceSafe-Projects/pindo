@@ -30,7 +30,7 @@ internal class V3Store(context:Context) {
     private var cached:JSONObject?=null
     var beforeCommit:(()->Unit)?=null
     init{
-        db.execSQL("PRAGMA foreign_keys=ON");db.execSQL("PRAGMA synchronous=FULL");db.execSQL("PRAGMA busy_timeout=5000")
+        db.setForeignKeyConstraintsEnabled(true);db.execSQL("PRAGMA synchronous=FULL");db.rawQuery("PRAGMA busy_timeout=5000",null).use{it.moveToFirst()}
         require(db.version<=1){"本机数据库来自更新版本。"}
         transaction{
             for(sql in listOf(

@@ -118,7 +118,7 @@ async function pull(url: URL, env: Env, auth: Auth): Promise<Response> {
 }
 async function route(request: Request, env: Env): Promise<Response> {
   // Release gate: P2/P4/P5 are required before any production activation.
-  if (env.LOG_CORE_ENABLED !== "development-only" && env.SYNC_ENABLED !== "true") throw new ProtocolError("maintenance", 503);
+  if (env.SYNC_ENABLED !== "true" && !("LOG_CORE_ENABLED" in env && env.LOG_CORE_ENABLED === "development-only")) throw new ProtocolError("maintenance", 503);
   uuid(env.SERVICE_ID);
   const url = new URL(request.url);
   if(url.pathname==="/v3/bootstrap"&&request.method==="POST")return bootstrap(request,env);
@@ -135,7 +135,8 @@ async function route(request: Request, env: Env): Promise<Response> {
       env.DB.prepare("SELECT id FROM vaults LIMIT 0"),
       env.DB.prepare("SELECT id FROM devices LIMIT 0"),
       env.DB.prepare("SELECT vault_id FROM commits LIMIT 0"),
-      env.DB.prepare("SELECT vault_id FROM receipts LIMIT 0")
+      env.DB.prepare("SELECT vault_id FROM receipts LIMIT 0"),
+      ...(env.SYNC_ENABLED === "true" ? [env.DB.prepare("SELECT bootstrapped FROM service_state WHERE id=1"),env.DB.prepare("SELECT key_check,checkpoint_id,recovery_from_epoch,log_count,log_bytes FROM vaults LIMIT 0"),env.DB.prepare("SELECT digest FROM artifacts LIMIT 0"),env.DB.prepare("SELECT covered FROM checkpoints LIMIT 0"),env.DB.prepare("SELECT id FROM leases LIMIT 0"),env.DB.prepare("SELECT attempts FROM pairing LIMIT 0")] : [])
     ]);
     usage(results, "health");
     return json({ service: "pindo-sync", version: 3, status: "ok", serviceID: env.SERVICE_ID,

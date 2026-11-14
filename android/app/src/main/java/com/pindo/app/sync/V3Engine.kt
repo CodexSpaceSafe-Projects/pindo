@@ -152,7 +152,7 @@ internal class V3Engine(private val store:V3Store,private val transport:V3Transp
                 }
                 val covered=remote.optLong("checkpointCovered",0)
                 val needsCheckpoint=checkpointID==null||((remote.getLong("head")-covered>=500||remote.optLong("logBytes")>=4*1024*1024)&&remote.getLong("head")>covered)||store.pendingCheckpoint(b)!=null
-                if(appliedCursor==fetched&&needsCheckpoint){publish(c,remote);release(c);call(c,"gc","POST",JSONObject().put("epoch",c.epoch));remote=info(c);return@repeat}
+                if(appliedCursor==fetched&&needsCheckpoint){publish(c,remote);release(c);for(gcRound in 0 until 8){if(!call(c,"gc","POST",JSONObject().put("epoch",c.epoch)).getBoolean("hasMore"))break};remote=info(c);return@repeat}
                 val first=store.queue(b).firstOrNull()
                 if(first!=null){
                     if(first.receipt!=null&&fetched==remote.getLong("head")){release(c);return V3SyncResult(c,false,true)}
