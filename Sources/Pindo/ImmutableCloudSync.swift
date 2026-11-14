@@ -184,7 +184,8 @@ private actor SyncPayloadMergeWorker {
         }
         try check()
         guard let finalPayload = repository.syncPayload, let finalState = repository.syncSession else { return false }
-        return finalState.pendingObject == nil && finalState.acknowledgedPayloadDigest == digest(try DocumentCodec.encode(finalPayload))
+        let finalDigest = digest(try DocumentCodec.encode(finalPayload))
+        return finalState.pendingObject == nil && finalState.acknowledgedPayloadDigest == finalDigest
     }
 
     private static func applyMarker(_ data: Data, repository: PindoRepository, encryption: SyncEncryption) throws {
