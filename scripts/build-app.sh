@@ -27,6 +27,14 @@ else
   binary_dir="$(swift build -c release --show-bin-path)"
   cp "$binary_dir/Pindo" "$app_dir/Contents/MacOS/Pindo"
 fi
+# A portable app may only depend on system libraries/frameworks. In particular,
+# cross-building Intel on Apple Silicon must not pick a Homebrew SQLite dylib.
+linked_dependencies="$(/usr/bin/otool -L "$app_dir/Contents/MacOS/Pindo")"
+if [[ "$linked_dependencies" == *"/opt/homebrew/"* || "$linked_dependencies" == *"/usr/local/"* ]]; then
+  echo "Application links a machine-local library:" >&2
+  echo "$linked_dependencies" >&2
+  exit 1
+fi
 cp "$repo_dir/Resources/Info.plist" "$app_dir/Contents/Info.plist"
 cp "$repo_dir/Resources/Pindo.icns" "$app_dir/Contents/Resources/Pindo.icns"
 cp "$repo_dir/Sources/Pindo/Resources/MarkdownEngine-LICENSE.txt" "$app_dir/Contents/Resources/MarkdownEngine-LICENSE.txt"
