@@ -102,6 +102,17 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (env.LOG_CORE_ENABLED !== "development-only") throw new ProtocolError("maintenance", 503);
   uuid(env.SERVICE_ID);
   const url = new URL(request.url);
+  if (request.method === "GET" && ["/", "/health"].includes(url.pathname)) {
+    const results = await env.DB.batch([
+      env.DB.prepare("SELECT id FROM vaults LIMIT 0"),
+      env.DB.prepare("SELECT id FROM devices LIMIT 0"),
+      env.DB.prepare("SELECT vault_id FROM commits LIMIT 0"),
+      env.DB.prepare("SELECT vault_id FROM receipts LIMIT 0")
+    ]);
+    usage(results, "health");
+    return json({ service: "pindo-sync", version: 3, status: "ok", serviceID: env.SERVICE_ID,
+      capabilities: ["development-log-core"], clientSyncAvailable: false });
+  }
   const match = /^\/v3\/vaults\/([^/]+)\/(info|push|pull|receipts\/([^/]+))$/.exec(url.pathname);
   if (!match) throw new ProtocolError("not_found", 404);
   const vaultID = uuid(match[1]);

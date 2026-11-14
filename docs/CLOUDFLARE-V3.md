@@ -32,6 +32,7 @@ artifact 摘要只接受 64 位小写十六进制，必须升序、无重复，�
 
 | 请求 | 内容 / 结果 |
 | --- | --- |
+| `GET /`、`GET /health`（无需库前缀） | 检查必需的 D1 schema，返回服务状态及 `clientSyncAvailable:false`，不返回令牌 |
 | `GET /info` | `version, serviceID, vaultID, epoch, head, gcFloor, capabilities` |
 | `POST /push` | JSON `{version:3, epoch, batchID, ciphertext, artifactIDs?:[]}`；返回绑定库 / epoch 的 `{receipt:{batchID, revision, digest}}` |
 | `GET /receipts/<batchID>?epoch=...` | 查询原回执；不存在返回 `not_found`，不根据本机状态推测成功 |
@@ -53,6 +54,6 @@ push 回执没有 `nextCursor`。收到回执只允许确认对应冻结 outbox 
 
 v3 备注参考寄存器使用该记录备注实际观察到的 dot 集合，绝不从全局标题 / 字段时钟推导。观察移除集合持久保留，即使被替代的旧写入尚未到达，也不会在乱序到达时复活。空备注属于真实版本；同 dot 的文字或 observed 上下文不同会报损坏；合并错误不留下半修改。这个参考寄存器尚未接入领域投影和本机持久存储，dot 集合的容量策略仍待完整 P0 / P1 冻结。旧 v2 向量和升级测试继续保留原 stamp、墓碑与 legacy 语义，不把旧历史重新打时间戳。
 
-后续依次完成：完整字段操作与原子领域批次；SQLite 权威存储及可恢复 JSON 迁移；一次性配对、撤销 / 轮换及 artifact；双端连接事务与独立 ACK / 游标；两个保留检查点、CAS 发布、租约、GC 和 epoch 恢复；专用真云和多设备验收。P2 / P4 / P5 未完成前不得开放客户端连接或生产发布。
+后续依次完成：完整字段操作与原子领域批次；SQLite 权威存储及可恢复 JSON 迁移；一次性配对、撤销 / 轮换及 artifact；双端连接事务与独立 ACK / 游标；两个保留检查点、CAS 发布、租约、GC 和 epoch 恢复；专用真云和多设备验收。P2 / P4 / P5 未完成前不得开放客户端连接或生产发布。独立 staging 可用于服务器联调，必须使用与本地向量和未来生产不同的服务身份 / D1；配置记录在 `backend/cloudflare/deployments/staging.json`。
 
 官方依据：[D1 batch 与 session](https://developers.cloudflare.com/d1/worker-api/d1-database/)、[D1 limits](https://developers.cloudflare.com/d1/platform/limits/)、[Workers limits](https://developers.cloudflare.com/workers/platform/limits/)。本地 workerd 成功不代表部署 CPU 达到 10 ms 预算。
