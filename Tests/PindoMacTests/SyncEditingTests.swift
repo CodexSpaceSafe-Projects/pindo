@@ -97,6 +97,105 @@ final class SyncEditingTests: XCTestCase {
         XCTAssertFalse(model.isSyncEditing)
     }
 
+    @MainActor private func drainReadinessNotifications() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+    }
+
+    @MainActor func testPendingReadinessPublicationSurvivesNativeMountReplacement() async throws {
+        let (model, cleanup) = try makeModel()
+        defer { cleanup() }
+        let taskID = UUID(), originalMount = UUID(), replacementMount = UUID()
+        let lease = SyncEditingLease(model: model, taskID: taskID)
+        var publishedReadiness: [Bool] = []
+        let subscription = lease.objectWillChange.sink { publishedReadiness.append(lease.isGranted) }
+        defer { subscription.cancel() }
+
+        lease.attach(originalMount, model: model, taskID: taskID)
+        lease.visibilityChanged(true, owner: originalMount)
+        // Replace the observer before its queued readiness publication runs.
+        // The replacement inherits the token, so reporting visibility again is
+        // a no-op. The pending publication must still leave the loading branch.
+        lease.attach(replacementMount, model: model, taskID: taskID)
+        lease.visibilityChanged(true, owner: replacementMount)
+        lease.detach(originalMount)
+        await drainReadinessNotifications()
+        XCTAssertEqual(publishedReadiness, [true])
+        XCTAssertNil(model.acquireSyncEditing(taskID: taskID))
+        lease.detach(replacementMount)
+        XCTAssertFalse(model.isSyncEditing)
+    }
+
+    @MainActor func testQueuedReadinessDoesNotPublishIntoADestroyedHostingGraph() async throws {
+        let (model, cleanup) = try makeModel()
+        defer { cleanup() }
+        let lease = SyncEditingLease(model: model, taskID: nil), mount = UUID()
+        var publications = 0
+        let subscription = lease.objectWillChange.sink { publications += 1 }
+        defer { subscription.cancel() }
+        lease.attach(mount, model: model, taskID: nil)
+        lease.visibilityChanged(true, owner: mount)
+        lease.detach(mount)
+        await drainReadinessNotifications()
+        XCTAssertEqual(publications, 0)
+        XCTAssertFalse(model.isSyncEditing)
+    }
+
+    @MainActor func testReadinessAndCachedWindowVisibilityKeepTheSameNativeObserver() async throws {
+        let (model, cleanup) = try makeModel()
+        defer { cleanup() }
+        let (window, nativeHost) = host(EditingWindowFixture(model: model, visibility: EditingVisibility()))
+        defer { window.orderOut(nil); window.contentView = nil }
+        let observer = try XCTUnwrap(find(SyncEditingWindowObserver.VisibilityView.self, in: nativeHost))
+        try await waitUntil { self.find(EditingReadyView.self, in: nativeHost) != nil }
+        XCTAssertTrue(find(SyncEditingWindowObserver.VisibilityView.self, in: nativeHost) === observer)
+        window.orderOut(nil)
+        try await waitUntil { !model.isSyncEditing }
+        window.orderFrontRegardless()
+        try await waitUntil { self.find(EditingReadyView.self, in: nativeHost) != nil && model.isSyncEditing }
+        XCTAssertTrue(find(SyncEditingWindowObserver.VisibilityView.self, in: nativeHost) === observer)
+    }
+
+    @MainActor func testListNotesOpenAfterRapidSelectionAndHidingBeforeReadiness() async throws {
+        let (model, cleanup) = try makeModel()
+        defer { cleanup() }
+        XCTAssertTrue(model.addTask(title: "First task", note: "First saved note", day: model.today, groupID: nil))
+        XCTAssertTrue(model.addTask(title: "Second task", note: "Second saved note", day: model.today, groupID: nil))
+        let first = model.document.tasks[0], second = model.document.tasks[1]
+        let delegate = AppDelegate(model: model)
+        delegate.toggleList()
+        let panel = try XCTUnwrap(delegate.listPanel), nativeHost = try XCTUnwrap(panel.contentView)
+        defer { panel.orderOut(nil); panel.contentView = nil }
+        try await waitUntil { self.find(TaskNativeOutlineView.self, in: nativeHost) != nil }
+        let outline = try XCTUnwrap(find(TaskNativeOutlineView.self, in: nativeHost))
+        let coordinator = try XCTUnwrap(outline.dataSource as? TaskOutlineCoordinator)
+        for iteration in 0..<6 {
+            coordinator.content.onSelect(first)
+            nativeHost.layoutSubtreeIfNeeded()
+            coordinator.content.onSelect(second)
+            nativeHost.layoutSubtreeIfNeeded()
+            if iteration.isMultiple(of: 2) {
+                // Close before the native visibility/readiness queues drain,
+                // then reuse the same cached list panel immediately.
+                delegate.toggleList()
+                delegate.toggleList()
+                coordinator.content.onSelect(second)
+                nativeHost.layoutSubtreeIfNeeded()
+            }
+            try await waitUntil { self.find(NSTextView.self, in: nativeHost)?.string == second.note }
+            XCTAssertTrue(panel.contentView === nativeHost)
+            XCTAssertNil(model.acquireSyncEditing(taskID: second.id))
+            let unusedTask = try XCTUnwrap(model.acquireSyncEditing(taskID: first.id))
+            model.releaseSyncEditing(unusedTask)
+            model.leaveNote()
+            nativeHost.layoutSubtreeIfNeeded()
+        }
+        try await waitUntil { !model.isSyncEditing }
+        XCTAssertEqual(model.task(first.id)?.note, first.note)
+        XCTAssertEqual(model.task(second.id)?.note, second.note)
+    }
+
     @MainActor func testScopesInTwoWindowsProtectSyncUntilBothEditorsDisappear() async throws {
         let (model, cleanup) = try makeModel()
         defer { cleanup() }
