@@ -231,3 +231,43 @@ test('read lease keeps old checkpoint tail; chunk GC respects every retained ref
   assert.equal((await request('gc',{epoch})).status,200);
   assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM artifacts').first()).n,0);
 });
+
+test('recovery requires maintenance, preserves old prefix under a lease and gates new uploads',async()=>{
+ await request('push',body());await request('push',body(1));
+ const admin=async(path,data)=>{const r=await mf.dispatchFetch('https://sync.test/v3/admin/'+path,{method:'POST',headers:{Authorization:'Bearer test-recovery-secret','Content-Type':'application/json'},body:JSON.stringify(data)});return{status:r.status,body:await r.json()};};
+ const next=id(220);
+ assert.equal((await admin('recover',{vaultID,epoch:next})).status,409);
+ assert.equal((await admin('maintenance',{vaultID,enabled:true})).status,200);
+ assert.equal((await request('push',body(2))).body.error.code,'maintenance');
+ assert.equal((await admin('recover',{vaultID,epoch:next})).status,200);
+ const info=await request('info');assert.equal(info.body.epoch,next);assert.equal(info.body.recoveryHead,2);assert.equal(info.body.head,0);
+ assert.equal((await request('push',{...body(2),epoch:next})).body.error.code,'checkpoint_required');
+ const cp=await request(`checkpoints?epoch=${epoch}`);assert.equal(cp.status,200);
+ const old=await request(`pull?epoch=${epoch}&after=0&lease=${cp.body.leaseID}`);assert.equal(old.body.commits.length,2);
+ const publish=await request('checkpoints',{epoch:next,id:id(221),covered:0,expectedID:null,ciphertext:body(9).ciphertext,artifactIDs:[]});assert.equal(publish.status,200);
+ assert.equal((await request('push',{...body(2),epoch:next})).status,200);
+ await request('gc',{epoch:next});assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM commits WHERE epoch=?').bind(epoch).first()).n,2);
+ assert.equal((await request(`receipts/${id(0)}?epoch=${epoch}`)).body.error.code,'epoch_mismatch');
+ await db.prepare('UPDATE leases SET expires_at=0').run();await request('gc',{epoch:next});
+ assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM commits WHERE epoch=?').bind(epoch).first()).n,0);
+ assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM receipts WHERE epoch=?').bind(epoch).first()).n,2);
+});
+
+test('checkpoint retry neither charges twice nor moves the pointer backwards; missing artifacts publish nothing',async()=>{
+ await request('push',body());const checkpoint={epoch,id:id(230),covered:1,expectedID:null,ciphertext:body(7).ciphertext,artifactIDs:[]};
+ const first=await request('checkpoints',checkpoint);assert.equal(first.status,200);
+ const charge=(await db.prepare('SELECT charged_bytes FROM vaults').first()).charged_bytes;
+ assert.deepEqual(await request('checkpoints',checkpoint),first);
+ assert.equal((await db.prepare('SELECT charged_bytes FROM vaults').first()).charged_bytes,charge);
+ const forged=await request('checkpoints',{...checkpoint,expectedID:checkpoint.id});assert.equal(forged.status,200);
+ assert.equal((await db.prepare('SELECT charged_bytes FROM vaults').first()).charged_bytes,charge);
+ await request('push',body(1));
+ const absent=await request('checkpoints',{...checkpoint,id:id(231),covered:2,expectedID:checkpoint.id,artifactIDs:['a'.repeat(64)]});assert.equal(absent.body.error.code,'artifact_missing');
+ assert.equal((await db.prepare('SELECT checkpoint_id FROM vaults').first()).checkpoint_id,checkpoint.id);
+});
+
+test('revoked devices cannot publish checkpoints, allocate chunks or advance GC after earlier authorization',async()=>{
+ await request('push',body());assert.equal((await request('info')).status,200);await db.prepare('UPDATE devices SET revoked_at=1').run();
+ for(const [path,value] of[['checkpoints',{epoch,id:id(240),covered:1,expectedID:null,ciphertext:body().ciphertext,artifactIDs:[]}],['gc',{epoch}]])assert.equal((await request(path,value)).status,401);
+ assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM checkpoints').first()).n,0);assert.equal((await db.prepare('SELECT gc_floor FROM vaults').first()).gc_floor,0);
+});

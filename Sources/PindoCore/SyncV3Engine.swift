@@ -224,7 +224,11 @@ public final class SyncV3Engine {
                 if cursor.applied == cursor.fetched && needsCheckpoint {
                     try await publish(c, info: remote)
                     await releaseLeases(c)
-                    let _: JSONValue = try await call(c, "gc", method: "POST", body: DocumentCodec.encode(JSONValue.object(["epoch": .string(c.epoch)])))
+                    struct GCStatus: Decodable { var hasMore: Bool }
+                    for _ in 0..<8 {
+                        let gc: GCStatus = try await call(c, "gc", method: "POST", body: DocumentCodec.encode(JSONValue.object(["epoch": .string(c.epoch)])))
+                        if !gc.hasMore { break }
+                    }
                     remote = try await info(c)
                     continue
                 }

@@ -93,4 +93,25 @@ final class SQLiteSyncTests: XCTestCase {
         XCTAssertNotNil(try store.database.query("SELECT wire FROM v3_retired WHERE id=?", [.text(old.id)]).first?["wire"])
         XCTAssertThrowsError(try store.acknowledge(b, id: old.id, digest: String(repeating: "a", count: 64), revision: 1))
     }
+    func testThousandAndTenThousandTaskTitleEditsRemainFieldSized() throws {
+        for count in [1_000, 10_000] {
+            let repository=try PindoRepository(directory:directory(),useSQLite:true)
+            try repository.update { doc in doc.tasks=(0..<count).map { TodoItem(title:"Task \($0)",note:String(repeating:"内容",count:32)) } }
+            let store=try XCTUnwrap(repository.sqlite), b=try binding()
+            try store.bind(b,importingLocal:true)
+            try repository.reloadCurrentDocument()
+            try store.database.execute("CREATE TRIGGER forbid_note_rewrite BEFORE UPDATE OF note ON app_entities BEGIN SELECT RAISE(ABORT,'unchanged note rewrite'); END")
+            let before=Int(try store.database.string("SELECT total_changes()")!)!
+            let start=Date()
+            try repository.update { $0.tasks[count/2].title="Only this title changed" }
+            let milliseconds=Date().timeIntervalSince(start)*1000
+            let delta=try XCTUnwrap(store.queue(b).last)
+            let writes=Int(try store.database.string("SELECT total_changes()")!)!-before
+            XCTAssertLessThan(delta.plaintext.count,4096)
+            XCTAssertLessThan(writes,20)
+            XCTAssertEqual(try DocumentCodec.decode(SyncV3Batch.self,from:delta.plaintext).operations.count,1)
+            print("V3_PERFORMANCE tasks=\(count) titleBytes=\(delta.plaintext.count) changedRows=\(writes) elapsedMS=\(Int(milliseconds))")
+        }
+    }
+
 }

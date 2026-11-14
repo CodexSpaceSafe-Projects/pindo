@@ -1,10 +1,9 @@
 import { bindings, defineConfig } from "cf/config";
 import staging from "./deployments/staging.json" with { type: "json" };
 
-// Staging has its own remote database and stable identity. Production stays
-// blocked until the client and checkpoint/recovery milestones are complete.
+// Explicit deployment identity; never create or switch databases implicitly.
 export default defineConfig(({ mode }) => {
-  if (mode !== "development" && mode !== "staging") throw new Error("The v3 log core is unreleased. Use development or staging mode.");
+  if (mode !== "development" && mode !== "staging") throw new Error("Choose development or the configured staging deployment.");
   const remote = mode === "staging";
   return {
     ...(remote ? { accountId: staging.accountId } : {}),
@@ -15,7 +14,6 @@ export default defineConfig(({ mode }) => {
       env: {
         DB: bindings.d1(remote ? { id: staging.databaseId, name: staging.databaseName } : { name: "pindo-sync-v3-development" }),
         SERVICE_ID: bindings.text(remote ? staging.serviceID : "00000000-0000-4000-8000-000000000001"),
-        LOG_CORE_ENABLED: bindings.text("development-only"),
         SYNC_ENABLED: bindings.text("true"),
         BOOTSTRAP_SECRET: bindings.secret(),
         RECOVERY_SECRET: bindings.secret()
