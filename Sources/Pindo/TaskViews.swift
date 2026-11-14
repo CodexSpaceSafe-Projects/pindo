@@ -201,13 +201,14 @@ struct TaskPanelView: View {
 struct TaskComposer: View {
     @Environment(\.pindoLocalization) private var l10n
     @ObservedObject var model: AppModel
-    @FocusState private var entryFocused: Bool
+    @State private var entryFocused = false
 
     var body: some View {
         HStack(spacing: 8) {
-            TextField(l10n("添加一件要做的事…"), text: $model.listEntry).textFieldStyle(.plain).focused($entryFocused)
+            TaskTitleEditor(text: $model.listEntry, fontChoice: model.fontPreferences.task, defaultSize: 13, variant: .regular,
+                            maximumLines: 1, placeholder: "添加一件要做的事…", allowsEmpty: true, isFocused: $entryFocused,
+                            onSubmit: { if model.submitListEntry() { entryFocused = true } })
                 .onChange(of: model.listEntry) { _, _ in model.scheduleDraftSave() }
-                .onSubmit { if model.submitListEntry() { entryFocused = true } }
             GroupSelectionMenu(groups: model.document.groups, selection: $model.listEntryGroupID)
             Button { if model.submitListEntry() { entryFocused = true } } label: {
                 Image(systemName: "return").font(.system(size: 13)).frame(width: 24, height: 25).contentShape(Rectangle())
@@ -280,8 +281,8 @@ struct EditTaskView: View {
     private var editorContent: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text(l10n("修改待办")).font(.headline)
-            TextField(l10n("事项内容"), text: $title)
-                .font(model.fontPreferences.task.swiftUIFont(defaultSize: 13)).onSubmit(save)
+            TaskTitleEditor(text: $title, fontChoice: model.fontPreferences.task, defaultSize: 13, variant: .regular,
+                            maximumLines: 1, allowsEmpty: true, bordered: true, onSubmit: save)
             DatePicker(l10n("计划日期"), selection: $day, displayedComponents: .date)
             HStack {
                 Text(l10n("分组"))
@@ -308,16 +309,18 @@ struct AddSubtaskView: View {
     let parent: TodoItem
     let close: () -> Void
     @State private var title = ""
-    @FocusState private var focused: Bool
+    @State private var focused = false
     var body: some View {
         SyncEditingScope(model: model, onUnavailable: close) { editorContent }
     }
     private var editorContent: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(l10n("添加子项")).font(.headline)
-            Text(parent.title).font(model.fontPreferences.task.swiftUIFont(defaultSize: 13)).foregroundStyle(.secondary).lineLimit(2)
-            TextField(l10n("事项内容"), text: $title)
-                .font(model.fontPreferences.task.swiftUIFont(defaultSize: 13)).focused($focused).onSubmit(save)
+            Text(AttributedString(MixedScriptTypography.attributed(parent.title, attributes: [
+                .font: model.fontPreferences.task.font(defaultSize: 13), .foregroundColor: NSColor.secondaryLabelColor
+            ]))).lineLimit(2)
+            TaskTitleEditor(text: $title, fontChoice: model.fontPreferences.task, defaultSize: 13, variant: .regular,
+                            maximumLines: 1, allowsEmpty: true, bordered: true, isFocused: $focused, onSubmit: save)
             ErrorBanner(model: model)
             HStack {
                 Button(l10n("取消"), action: close).keyboardShortcut(.cancelAction)

@@ -9,7 +9,7 @@ struct QuickAddView: View {
     @State private var date = Date()
     @State private var groupID: UUID?
     @State private var showNote = false
-    @FocusState private var titleFocused: Bool
+    @State private var titleFocused = false
     private let finishEditing: () -> Void
     private let sizeChanged: (CGFloat) -> Void
 
@@ -67,9 +67,8 @@ struct QuickAddView: View {
     }
 
     private var titleField: some View {
-        TextField(l10n("有什么要做的？"), text: $model.quickTitle)
-            .font(model.fontPreferences.task.swiftUIFont(defaultSize: 19))
-            .textFieldStyle(.plain).focused($titleFocused).onSubmit(save)
+        TaskTitleEditor(text: $model.quickTitle, fontChoice: model.fontPreferences.task, defaultSize: 19, variant: .regular,
+                        maximumLines: 1, placeholder: "有什么要做的？", allowsEmpty: true, isFocused: $titleFocused, onSubmit: save)
             .onChange(of: model.quickTitle) { _, _ in model.scheduleDraftSave() }
             .padding(.horizontal, 12).padding(.vertical, 9).frame(minHeight: 42)
             .background {

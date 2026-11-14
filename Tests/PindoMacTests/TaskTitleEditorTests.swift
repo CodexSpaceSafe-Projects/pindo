@@ -4,6 +4,26 @@ import XCTest
 @testable import Pindo
 
 final class TaskTitleEditorTests: XCTestCase {
+    @MainActor func testTitleSpacingKeepsTheRawDraftAndSelectionAndCanClearANewTaskDraft() throws {
+        _ = NSApplication.shared
+        var stored = "你好abc再见"
+        let coordinator = TaskTitleEditor(text: Binding(get: { stored }, set: { stored = $0 }), allowsEmpty: true, onSubmit: {}).makeCoordinator()
+        let field = EditingTitleField()
+        let editor = NSTextView()
+        editor.font = .systemFont(ofSize: 20)
+        editor.string = stored
+        editor.setSelectedRange(NSRange(location: 4, length: 0))
+        field.stringValue = stored; field.editor = editor
+        coordinator.synchronize(field)
+        XCTAssertEqual(stored, "你好abc再见")
+        XCTAssertEqual(editor.string, stored)
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 4, length: 0))
+        XCTAssertEqual((editor.textStorage?.attribute(.kern, at: 1, effectiveRange: nil) as? NSNumber)?.doubleValue, 5)
+        editor.string = ""; field.stringValue = ""
+        coordinator.publish(field)
+        XCTAssertEqual(stored, "")
+    }
+
     @MainActor func testTitleCompositionAndEmptyDraftPreserveTheLastCommittedTitle() throws {
         _ = NSApplication.shared
         var stored = "原事项"

@@ -98,6 +98,7 @@ enum LiveMarkdown {
         for scope in scopes {
             storage.setAttributes(base, range: scope)
             renderer.render(scope)
+            MixedScriptTypography.apply(to: storage, range: scope)
         }
         storage.endEditing()
         view.typingAttributes = base

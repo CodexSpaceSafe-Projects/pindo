@@ -106,7 +106,7 @@ internal data class MarkdownSpan(val text: String, val bold: Boolean = false, va
             pop()
         }
     }
-    Text(formatted, modifier, style = style)
+    Text(spacedText(formatted), modifier, style = style)
 }
 
 /** A small source-preserving subset, deliberately not a CommonMark/HTML parser. */

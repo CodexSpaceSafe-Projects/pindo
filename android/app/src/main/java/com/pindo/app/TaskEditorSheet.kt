@@ -99,6 +99,7 @@ import java.time.format.DateTimeFormatter
             ) { padding ->
                 Column(Modifier.fillMaxSize().padding(padding).imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
                     OutlinedTextField(title, { title = it; validation = null }, placeholder = { Text("准备做些什么？") },
+                        visualTransformation = MixedScriptVisualTransformation,
                         modifier = Modifier.fillMaxWidth().testTag("task-title"), textStyle = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
                         shape = RoundedCornerShape(18.dp), minLines = 2, maxLines = 5,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next))
@@ -135,7 +136,7 @@ import java.time.format.DateTimeFormatter
                             Icon(Icons.Outlined.SubdirectoryArrowRight, null, tint = MaterialTheme.colorScheme.primary)
                             Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                                 Text("父事项", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(state.tasks.find { it.id == parent }?.title ?: "作为主待办", style = MaterialTheme.typography.bodyLarge, maxLines = 2)
+                                Text(spacedText(state.tasks.find { it.id == parent }?.title ?: "作为主待办"), style = MaterialTheme.typography.bodyLarge, maxLines = 2)
                             }
                             Icon(Icons.Outlined.ChevronRight, null, tint = MaterialTheme.colorScheme.outline)
                         }
@@ -151,7 +152,8 @@ import java.time.format.DateTimeFormatter
                                 MarkdownPreview(note.text, Modifier.padding(16.dp))
                             }
                         } else {
-                            OutlinedTextField(note, { note = it }, placeholder = { Text("写下细节、清单或想法…\n支持 Markdown 格式") }, modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp).testTag("task-note"), minLines = 6, shape = RoundedCornerShape(18.dp))
+                            OutlinedTextField(note, { note = it }, visualTransformation = MixedScriptVisualTransformation,
+                                placeholder = { Text("写下细节、清单或想法…\n支持 Markdown 格式") }, modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp).testTag("task-note"), minLines = 6, shape = RoundedCornerShape(18.dp))
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                 listOf("加粗" to "**", "斜体" to "*", "代码" to "`").forEach { (label, token) ->
                                     TextButton(onClick = { note = surroundNote(note, token, token) }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text(label) }
@@ -203,7 +205,7 @@ import java.time.format.DateTimeFormatter
             LazyColumn(Modifier.heightIn(max = 360.dp)) {
                 item { ListItem(headlineContent = { Text("作为主待办") }, leadingContent = { Icon(Icons.Outlined.FolderOpen, null) }, trailingContent = { if (selected == null) Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary) }, modifier = Modifier.clickable { onChoose(null) }) }
                 items(candidates, key = { it.id }) { candidate ->
-                    ListItem(headlineContent = { Text(candidate.title, maxLines = 2) }, supportingContent = { Text(if (candidate.parentID == null) "主待办" else "子待办") }, trailingContent = { if (candidate.id == selected) Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary) }, modifier = Modifier.clickable { onChoose(candidate.id) })
+                    ListItem(headlineContent = { Text(spacedText(candidate.title), maxLines = 2) }, supportingContent = { Text(if (candidate.parentID == null) "主待办" else "子待办") }, trailingContent = { if (candidate.id == selected) Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary) }, modifier = Modifier.clickable { onChoose(candidate.id) })
                 }
                 if (candidates.isEmpty()) item { Text("没有可用的父事项", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }

@@ -91,6 +91,7 @@ import java.util.Locale
         }
         item {
             OutlinedTextField(quickTitle, { quickTitle = it }, modifier = Modifier.fillMaxWidth().testTag("quick-add"),
+                visualTransformation = MixedScriptVisualTransformation,
                 placeholder = { Text("快速添加到今天…") }, singleLine = true,
                 shape = RoundedCornerShape(16.dp), enabled = !state.readOnly,
                 leadingIcon = { Icon(Icons.Outlined.Add, null, tint = MaterialTheme.colorScheme.primary) },

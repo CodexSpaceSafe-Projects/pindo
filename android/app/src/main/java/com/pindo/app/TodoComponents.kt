@@ -141,7 +141,7 @@ internal fun LazyListScope.pindoTaskItems(rows: List<TaskOutlineEntry>, state: A
             if (selected != null) Checkbox(checked = selected, onCheckedChange = { onSelect() }, enabled = editable, modifier = Modifier.size(40.dp))
             else PindoPhaseCircle(task.phase, editable, onPhase)
             Column(Modifier.weight(1f).padding(vertical = 13.dp, horizontal = 5.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(task.title, style = MaterialTheme.typography.titleMedium.copy(fontSize = 16.sp, lineHeight = 23.sp),
+                Text(spacedText(task.title), style = MaterialTheme.typography.titleMedium.copy(fontSize = 16.sp, lineHeight = 23.sp),
                     fontWeight = if (task.phase == "completed") FontWeight.Normal else FontWeight.Medium,
                     textDecoration = if (task.phase == "completed") TextDecoration.LineThrough else TextDecoration.None,
                     color = if (task.phase == "completed") MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)

@@ -1,5 +1,7 @@
 package com.pindo.app
 
+import com.pindo.app.sync.toMap
+
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*

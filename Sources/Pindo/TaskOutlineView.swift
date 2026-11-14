@@ -897,7 +897,7 @@ private struct TaskOutlineHeight {
             let textColor: NSColor = task.phase == .completed ? .secondaryLabelColor : .labelColor
             var attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: textColor]
             if task.phase == .completed { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
-            titleLabel.attributedStringValue = NSAttributedString(string: task.title, attributes: attributes)
+            titleLabel.attributedStringValue = MixedScriptTypography.attributed(task.title, attributes: attributes)
             titleLabel.maximumNumberOfLines = 0
             titleLabel.lineBreakMode = .byWordWrapping
             titleLabel.toolTip = task.title
@@ -934,7 +934,7 @@ private struct TaskOutlineHeight {
             if let subtitle = Self.subtitle(for: task, management: content.management, style: branchStyle, fonts: model.fontPreferences) {
                 metadata.isHidden = false
                 metadata.font = subtitle.font
-                metadata.stringValue = subtitle.text
+                metadata.attributedStringValue = MixedScriptTypography.attributed(subtitle.text, attributes: [.font: subtitle.font, .foregroundColor: NSColor.secondaryLabelColor])
                 subtitleHeight = Self.singleLineHeight(subtitle.text, font: subtitle.font)
             }
             if let group = branchStyle?.groupName {
@@ -997,8 +997,9 @@ private struct TaskOutlineHeight {
                           branchStyle: TaskBranchRowStyle?, fonts: PindoFontPreferences) -> CGFloat {
         let titleWidth = max(1, titleWidth(rowWidth: width, batch: batch, hasNote: hasNote, branchStyle: branchStyle))
         let font = titleFont(branchStyle, choice: fonts.task)
-        let height = ceil((task.title as NSString).boundingRect(with: NSSize(width: titleWidth, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font]).height)
+        let height = ceil(MixedScriptTypography.attributed(task.title, attributes: [.font: font])
+            .boundingRect(with: NSSize(width: titleWidth, height: .greatestFiniteMagnitude),
+                          options: [.usesLineFragmentOrigin, .usesFontLeading]).height)
         let header = branchStyle?.isHeader == true
         let extra = subtitle(for: task, management: management, style: branchStyle, fonts: fonts)
             .map { 20 + singleLineHeight($0.text, font: $0.font) } ?? (header ? 16 : 14)

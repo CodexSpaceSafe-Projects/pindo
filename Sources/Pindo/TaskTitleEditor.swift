@@ -6,6 +6,13 @@ struct TaskTitleEditor: NSViewRepresentable {
     @Environment(\.pindoLocalization) private var l10n
     @Binding var text: String
     var fontChoice = PindoFontChoice()
+    var defaultSize = 20
+    var variant: PindoFontChoice.Variant = .semibold
+    var maximumLines = 2
+    var placeholder = "事项内容"
+    var allowsEmpty = false
+    var bordered = false
+    var isFocused: Binding<Bool>? = nil
     var onSubmit: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -13,12 +20,12 @@ struct TaskTitleEditor: NSViewRepresentable {
     func makeNSView(context: Context) -> TaskTitleTextField {
         let field = TaskTitleTextField()
         field.isEditable = true; field.isSelectable = true
-        field.isBordered = false; field.drawsBackground = false
+        field.isBordered = bordered; field.isBezeled = bordered; field.drawsBackground = false
         field.focusRingType = .none
-        field.maximumNumberOfLines = 2
-        field.lineBreakMode = .byWordWrapping
-        field.cell?.wraps = true
-        field.cell?.isScrollable = false
+        field.maximumNumberOfLines = maximumLines
+        field.lineBreakMode = maximumLines == 1 ? .byClipping : .byWordWrapping
+        field.cell?.wraps = maximumLines != 1
+        field.cell?.isScrollable = maximumLines == 1
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         field.delegate = context.coordinator
         field.stringValue = text
@@ -29,13 +36,14 @@ struct TaskTitleEditor: NSViewRepresentable {
     func updateNSView(_ field: TaskTitleTextField, context: Context) {
         context.coordinator.parent = self
         if (field.currentEditor() as? NSTextView)?.hasMarkedText() != true {
-            let font = fontChoice.font(defaultSize: 20, variant: .semibold)
+            let font = fontChoice.font(defaultSize: defaultSize, variant: variant)
             if field.font != font { field.font = font }
             if field.textColor != .labelColor { field.textColor = .labelColor }
         }
-        field.placeholderString = l10n("事项内容")
-        field.setAccessibilityLabel(l10n("事项内容"))
+        field.placeholderString = l10n(placeholder)
+        field.setAccessibilityLabel(l10n(placeholder))
         context.coordinator.synchronize(field)
+        field.wantsFocus = isFocused?.wrappedValue == true
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: TaskTitleTextField, context: Context) -> NSSize? {
@@ -50,19 +58,32 @@ struct TaskTitleEditor: NSViewRepresentable {
 
         func synchronize(_ field: NSTextField) {
             // Saving or editing the note must not replace an active title draft.
-            guard field.currentEditor() == nil, field.stringValue != parent.text else { return }
-            field.stringValue = parent.text
+            guard (field.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return }
+            if field.currentEditor() == nil {
+                if field.stringValue != parent.text { field.stringValue = parent.text }
+                field.attributedStringValue = MixedScriptTypography.attributed(field.stringValue, attributes: [
+                    .font: field.font ?? parent.fontChoice.font(defaultSize: parent.defaultSize, variant: parent.variant),
+                    .foregroundColor: field.textColor ?? NSColor.labelColor
+                ])
+            } else if let editor = field.currentEditor() as? NSTextView {
+                MixedScriptTypography.styleEditor(editor)
+            }
         }
 
         func publish(_ field: NSTextField) {
             guard (field.currentEditor() as? NSTextView)?.hasMarkedText() != true,
-                  !field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                  parent.allowsEmpty || !field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             if parent.text != field.stringValue { parent.text = field.stringValue }
+            synchronize(field)
         }
 
         func controlTextDidBeginEditing(_ notification: Notification) {
             if let field = notification.object as? NSTextField,
-               let editor = field.currentEditor() as? NSTextView { editor.allowsUndo = true }
+               let editor = field.currentEditor() as? NSTextView {
+                editor.allowsUndo = true
+                parent.isFocused?.wrappedValue = true
+                MixedScriptTypography.styleEditor(editor)
+            }
         }
 
         func controlTextDidChange(_ notification: Notification) {
@@ -71,9 +92,12 @@ struct TaskTitleEditor: NSViewRepresentable {
 
         func controlTextDidEndEditing(_ notification: Notification) {
             guard let field = notification.object as? NSTextField else { return }
+            (field as? TaskTitleTextField)?.wantsFocus = false
+            parent.isFocused?.wrappedValue = false
             publish(field)
             // An empty draft never replaces the last valid title.
             if field.stringValue != parent.text { field.stringValue = parent.text }
+            synchronize(field)
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -86,4 +110,18 @@ struct TaskTitleEditor: NSViewRepresentable {
 }
 
 /// Identifies the title's full hit area to the note's outside-click monitor.
-final class TaskTitleTextField: NSTextField {}
+final class TaskTitleTextField: NSTextField {
+    var wantsFocus = false {
+        didSet { if wantsFocus && !oldValue { focusIfNeeded() } }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if wantsFocus { focusIfNeeded() }
+    }
+
+    private func focusIfNeeded() {
+        guard let window, currentEditor() == nil else { return }
+        window.makeFirstResponder(self)
+    }
+}
