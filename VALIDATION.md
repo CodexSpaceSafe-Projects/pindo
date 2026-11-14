@@ -6,6 +6,7 @@
 - 新增 v3 库身份、规范 AAD、AES-GCM 组合密文和共享向量，限定安全整数和大小边界；备注参考寄存器以实际观察的 note dot 仲裁，乱序替代、真实并发、空备注、重复和损坏上下文有可执行断言。这些原语尚未接入本机权威存储与领域投影。
 - 新增 Workers + D1 开发日志核心。11 项本地 workerd / D1 测试通过，覆盖并发、幂等、撤销、事务后步失败整批回滚、分页 / 缺口、epoch / 预算、保留回执及模拟 GC 后不重用 revision。`npm run types`、TypeScript 类型检查通过。
 - Linux Swift 6.0.3 的 113 项核心测试通过，`git diff --check` 通过。新增 macOS 加密与保留回归、Android 加密与保留回归，以及独立后端 CI；macOS 原生编译 / 通用包和 Android 测试 / lint / APK 等待本提交的 CI 确认。
+- 首轮 Android CI 发现退役代码拆分时误删文件末尾的本地校验函数；已原样恢复到独立的 `DocumentValidation.kt`，普通备份和本机编辑继续使用同一套校验。后续 CI 结果以修复提交为准。
 - 尚未完成 P0 全部操作契约、P1 / P2 / P4 / P5，也未部署 Cloudflare。没有测量真云 CPU / 容量，没有真云配对、GC、迁移或 Mac / Android 实机验收。锁定的本地运行时兼容日期为 2026-07-30，生产配置目标 2026-11-14，发布前必须升级运行时重测。
 
 ## 2026-11-14：备注集成 SwiftMarkdownEngine
