@@ -128,7 +128,7 @@ final class SyncEditingTests: XCTestCase {
         coordinator.content.onSelect(task)
         // No yield: the click handler itself must close the remote-apply race.
         XCTAssertTrue(model.isSyncEditing)
-        try await waitUntil { self.find(ComposingTextView.self, in: nativeHost) != nil }
+        try await waitUntil { self.find(NSTextView.self, in: nativeHost) != nil }
         XCTAssertEqual(model.task(task.id)?.note, "Original note")
     }
 
@@ -139,14 +139,14 @@ final class SyncEditingTests: XCTestCase {
         let task = try XCTUnwrap(model.document.tasks.first)
         let (first, firstHost) = host(NoteView(model: model, task: task))
         defer { first.orderOut(nil); first.contentView = nil }
-        try await waitUntil { self.find(ComposingTextView.self, in: firstHost) != nil }
+        try await waitUntil { self.find(NSTextView.self, in: firstHost) != nil }
         XCTAssertNotNil(find(TaskTitleTextField.self, in: firstHost))
         let (second, secondHost) = host(NoteView(model: model, task: task, onBack: {}))
         let (form, formHost) = host(EditTaskView(model: model, task: task, dismiss: {}))
         defer { second.orderOut(nil); second.contentView = nil; form.orderOut(nil); form.contentView = nil }
         try await Task.sleep(nanoseconds: 250_000_000)
         secondHost.layoutSubtreeIfNeeded(); formHost.layoutSubtreeIfNeeded()
-        XCTAssertNil(find(ComposingTextView.self, in: secondHost))
+        XCTAssertNil(find(NSTextView.self, in: secondHost))
         XCTAssertNil(find(TaskTitleTextField.self, in: secondHost))
         func hasEditableField(_ view: NSView) -> Bool {
             if let field = view as? NSTextField, field.isEditable { return true }
@@ -226,8 +226,8 @@ final class SyncEditingTests: XCTestCase {
         let originalHost = try XCTUnwrap(panel.contentView)
         panel.setContentSize(NSSize(width: 440, height: 580))
         model.noteID = task.id
-        try await waitUntil { self.find(ComposingTextView.self, in: originalHost) != nil }
-        let editor = try XCTUnwrap(find(ComposingTextView.self, in: originalHost))
+        try await waitUntil { self.find(NSTextView.self, in: originalHost) != nil }
+        let editor = try XCTUnwrap(find(NSTextView.self, in: originalHost))
         XCTAssertTrue(panel.makeFirstResponder(editor))
         editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
         editor.setMarkedText("拼音", selectedRange: NSRange(location: 2, length: 0),
@@ -254,7 +254,7 @@ final class SyncEditingTests: XCTestCase {
         let outline = try XCTUnwrap(find(TaskNativeOutlineView.self, in: nativeHost))
         let coordinator = try XCTUnwrap(outline.dataSource as? TaskOutlineCoordinator)
         coordinator.content.onSelect(task)
-        try await waitUntil { self.find(ComposingTextView.self, in: nativeHost) != nil }
+        try await waitUntil { self.find(NSTextView.self, in: nativeHost) != nil }
     }
 
     @MainActor func testClosingSettingsDiscardsCachedManagementLeasesAndReopensFreshContent() async throws {
@@ -299,7 +299,7 @@ final class SyncEditingTests: XCTestCase {
         install(); window.orderFrontRegardless()
         defer { window.orderOut(nil); window.contentView = nil }
         try await waitUntil {
-            window.contentView.map { self.find(ComposingTextView.self, in: $0) != nil } ?? false
+            window.contentView.map { self.find(NSTextView.self, in: $0) != nil } ?? false
         }
         XCTAssertTrue(model.isSyncEditing)
         // Keep the window alive while forcing NSHostingView/GraphHost deinit.

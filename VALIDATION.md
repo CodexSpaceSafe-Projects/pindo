@@ -1,5 +1,11 @@
 # 验证记录
 
+## 2026-11-14：备注集成 SwiftMarkdownEngine
+
+- 将备注页和快速记录备注统一替换为固定版本 SwiftMarkdownEngine 0.15.0 的 NativeTextViewWrapper；删除旧 LiveMarkdown、装饰绘制和自研格式变换，格式命令通过每个编辑器独立的引擎通知总线执行。仅链接核心 MarkdownEngine 产品，SwiftMath 只随上游清单解析、不链接；Apache 2.0 许可随应用打包。
+- 保留绑定与自动保存、关闭前同步提交、中文输入保护、字体补字、中西文间距、点击外部返回和多窗口编辑租约。原文／显示文本转换使用引擎 WikiLinkService，防止保存显示内容时丢失 wiki-link ID；排版不调用 TextKit 1 的 layoutManager。
+- Linux `swift test --jobs 4` 的 109 项核心测试通过。原生回归改为挂载真实引擎，验证 TextKit 2、Markdown 样式、稳定实例、输入法、字体更新、格式与撤销、多编辑器隔离、关闭提交、wiki ID、原文复制及重复排版。既有自动保存、快速记录及关闭窗口／租约测试同步迁移。macOS 编译、完整原生测试和通用打包以本次提交 CI 为准；未进行 Mac 实机交互验收。
+
 ## 2026-11-14：事项标题与备注的中西文显示间距
 
 - Swift／Kotlin 共用 Unicode 边界用例，中文与拉丁字母、数字之间增加 0.25em 视觉间距；保留已有空格、标点、组合重音、扩展汉字和 emoji 的原始 UTF-16 位置。全部处理仅发生在排版层，不修改资料、复制内容或同步协议。

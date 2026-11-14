@@ -48,46 +48,4 @@ final class FontPreferencesTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: reopened.repository.dataURL), taskData)
     }
 
-    @MainActor func testNoteFontChangeRestylesMarkdownAndWaitsForComposition() throws {
-        _ = NSApplication.shared
-        let original = "# Heading\n\n**Bold** and `code`\n\n普通正文"
-        var stored = original
-        let editor = NoteEditor(text: Binding(get: { stored }, set: { stored = $0 }))
-        let coordinator = editor.makeCoordinator()
-        let view = ComposingTextView()
-        view.string = stored; view.delegate = coordinator
-        let storage = try XCTUnwrap(view.textStorage)
-        let source = original as NSString
-        let selection = source.range(of: "正文")
-        view.setSelectedRange(selection)
-        coordinator.render(view)
-
-        func font(for text: String) throws -> NSFont {
-            try XCTUnwrap(storage.attribute(.font, at: source.range(of: text).location, effectiveRange: nil) as? NSFont)
-        }
-        coordinator.parent.fontChoice = PindoFontChoice(primaryFamily: "Menlo", fallbackFamily: "Hiragino Sans", pointSize: 23)
-        coordinator.synchronize(view, text: stored)
-        XCTAssertEqual(view.selectedRange(), selection)
-        XCTAssertEqual(stored, original)
-        XCTAssertEqual(view.string, original)
-        XCTAssertEqual(try font(for: "Heading").pointSize, 33)
-        XCTAssertTrue(NSFontManager.shared.traits(of: try font(for: "Bold")).contains(.boldFontMask))
-        XCTAssertTrue(try font(for: "code").isFixedPitch)
-        XCTAssertEqual((view.typingAttributes[.font] as? NSFont)?.pointSize, 23)
-
-        view.setSelectedRange(NSRange(location: source.length, length: 0))
-        view.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0),
-                           replacementRange: NSRange(location: NSNotFound, length: 0))
-        XCTAssertTrue(view.hasMarkedText())
-        let composing = NSAttributedString(attributedString: storage)
-        coordinator.parent.fontChoice.pointSize = 26
-        coordinator.synchronize(view, text: stored)
-        XCTAssertTrue(storage.isEqual(to: composing))
-        XCTAssertEqual(stored, original)
-        view.insertText("中", replacementRange: NSRange(location: NSNotFound, length: 0))
-        view.unmarkText()
-        coordinator.publish(view)
-        XCTAssertEqual(stored, original + "中")
-        XCTAssertEqual(try font(for: "Heading").pointSize, 36)
-    }
 }

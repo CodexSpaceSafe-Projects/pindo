@@ -734,36 +734,6 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.managedTasks(query: "", status: .all, group: .all).map(\.id), [future.id])
     }
 
-    @MainActor func testSavingDoesNotReplaceMarkedChineseInput() async throws {
-        _ = NSApplication.shared
-        var stored = "已有"
-        let editor = NoteEditor(text: Binding(get: { stored }, set: { stored = $0 }))
-        let coordinator = editor.makeCoordinator()
-        let view = ComposingTextView()
-        view.string = stored; view.delegate = coordinator
-        view.didCommitText = { [weak view] in if let view { coordinator.publish(view) } }
-        view.setSelectedRange(NSRange(location: (stored as NSString).length, length: 0))
-        view.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
-        XCTAssertTrue(view.hasMarkedText())
-        let composingText = view.string, selection = view.selectedRange()
-        let composingAttributes = NSAttributedString(attributedString: view.textStorage!)
-        coordinator.publish(view)
-        coordinator.render(view)
-        XCTAssertEqual(stored, "已有")
-        coordinator.synchronize(view, text: stored)
-        XCTAssertEqual(view.string, composingText)
-        XCTAssertEqual(view.selectedRange(), selection)
-        XCTAssertTrue(view.hasMarkedText())
-        XCTAssertTrue(view.textStorage!.isEqual(to: composingAttributes))
-        view.insertText("中文", replacementRange: NSRange(location: NSNotFound, length: 0))
-        view.unmarkText()
-        coordinator.publish(view)
-        XCTAssertEqual(stored, "已有中文")
-        view.setSelectedRange(NSRange(location: 1, length: 1))
-        coordinator.synchronize(view, text: stored)
-        XCTAssertEqual(view.selectedRange(), NSRange(location: 1, length: 1))
-    }
-
     @MainActor func testTaskPanelSupportsNativeResizingAndRetainsItsSizeWhenShown() async throws {
         _ = NSApplication.shared
         let panel = QuickPanel.taskPanel()
@@ -779,133 +749,6 @@ final class AppModelTests: XCTestCase {
         panel.configurePin(false); panel.showInFront(); panel.orderOut(nil); panel.showInFront()
         XCTAssertEqual(panel.frame.size, frame.size)
         XCTAssertEqual(panel.level, .floating)
-    }
-
-    @MainActor func testLiveMarkdownChangesAppearanceWithoutChangingSourceSelectionOrUndo() async throws {
-        _ = NSApplication.shared
-        var stored = "# 标题\n**粗体** 和 `代码`\n最后一行"
-        let editor = NoteEditor(text: Binding(get: { stored }, set: { stored = $0 }))
-        let coordinator = editor.makeCoordinator()
-        let view = ComposingTextView()
-        view.isRichText = false; view.allowsUndo = true; view.string = stored; view.delegate = coordinator
-        // Text views obtain undo from their responder/window chain in the app.
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 400), styleMask: .titled, backing: .buffered, defer: false)
-        let scroll = NSScrollView(frame: window.contentView!.bounds)
-        scroll.documentView = view; window.contentView = scroll
-        XCTAssertTrue(window.makeFirstResponder(view))
-        let undo = try XCTUnwrap(view.undoManager)
-        undo.removeAllActions()
-        let source = stored as NSString
-        view.setSelectedRange(NSRange(location: source.length, length: 0))
-        let selection = view.selectedRange()
-        coordinator.render(view)
-        XCTAssertEqual(view.string, stored)
-        XCTAssertEqual(view.selectedRange(), selection)
-        let titleFont = try XCTUnwrap(view.textStorage?.attribute(.font, at: source.range(of: "标题").location, effectiveRange: nil) as? NSFont)
-        XCTAssertGreaterThan(titleFont.pointSize, 14)
-        let bold = try XCTUnwrap(view.textStorage?.attribute(.font, at: source.range(of: "粗体").location, effectiveRange: nil) as? NSFont)
-        XCTAssertTrue(NSFontManager.shared.traits(of: bold).contains(.boldFontMask))
-        let hidden = try XCTUnwrap(view.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
-        XCTAssertLessThan(hidden.pointSize, 1)
-        // Entering a formatted paragraph reveals its Markdown delimiters.
-        view.setSelectedRange(NSRange(location: 2, length: 1)); coordinator.render(view)
-        let visible = try XCTUnwrap(view.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
-        XCTAssertGreaterThan(visible.pointSize, 1)
-        XCTAssertEqual(view.selectedRange(), NSRange(location: 2, length: 1))
-        XCTAssertEqual(view.string, stored)
-        view.setSelectedRange(NSRange(location: source.length, length: 0))
-        view.insertText("新", replacementRange: NSRange(location: NSNotFound, length: 0))
-        coordinator.publish(view)
-        XCTAssertTrue(stored.hasSuffix("新"))
-        view.breakUndoCoalescing()
-        XCTAssertTrue(undo.canUndo)
-        undo.undo()
-        coordinator.publish(view)
-        XCTAssertEqual(view.string, source as String)
-        XCTAssertEqual(stored, source as String)
-    }
-
-    @MainActor func testMarkdownRestylesTouchedParagraphsAndReparsesChangedFence() throws {
-        let view = ComposingTextView()
-        view.string = "**一**\n\n# 二\n\n保留\n\n普通 **文字 code**\n"
-        let storage = try XCTUnwrap(view.textStorage)
-        let coordinator = NoteEditor(text: .constant("")).makeCoordinator()
-        let source = view.string as NSString
-        let untouched = source.range(of: "保留")
-        let original = NSRange(location: 0, length: 0)
-        view.setSelectedRange(original)
-        coordinator.render(view)
-        storage.addAttribute(.backgroundColor, value: NSColor.systemPink, range: untouched)
-
-        view.setSelectedRange(source.range(of: "二"))
-        coordinator.render(view)
-        XCTAssertEqual(storage.attribute(.backgroundColor, at: untouched.location, effectiveRange: nil) as? NSColor, .systemPink)
-        XCTAssertLessThan(try XCTUnwrap(storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont).pointSize, 1)
-
-        storage.replaceCharacters(in: source.range(of: "二"), with: "更新 👩‍💻\n第三行")
-        coordinator.render(view)
-        let shifted = (view.string as NSString).range(of: "保留")
-        XCTAssertEqual(storage.attribute(.backgroundColor, at: shifted.location, effectiveRange: nil) as? NSColor, .systemPink)
-        let headingFont = try XCTUnwrap(storage.attribute(.font, at: (view.string as NSString).range(of: "更新").location,
-                                                         effectiveRange: nil) as? NSFont)
-        XCTAssertGreaterThan(headingFont.pointSize, 14)
-
-        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "```\n")
-        coordinator.render(view)
-        let fenced = view.string as NSString
-        let codeFont = try XCTUnwrap(storage.attribute(.font, at: fenced.range(of: "code").location,
-                                                      effectiveRange: nil) as? NSFont)
-        XCTAssertTrue(codeFont.isFixedPitch)
-        XCTAssertFalse(NSFontManager.shared.traits(of: codeFont).contains(.boldFontMask))
-        // 中文由系统补字；代码块的背景与原文显示不依赖补字字体是否标记为等宽。
-        XCTAssertNotNil(storage.attribute(.backgroundColor, at: fenced.range(of: "文字").location, effectiveRange: nil))
-    }
-
-    @MainActor func testSameLineBackticksRenderAsInlineCode() throws {
-        _ = NSApplication.shared
-        let source = """
-        ```123```
-
-        普通 **正文**，另有 ``A `B` ``` C`` 和 ```D **E**```。
-
-        ```swift
-        let value = 1
-        ```
-
-        最后一行
-        """
-        let view = ComposingTextView()
-        view.string = source
-        let storage = try XCTUnwrap(view.textStorage)
-        let coordinator = NoteEditor(text: .constant(source)).makeCoordinator()
-        let text = source as NSString
-
-        func font(at index: Int) throws -> NSFont {
-            try XCTUnwrap(storage.attribute(.font, at: index, effectiveRange: nil) as? NSFont)
-        }
-
-        view.setSelectedRange(NSRange(location: text.length, length: 0))
-        coordinator.render(view)
-
-        let sample = text.range(of: "```123```")
-        let markers = [0, 1, 2, 6, 7, 8].map { sample.location + $0 }
-        XCTAssertTrue(try font(at: text.range(of: "123").location).isFixedPitch)
-        XCTAssertTrue(try font(at: text.range(of: "``` C").location).isFixedPitch)
-        XCTAssertTrue(try font(at: text.range(of: " C").location + 1).isFixedPitch)
-        let literal = try font(at: text.range(of: "**E**").location)
-        XCTAssertTrue(literal.isFixedPitch)
-        XCTAssertGreaterThan(literal.pointSize, 1)
-        XCTAssertTrue(NSFontManager.shared.traits(of: try font(at: text.range(of: "正文").location)).contains(.boldFontMask))
-        XCTAssertTrue(try font(at: text.range(of: "let value").location).isFixedPitch)
-        XCTAssertFalse(try font(at: text.range(of: "最后一行").location).isFixedPitch)
-        for marker in markers { XCTAssertLessThan(try font(at: marker).pointSize, 1) }
-
-        let editing = NSRange(location: sample.location + 3, length: 0)
-        view.setSelectedRange(editing)
-        coordinator.render(view)
-        for marker in markers { XCTAssertGreaterThan(try font(at: marker).pointSize, 1) }
-        XCTAssertEqual(view.string, source)
-        XCTAssertEqual(view.selectedRange(), editing)
     }
 
     @MainActor func testNoteOutsideHitTestingIgnoresEditorResizeBorderAndOtherWindows() async throws {
@@ -1049,8 +892,8 @@ final class AppModelTests: XCTestCase {
         let panel = try XCTUnwrap(delegate.quickPanel)
         defer { panel.orderOut(nil); panel.contentView = nil }
         try await Task.sleep(nanoseconds: 300_000_000)
-        func noteEditor(in view: NSView) -> ComposingTextView? {
-            (view as? ComposingTextView) ?? view.subviews.lazy.compactMap { noteEditor(in: $0) }.first
+        func noteEditor(in view: NSView) -> NSTextView? {
+            (view as? NSTextView) ?? view.subviews.lazy.compactMap { noteEditor(in: $0) }.first
         }
         let note = try XCTUnwrap(noteEditor(in: try XCTUnwrap(panel.contentView)))
         XCTAssertTrue(panel.makeFirstResponder(note))

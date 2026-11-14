@@ -29,6 +29,7 @@ else
 fi
 cp "$repo_dir/Resources/Info.plist" "$app_dir/Contents/Info.plist"
 cp "$repo_dir/Resources/Pindo.icns" "$app_dir/Contents/Resources/Pindo.icns"
+cp "$repo_dir/Sources/Pindo/Resources/MarkdownEngine-LICENSE.txt" "$app_dir/Contents/Resources/MarkdownEngine-LICENSE.txt"
 for event in added deleted completed started; do
   cp "$repo_dir/Sources/Pindo/Resources/feedback-$event.wav" "$app_dir/Contents/Resources/"
 done
