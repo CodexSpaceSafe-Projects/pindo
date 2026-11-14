@@ -27,3 +27,15 @@ jobs:
       - run: npm run types
       - run: npm run typecheck
       - run: npm test
+  staging-smoke:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: log-core
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify public staging health and unauthenticated denial
+        run: node scripts/check-cloudflare-staging.mjs
