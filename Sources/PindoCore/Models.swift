@@ -13,6 +13,7 @@ public struct DayKey: Codable, Hashable, Comparable, Sendable, CustomStringConve
     }
 
     public init(year: Int, month: Int, day: Int) throws {
+        guard (1...9999).contains(year) else { throw PindoError.invalidDay }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         guard let date = calendar.date(from: DateComponents(year: year, month: month, day: day, hour: 12)),
@@ -145,15 +146,19 @@ public struct PindoDocument: Codable, Equatable, Sendable {
     /// Local replica metadata is saved atomically with tasks; never sent as a
     /// document backup or used as another installation's identity.
     public var syncState: SyncReplica? = nil
+    public var syncSession: SyncSessionState? = nil
+    public var syncChannels: [String: SyncChannelArchive]? = nil
     public init() {}
 
     public func validated() throws -> Self {
         guard schemaVersion == 1 else { throw PindoError.unsupportedVersion }
+        guard tasks.count <= 10_000, groups.count <= 1_000 else { throw PindoError.invalidData("事项或分组数量超过同步上限") }
         guard Set(tasks.map(\.id)).count == tasks.count, Set(groups.map(\.id)).count == groups.count else { throw PindoError.invalidData("存在重复标识") }
         let groupIDs = Set(groups.map(\.id))
         if let id = preferences.defaultGroupID, !groupIDs.contains(id) { throw PindoError.invalidData("默认分组不存在") }
         for task in tasks {
             guard !task.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw PindoError.emptyTitle }
+            guard task.order >= -9_007_199_254_740_991, task.order <= 9_007_199_254_740_991 else { throw PindoError.invalidData("事项顺序超过安全整数范围") }
             _ = try DayKey(year: task.plannedDay.year, month: task.plannedDay.month, day: task.plannedDay.day)
             if let id = task.groupID, !groupIDs.contains(id) { throw PindoError.invalidData("事项引用了不存在的分组") }
         }
@@ -163,6 +168,18 @@ public struct PindoDocument: Codable, Equatable, Sendable {
               !preferences.quickAddHotkey.matches(preferences.listHotkey) else { throw PindoError.invalidHotkey }
         try validateTaskHierarchy()
         _ = try syncState?.validated()
+        if let session = syncSession {
+            guard syncState != nil else { throw PindoError.invalidData("同步会话缺少副本") }
+            _ = try session.validated()
+        }
+        if let channels = syncChannels {
+            guard channels.count + (syncSession == nil ? 0 : 1) <= SyncSessionState.maximumChannels,
+                  syncSession.map({ channels[$0.channelID] == nil }) ?? true else { throw PindoError.invalidData("同步资料库归档无效") }
+            for (channelID, archive) in channels {
+                guard archive.syncSession.channelID == channelID else { throw PindoError.invalidData("同步资料库归档身份无效") }
+                _ = try archive.validated()
+            }
+        }
         return self
     }
 

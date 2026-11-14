@@ -231,6 +231,9 @@ import java.time.LocalDate
     var disconnect by remember { mutableStateOf(false) }
     var localError by remember { mutableStateOf<String?>(null) }
     var copied by remember { mutableStateOf(false) }
+    val initialConnectionRevision = remember { state.connectionRevision }
+    LaunchedEffect(state.connectionRevision) { if (state.connectionRevision != initialConnectionRevision) onBack() }
+    DisposableEffect(Unit) { onDispose { store.cancelSettingsValidation() } }
     BackHandler(onBack = onBack)
     Scaffold(topBar = { TopAppBar(title = { Text("云同步") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Outlined.ArrowBack, "返回设置") } }) }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -239,6 +242,7 @@ import java.time.LocalDate
                     Icon(Icons.Outlined.Security, null, tint = MaterialTheme.colorScheme.primary)
                     Text("只有你的设备能解密", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                     Text("使用自己的缤纷云账号，待办、分组与备注在上传前完成端到端加密。", style = MaterialTheme.typography.bodyMedium)
+                    Text("新版同步会暂停旧版设备的云同步，请先将所有设备升级到 0.3 或更新版本。", style = MaterialTheme.typography.bodySmall)
                     Text(state.syncStatus, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                 }
             }
@@ -247,22 +251,27 @@ import java.time.LocalDate
                     Text("启用云同步", style = MaterialTheme.typography.titleMedium)
                     Text("离线修改会在联网后自动重试", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Switch(draft.enabled, { draft = draft.copy(enabled = it) }, enabled = !state.readOnly)
+                Switch(draft.enabled, { draft = draft.copy(enabled = it) }, enabled = !state.readOnly && !state.validatingConnection)
             }
-            OutlinedTextField(draft.bucket, { draft = draft.copy(bucket = it) }, label = { Text("存储桶名称") }, supportingText = { Text("各设备填写相同的私有 Bucket") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-            SecretField("Access Key", draft.accessKey) { draft = draft.copy(accessKey = it) }
-            SecretField("Secret Key", draft.secretKey) { draft = draft.copy(secretKey = it) }
+            OutlinedTextField(draft.bucket, { draft = draft.copy(bucket = it, createVault = false) }, enabled = !state.validatingConnection, label = { Text("存储桶名称") }, supportingText = { Text("各设备填写相同的私有 Bucket") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            SecretField("Access Key", draft.accessKey, enabled = !state.validatingConnection) { draft = draft.copy(accessKey = it) }
+            SecretField("Secret Key", draft.secretKey, enabled = !state.validatingConnection) { draft = draft.copy(secretKey = it) }
             TextButton(onClick = { advanced = !advanced }) { Text("服务地址与区域"); Icon(if (advanced) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null) }
             if (advanced) {
-                OutlinedTextField(draft.endpoint, { draft = draft.copy(endpoint = it) }, label = { Text("S3 Endpoint") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                OutlinedTextField(draft.region, { draft = draft.copy(region = it) }, label = { Text("Region") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(draft.endpoint, { draft = draft.copy(endpoint = it) }, enabled = !state.validatingConnection, label = { Text("S3 Endpoint") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(draft.region, { draft = draft.copy(region = it) }, enabled = !state.validatingConnection, label = { Text("Region") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
             }
             HorizontalDivider()
             Text("恢复密钥", style = MaterialTheme.typography.titleMedium)
-            Text("已有同步空间请粘贴另一台设备的密钥；首次使用可生成。密钥遗失后，无法从云端找回明文。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            SecretField("64 位十六进制恢复密钥", draft.recoveryKey) { draft = draft.copy(recoveryKey = it); copied = false }
+            Text("已有资料库请粘贴另一台设备的密钥；加入时找不到资料会报错，不会默建空库。首次使用请生成新密钥。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("首次连接新资料库会合并当前本机待办；返回已连接过的资料库会恢复该库的本机副本与离线历史。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { if (draft.recoveryKey.isBlank()) draft = draft.copy(recoveryKey = store.generateRecoveryKey()) else regenerate = true }) { Icon(Icons.Outlined.Key, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text("生成密钥") }
+                FilterChip(selected = !draft.createVault, onClick = { draft = draft.copy(createVault = false) }, enabled = !state.validatingConnection, label = { Text("加入已有资料库") })
+                FilterChip(selected = draft.createVault, onClick = { draft = draft.copy(createVault = true) }, enabled = !state.validatingConnection, label = { Text("创建新资料库") })
+            }
+            SecretField("64 位十六进制恢复密钥", draft.recoveryKey, enabled = !state.validatingConnection) { draft = draft.copy(recoveryKey = it, createVault = false); copied = false }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(enabled = !state.validatingConnection, onClick = { if (draft.recoveryKey.isBlank()) draft = draft.copy(recoveryKey = store.generateRecoveryKey(), createVault = true) else regenerate = true }) { Icon(Icons.Outlined.Key, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text("生成密钥") }
                 OutlinedButton(enabled = draft.recoveryKey.isNotBlank(), onClick = {
                     val clip = ClipData.newPlainText("Pindo 恢复密钥", draft.recoveryKey)
                     if (Build.VERSION.SDK_INT >= 33) clip.description.extras = PersistableBundle().apply { putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true) }
@@ -272,23 +281,23 @@ import java.time.LocalDate
             }
             Text("凭据和恢复密钥由 Android Keystore 加密保存在此设备，不会进入导出资料。前台约每 30 秒检查，后台不保证即时同步。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             (localError ?: state.error)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            Button(onClick = { if (store.saveSettings(draft)) onBack() else localError = "配置未保存，请检查输入和错误提示。" }, enabled = !state.readOnly, modifier = Modifier.fillMaxWidth().height(50.dp)) { Text(if (draft.enabled) "保存并连接" else "保存设置") }
+            Button(onClick = { localError = null; if (!store.saveSettings(draft)) localError = store.state.value.error ?: "配置未保存，请检查输入和错误提示。" }, enabled = !state.readOnly && !state.validatingConnection, modifier = Modifier.fillMaxWidth().height(50.dp)) { Text(if (state.validatingConnection) "正在验证连接…" else if (draft.enabled) "保存并连接" else "保存设置") }
             if (state.syncEnabled) {
-                OutlinedButton(onClick = { store.requestSync(true) }, enabled = !state.syncing, modifier = Modifier.fillMaxWidth()) { Text(if (state.syncing) "正在同步…" else "立即同步") }
+                OutlinedButton(onClick = { store.requestSync(true) }, enabled = !state.syncing && !state.validatingConnection, modifier = Modifier.fillMaxWidth()) { Text(if (state.syncing) "正在同步…" else "立即同步") }
                 TextButton(onClick = { disconnect = true }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("断开同步", color = MaterialTheme.colorScheme.error) }
             }
         }
     }
     if (regenerate) AlertDialog(onDismissRequest = { regenerate = false }, title = { Text("生成新的恢复密钥？") },
         text = { Text("新密钥对应独立的同步空间。请先保留旧密钥，其他设备也需要改用新密钥。") },
-        confirmButton = { TextButton(onClick = { draft = draft.copy(recoveryKey = store.generateRecoveryKey()); regenerate = false }) { Text("生成新密钥") } }, dismissButton = { TextButton(onClick = { regenerate = false }) { Text("取消") } })
+        confirmButton = { TextButton(onClick = { draft = draft.copy(recoveryKey = store.generateRecoveryKey(), createVault = true); regenerate = false }) { Text("生成新密钥") } }, dismissButton = { TextButton(onClick = { regenerate = false }) { Text("取消") } })
     if (disconnect) AlertDialog(onDismissRequest = { disconnect = false }, title = { Text("断开云同步？") }, text = { Text("将清除本机连接凭据，保留本地事项和云端加密资料。重新连接需要原恢复密钥。") },
         confirmButton = { TextButton(onClick = { if (store.saveSettings(CloudSettings())) { disconnect = false; onBack() } }) { Text("断开", color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { disconnect = false }) { Text("取消") } })
 }
 
-@Composable private fun SecretField(label: String, value: String, changed: (String) -> Unit) {
+@Composable private fun SecretField(label: String, value: String, enabled: Boolean = true, changed: (String) -> Unit) {
     var visible by remember { mutableStateOf(false) }
-    OutlinedTextField(value, changed, modifier = Modifier.fillMaxWidth(), label = { Text(label) }, singleLine = true,
+    OutlinedTextField(value, changed, enabled = enabled, modifier = Modifier.fillMaxWidth(), label = { Text(label) }, singleLine = true,
         visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
         trailingIcon = { IconButton(onClick = { visible = !visible }) { Icon(if (visible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, if (visible) "隐藏$label" else "显示$label") } })
 }
@@ -300,7 +309,7 @@ import java.time.LocalDate
     var color by rememberSaveable { mutableStateOf("#4477AA") }
     var deleting by remember { mutableStateOf<TodoGroup?>(null) }
     val colors = listOf("#4477AA" to "青蓝", "#EE6677" to "珊瑚", "#228833" to "松绿", "#CCBB44" to "姜黄", "#66CCEE" to "天青", "#AA3377" to "紫红", "#BBBBBB" to "岩灰")
-    DisposableEffect(Unit) { store.setEditing(true); onDispose { store.setEditing(false) } }
+    DisposableEffect(Unit) { val lease = store.beginEditing(); onDispose { store.endEditing(lease) } }
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.surface) {
             Column(Modifier.heightIn(max = 640.dp).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {

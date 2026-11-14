@@ -47,6 +47,24 @@ enum SaveState { case saved, saving, failed }
     private var textSave: Task<Void, Never>?
     private var draftSave: Task<Void, Never>?
     private var snapshotTimer: Timer?
+    private var syncEditingLeases: [UUID: UUID?] = [:]
+
+    var isSyncEditing: Bool {
+        !syncEditingLeases.isEmpty || noteID != nil || editingID != nil || draggedTaskID != nil
+    }
+
+    func acquireSyncEditing(taskID: UUID? = nil) -> UUID? {
+        if let taskID, syncEditingLeases.values.contains(where: { $0 == taskID }) { return nil }
+        let token = UUID()
+        syncEditingLeases[token] = .some(taskID)
+        cloudSync.editingDidBegin()
+        return token
+    }
+
+    func releaseSyncEditing(_ token: UUID) {
+        guard syncEditingLeases.removeValue(forKey: token) != nil else { return }
+        cloudSync.editingDidEnd()
+    }
 
     init(directory: URL, defaults: UserDefaults = .standard) throws {
         self.defaults = defaults
@@ -55,6 +73,7 @@ enum SaveState { case saved, saving, failed }
         fontPreferences = defaults.data(forKey: PindoFontPreferences.defaultsKey)
             .flatMap { try? JSONDecoder().decode(PindoFontPreferences.self, from: $0) } ?? PindoFontPreferences()
         repository = try PindoRepository(directory: directory, initialDocument: PindoLocalization(language).initialDocument)
+        try repository.beginSyncSession()
         document = repository.document
         listEntryGroupID = repository.document.preferences.defaultGroupID
         quickTitle = defaults.string(forKey: "quickTitle") ?? ""
@@ -182,7 +201,7 @@ enum SaveState { case saved, saving, failed }
 
     func refreshAfterCloudSync() {
         guard document != repository.document else { return }
-        document = repository.document; saveState = .saved
+        document = repository.document; saveState = repository.hasUnsavedChanges ? .saving : .saved
         if case .group(let id) = groupFilter, group(id) == nil { groupFilter = .all }
         if let id = listEntryGroupID, group(id) == nil { resetListEntryGroup() }
         preferencesChanged(document.preferences)
@@ -199,7 +218,7 @@ enum SaveState { case saved, saving, failed }
             if defaults.string(forKey: key) != value { defaults.set(value, forKey: key) }
         }
     }
-    func leaveNote() { _ = flush(); noteID = nil }
+    func leaveNote() { _ = flush(); noteID = nil; cloudSync.editingDidEnd() }
 
     @discardableResult func addTask(title: String, note: String = "", day: DayKey, groupID: UUID?, parentID: UUID? = nil) -> Bool {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -239,11 +258,14 @@ enum SaveState { case saved, saving, failed }
         }
         return true
     }
-    func edit(_ id: UUID, title: String, day: DayKey, groupID: UUID?) -> Bool {
+    func edit(_ id: UUID, title: String, day: DayKey, groupID: UUID?, original: TodoItem? = nil) -> Bool {
         commit { doc in
             guard let i = doc.tasks.firstIndex(where: { $0.id == id }) else { throw PindoError.missingTask }
-            doc.tasks[i].title = title.trimmingCharacters(in: .whitespacesAndNewlines)
-            doc.tasks[i].plannedDay = day; doc.tasks[i].groupID = groupID; doc.tasks[i].updatedAt = Date()
+            let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            if original == nil || title != original?.title { doc.tasks[i].title = title }
+            if original == nil || day != original?.plannedDay { doc.tasks[i].plannedDay = day }
+            if original == nil || groupID != original?.groupID { doc.tasks[i].groupID = groupID }
+            doc.tasks[i].updatedAt = Date()
         }
     }
     func rollover(taskIDs: Set<UUID>? = nil) {
@@ -340,8 +362,10 @@ enum SaveState { case saved, saving, failed }
     }
 
     func endTaskDrag() {
-        if draggedTaskID != nil { draggedTaskID = nil }
+        let wasDragging = draggedTaskID != nil
+        if wasDragging { draggedTaskID = nil }
         taskDragBase = nil
+        if wasDragging { cloudSync.editingDidEnd() }
     }
 
     func copyTask(_ task: TodoItem) -> Bool {

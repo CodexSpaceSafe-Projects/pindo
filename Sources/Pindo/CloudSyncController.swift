@@ -40,12 +40,16 @@ struct KeychainSyncSecretStorage: SyncSecretStorage {
     }
 }
 
-enum CloudSyncError: LocalizedError {
-    case keychain, editing
+enum CloudSyncError: LocalizedError, Equatable {
+    case keychain, editing, vaultNotFound, migrationCollision, bindingMismatch, configurationRecovery
     var errorDescription: String? {
         switch self {
         case .keychain: return "无法访问同步凭据，请解锁系统钥匙串后重试。"
         case .editing: return "当前正在编辑或拖动，结束后会继续同步。"
+        case .vaultNotFound: return "No existing sync vault was found. Check the recovery key, or explicitly create a new vault."
+        case .migrationCollision: return "The sync upgrade checkpoint is invalid or its reserved path is occupied. Local data is preserved."
+        case .bindingMismatch: return "The saved connection does not match this local vault. Reconnect explicitly before syncing."
+        case .configurationRecovery: return "The sync configuration transaction could not be completed. Sync is paused; reconnect to recover."
         }
     }
 }
@@ -54,11 +58,29 @@ private struct SavedSyncConnection: Codable {
     var configuration: BitifulConfiguration
     var credentials: BitifulCredentials
     var recoveryKey: String
+    var createIfMissing: Bool? = nil
+}
+
+private struct SavedSyncJournal: Codable {
+    var version = 2
+    var active: SavedSyncConnection?
+    var pending: SavedSyncConnection?
+    var transactionID: String?
+}
+
+enum CloudSyncPhase: String {
+    case disconnected = "仅保存在本机", waiting = "等待同步", editing = "等待编辑结束"
+    case downloading = "正在读取云端变化…", uploading = "正在上传本机变化…"
+    case confirming = "正在确认云端保存…", migrating = "正在升级同步资料库…"
+    case validating = "正在验证同步连接…"
+    case synced = "已同步", failed = "同步失败，本机修改已保留。", recovering = "正在恢复同步配置…"
 }
 
 protocol CloudSyncTransport {
     func listHeads(vaultID: String) async throws -> [SyncRemoteHead]
+    func listObjects(vaultID: String) async throws -> [SyncRemoteHead]
     func download(key: String) async throws -> Data
+    func download(key: String, expectedETag: String) async throws -> Data
     func upload(data: Data, key: String) async throws
 }
 extension BitifulTransport: CloudSyncTransport {}
@@ -70,6 +92,7 @@ extension BitifulTransport: CloudSyncTransport {}
     @Published private(set) var isSyncing = false
     @Published private(set) var lastSyncDate: Date?
     @Published private(set) var errorMessage: String?
+    @Published private(set) var phase = CloudSyncPhase.disconnected
     var isConfigured: Bool { connection != nil }
 
     private weak var model: AppModel?
@@ -80,70 +103,186 @@ extension BitifulTransport: CloudSyncTransport {}
     private var operation: Task<Void, Never>?
     private var debounce: Task<Void, Never>?
     private var generation = UUID()
-    private var knownETags: [String: String] = [:]
-    private var lastUploaded: Data?
     private var failureCount = 0
-    private var nextAttempt = Date.distantPast
-    private var lastAttempt = Date.distantPast
+    private var nextAttemptUptime: TimeInterval = 0
+    private var lastAttemptUptime: TimeInterval = -.infinity
     private var pendingChanges = false
+    private var validatingConnection = false
+    private let now: () -> Date
+    private let jitter: () -> Double
+    private let uptime: () -> TimeInterval
 
     init(model: AppModel, storage: SyncSecretStorage = KeychainSyncSecretStorage(),
          makeTransport: @escaping (BitifulConfiguration, BitifulCredentials) throws -> any CloudSyncTransport = {
              try BitifulTransport(configuration: $0, credentials: $1)
-         }) {
+         }, now: @escaping () -> Date = Date.init, jitter: @escaping () -> Double = { Double.random(in: 0.8...1.2) },
+         uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.model = model; self.storage = storage; self.makeTransport = makeTransport
+        self.now = now; self.jitter = jitter; self.uptime = uptime
     }
 
     /// Only called at app launch, not by model tests or while constructing views.
     func start() {
         do {
-            if let data = try storage.load() {
-                let saved = try DocumentCodec.decode(SavedSyncConnection.self, from: data)
-                _ = try SyncEncryption(recoveryKey: saved.recoveryKey)
-                _ = try makeTransport(saved.configuration, saved.credentials)
-                try model?.repository.enableSync()
-                model?.refreshAfterCloudSync()
-                connection = saved; configuration = saved.configuration
-                installTimer(); syncNow()
+            guard let model, let journal = try loadJournal() else { return }
+            var saved = journal.active
+            if let pending = journal.pending, let transaction = journal.transactionID {
+                phase = .recovering
+                let encryption = try SyncEncryption(recoveryKey: pending.recoveryKey)
+                let channel = ImmutableCloudSync.channelID(configuration: pending.configuration, encryption: encryption)
+                if model.repository.syncSession?.connectionTransaction == transaction && model.repository.syncSession?.channelID == channel {
+                    saved = pending
+                }
+                try saveJournal(active: saved)
             }
-        } catch { errorMessage = model?.localization.error(error) ?? error.localizedDescription }
+            guard let saved else { phase = .disconnected; return }
+            let encryption = try SyncEncryption(recoveryKey: saved.recoveryKey)
+            _ = try makeTransport(saved.configuration, saved.credentials)
+            let channel = ImmutableCloudSync.channelID(configuration: saved.configuration, encryption: encryption)
+            if let bound = model.repository.syncSession?.channelID, bound != channel { throw CloudSyncError.bindingMismatch }
+            try model.repository.prepareSync(channelID: channel, preserveLegacy: true, actorID: UUID(),
+                                             transactionID: model.repository.syncSession?.connectionTransaction)
+            model.refreshAfterCloudSync()
+            connection = saved; configuration = saved.configuration; phase = .waiting
+            installTimer(); syncNow()
+        } catch {
+            phase = .failed
+            errorMessage = model?.localization.error(error) ?? error.localizedDescription
+        }
     }
 
-    func configure(configuration: BitifulConfiguration, credentials: BitifulCredentials, recoveryKey: String) throws {
+    func configure(configuration: BitifulConfiguration, credentials: BitifulCredentials, recoveryKey: String,
+                   createIfMissing: Bool = false) throws {
         let encryption = try SyncEncryption(recoveryKey: recoveryKey)
         _ = try makeTransport(configuration, credentials)
-        let old = connection
-        let oldVaultID = try old.map { try SyncEncryption(recoveryKey: $0.recoveryKey).vaultID }
-        let changedVault = old?.configuration != configuration ||
-            oldVaultID != encryption.vaultID
         guard let model, model.flush() else { throw PindoError.recoveryRequired }
-        let saved = SavedSyncConnection(configuration: configuration, credentials: credentials, recoveryKey: recoveryKey)
-        // A failed keychain write leaves the old connection intact and starts no request.
-        try storage.save(DocumentCodec.encode(saved))
-        do { try model.repository.enableSync(reset: changedVault) }
-        catch {
-            try? storage.save(old.map { try DocumentCodec.encode($0) })
-            throw error
-        }
+        guard !model.isSyncEditing else { throw CloudSyncError.editing }
+        let oldRuntime = connection
+        let journal = try? loadJournal()
+        let durableOld: SavedSyncConnection?
+        if let pending = journal?.pending, journal?.transactionID == model.repository.syncSession?.connectionTransaction {
+            durableOld = pending
+        } else { durableOld = journal?.active }
+        let old = oldRuntime ?? durableOld
+        let saved = SavedSyncConnection(configuration: configuration, credentials: credentials, recoveryKey: recoveryKey,
+                                        createIfMissing: createIfMissing)
+        let transaction = UUID().uuidString.lowercased()
+        let channel = ImmutableCloudSync.channelID(configuration: configuration, encryption: encryption)
+        // Secrets prepare the transaction; the document's matching marker is its
+        // commit point. A restart can distinguish rollback from completion.
+        try storage.save(DocumentCodec.encode(SavedSyncJournal(active: old, pending: saved, transactionID: transaction)))
         cancelConnection()
-        connection = saved; self.configuration = configuration; errorMessage = nil; lastSyncDate = nil
-        model.refreshAfterCloudSync(); installTimer(); syncNow()
+        let token = generation
+        validatingConnection = true; isSyncing = true; phase = .validating; errorMessage = nil
+        operation = Task { [weak self] in
+            guard let self else { return }
+            var attemptedPreparation = false
+            do {
+                let transport = try makeTransport(configuration, credentials)
+                try await ImmutableCloudSync.verifyTarget(encryption: encryption, transport: transport,
+                    allowCreate: createIfMissing || (model.repository.syncSession?.channelID == channel &&
+                        model.repository.syncSession?.acknowledgedPayloadDigest != nil),
+                    check: { try self.checkEpoch(token) })
+                try checkEpoch(token)
+                while model.isSyncEditing {
+                    phase = .editing
+                    try await Task.sleep(nanoseconds: 200_000_000)
+                    try checkEpoch(token)
+                }
+                guard model.flush() else { throw PindoError.recoveryRequired }
+                attemptedPreparation = true
+                try commitConfiguration(saved: saved, old: old, oldRuntime: oldRuntime, channel: channel, transaction: transaction)
+                try checkCurrent(token)
+                validatingConnection = false; isSyncing = false; operation = nil
+                phase = .waiting; installTimer(); syncNow()
+            } catch {
+                guard generation == token else { return }
+                if !attemptedPreparation {
+                    do { try saveJournal(active: old); connection = oldRuntime; self.configuration = oldRuntime?.configuration }
+                    catch { pauseConfigurationRecovery() }
+                }
+                validatingConnection = false; isSyncing = false; operation = nil
+                if phase != .recovering {
+                    phase = error as? CloudSyncError == .editing ? .editing : .failed
+                    errorMessage = model.localization.error(error)
+                    if connection != nil { installTimer() }
+                }
+            }
+        }
+    }
+
+    private func commitConfiguration(saved: SavedSyncConnection, old: SavedSyncConnection?, oldRuntime: SavedSyncConnection?, channel: String,
+                                     transaction: String) throws {
+        guard let model else { throw CloudSyncError.configurationRecovery }
+        let encryption = try SyncEncryption(recoveryKey: saved.recoveryKey)
+        do {
+            try model.repository.prepareSync(channelID: channel, preserveLegacy: old.map {
+                $0.configuration.bucket.lowercased() == saved.configuration.bucket.lowercased() &&
+                    (try? SyncEncryption(recoveryKey: $0.recoveryKey).vaultID) == encryption.vaultID
+            } ?? (saved.createIfMissing != true), actorID: UUID(), transactionID: transaction)
+        }
+        catch let preparationFailure {
+            // A StorageIO implementation can report an error after committing.
+            // Resolve against the persisted marker, never the stale in-memory copy.
+            do { try model.repository.reloadCurrentDocument() }
+            catch { pauseConfigurationRecovery(); throw CloudSyncError.configurationRecovery }
+            if model.repository.syncSession?.channelID != channel || model.repository.syncSession?.connectionTransaction != transaction {
+                do { try saveJournal(active: old) }
+                catch { pauseConfigurationRecovery(); throw CloudSyncError.configurationRecovery }
+                connection = oldRuntime; configuration = oldRuntime?.configuration
+                model.refreshAfterCloudSync()
+                throw preparationFailure
+            }
+        }
+        do { try saveJournal(active: saved) }
+        catch {
+            pauseConfigurationRecovery()
+            configuration = saved.configuration
+            model.refreshAfterCloudSync()
+            throw CloudSyncError.configurationRecovery
+        }
+        connection = saved; configuration = saved.configuration; errorMessage = nil; lastSyncDate = nil
+        model.refreshAfterCloudSync()
+    }
+
+    private func pauseConfigurationRecovery() {
+        connection = nil; configuration = nil; phase = .recovering
+        errorMessage = model?.localization.error(CloudSyncError.configurationRecovery)
     }
 
     func disconnect() throws {
         try storage.save(nil)
-        cancelConnection(); connection = nil; configuration = nil; lastSyncDate = nil; errorMessage = nil
+        cancelConnection(); connection = nil; configuration = nil; lastSyncDate = nil; errorMessage = nil; phase = .disconnected
+    }
+
+    private func loadJournal() throws -> SavedSyncJournal? {
+        guard let data = try storage.load() else { return nil }
+        if let journal = try? DocumentCodec.decode(SavedSyncJournal.self, from: data) {
+            guard journal.version == 2 else { throw PindoError.unsupportedVersion }
+            guard (journal.pending == nil) == (journal.transactionID == nil),
+                  journal.transactionID.map({ !$0.isEmpty && $0.utf8.count <= 1024 }) ?? true else {
+                throw CloudSyncError.configurationRecovery
+            }
+            return journal
+        }
+        return SavedSyncJournal(active: try DocumentCodec.decode(SavedSyncConnection.self, from: data))
+    }
+
+    private func saveJournal(active: SavedSyncConnection?) throws {
+        try storage.save(try active.map { try DocumentCodec.encode(SavedSyncJournal(active: $0)) })
     }
 
     private func cancelConnection() {
         generation = UUID(); operation?.cancel(); operation = nil; debounce?.cancel(); debounce = nil
-        timer?.invalidate(); timer = nil; knownETags = [:]; lastUploaded = nil
-        isSyncing = false; failureCount = 0; nextAttempt = .distantPast; lastAttempt = .distantPast
+        timer?.invalidate(); timer = nil
+        isSyncing = false; failureCount = 0; nextAttemptUptime = 0; lastAttemptUptime = -.infinity
         pendingChanges = false
+        validatingConnection = false
     }
 
     func documentDidChange() {
         guard isConfigured else { return }
+        if !isSyncing { phase = model?.isSyncEditing == true ? .editing : .waiting }
         debounce?.cancel()
         debounce = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
@@ -153,6 +292,18 @@ extension BitifulTransport: CloudSyncTransport {}
 
     func syncNow() { requestSync(manual: true) }
 
+    func editingDidEnd() {
+        guard isConfigured, model?.isSyncEditing == false else { return }
+        if phase == .editing { nextAttemptUptime = 0 }
+        requestSync(manual: false)
+    }
+
+    func editingDidBegin() {
+        guard isConfigured else { return }
+        pendingChanges = true; phase = .editing
+        if !validatingConnection { operation?.cancel() }
+    }
+
     private func installTimer() {
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
@@ -161,7 +312,7 @@ extension BitifulTransport: CloudSyncTransport {}
                 // Idle menu-bar apps stay running all day. Reduce empty polls to
                 // once a minute; active windows retain a 30-second cadence.
                 let visible = NSApp?.windows.contains(where: { $0.isVisible }) ?? false
-                if !visible && Date().timeIntervalSince(self.lastAttempt) < 60 { return }
+                if !visible && self.uptime() - self.lastAttemptUptime < 60 { return }
                 self.requestSync(manual: false)
             }
         }
@@ -171,65 +322,56 @@ extension BitifulTransport: CloudSyncTransport {}
     private func requestSync(manual: Bool) {
         guard let saved = connection else { return }
         if isSyncing { pendingChanges = true; return }
-        guard manual || Date() >= nextAttempt else { return }
-        guard let model, model.noteID == nil, model.editingID == nil, model.draggedTaskID == nil else {
+        guard manual || uptime() >= nextAttemptUptime else { return }
+        guard let model, !model.isSyncEditing else {
+            phase = .editing; pendingChanges = true
             if manual { errorMessage = model?.localization.error(CloudSyncError.editing) }
             return
         }
         let token = generation
-        isSyncing = true; lastAttempt = Date()
+        pendingChanges = false
+        isSyncing = true; lastAttemptUptime = uptime()
         operation = Task { [weak self] in
             guard let self else { return }
             do {
                 guard model.flush() else { throw PindoError.recoveryRequired }
                 let encryption = try SyncEncryption(recoveryKey: saved.recoveryKey)
                 let transport = try makeTransport(saved.configuration, saved.credentials)
-                let heads = try await transport.listHeads(vaultID: encryption.vaultID)
+                let complete = try await ImmutableCloudSync.run(repository: model.repository, encryption: encryption,
+                    transport: transport, allowCreate: saved.createIfMissing == true,
+                    check: { try self.checkCurrent(token) }, applied: { model.refreshAfterCloudSync() },
+                    progress: { self.phase = $0 })
                 try checkCurrent(token)
-                // Validate all downloaded payloads before applying any remote state.
-                var incoming: [(SyncRemoteHead, SyncPayload)] = []
-                for head in heads where knownETags[head.key] != head.etag {
-                    let bytes = try await transport.download(key: head.key)
-                    try checkCurrent(token)
-                    let payload = try DocumentCodec.decode(SyncPayload.self, from: encryption.open(bytes)).validated()
-                    incoming.append((head, payload))
-                }
-                try checkCurrent(token)
-                var merged = model.repository.syncPayload ?? SyncPayload()
-                for (_, payload) in incoming { merged = try merged.merging(payload) }
-                if !incoming.isEmpty { try model.repository.applySync(merged) }
-                for (head, _) in incoming {
-                    knownETags[head.key] = head.etag
-                }
                 model.refreshAfterCloudSync()
-                guard let payload = model.repository.syncPayload, let replica = model.repository.syncState else { throw PindoError.invalidData("同步状态不存在") }
-                let bytes = try DocumentCodec.encode(payload)
-                if bytes != lastUploaded {
-                    let key = SyncEncryption.headKey(vaultID: encryption.vaultID, deviceID: replica.deviceID)
-                    try await transport.upload(data: encryption.seal(bytes), key: key)
-                    try checkCurrent(token)
-                    lastUploaded = bytes
-                    knownETags.removeValue(forKey: key)
-                }
-                lastSyncDate = Date(); errorMessage = nil; failureCount = 0; nextAttempt = .distantPast
+                if complete { lastSyncDate = now(); phase = .synced }
+                else { phase = .waiting; pendingChanges = true }
+                errorMessage = nil; failureCount = 0; nextAttemptUptime = 0
             } catch {
                 if generation == token && !Task.isCancelled {
                     model.refreshAfterCloudSync()
-                    errorMessage = model.localization.error(error)
-                    failureCount = min(failureCount + 1, 5)
-                    nextAttempt = Date().addingTimeInterval(min(900, 30 * pow(2, Double(failureCount))))
+                    if error as? CloudSyncError == .editing {
+                        phase = .editing; pendingChanges = true
+                    } else {
+                        phase = .failed; errorMessage = model.localization.error(error)
+                        failureCount = min(failureCount + 1, 5)
+                        nextAttemptUptime = uptime() + min(900, 30 * pow(2, Double(failureCount))) * jitter()
+                    }
                 }
             }
             if generation == token {
                 isSyncing = false; operation = nil
-                if pendingChanges { pendingChanges = false; documentDidChange() }
+                if pendingChanges && !model.isSyncEditing { pendingChanges = false; documentDidChange() }
             }
         }
     }
 
     private func checkCurrent(_ token: UUID) throws {
+        try checkEpoch(token)
+        guard let model, !model.isSyncEditing else { throw CloudSyncError.editing }
+    }
+
+    private func checkEpoch(_ token: UUID) throws {
         try Task.checkCancellation()
         guard generation == token else { throw CancellationError() }
-        guard let model, model.noteID == nil, model.editingID == nil, model.draggedTaskID == nil else { throw CloudSyncError.editing }
     }
 }

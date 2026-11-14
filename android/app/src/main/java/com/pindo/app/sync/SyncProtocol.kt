@@ -4,6 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDate
 import java.text.Normalizer
+import java.math.BigDecimal
 import java.util.UUID
 
 /**
@@ -13,20 +14,37 @@ import java.util.UUID
  * Date numbers use Swift's reference epoch: seconds since 2001-01-01T00:00:00Z.
  */
 class SyncReplica private constructor(
-    val deviceID: String,
+    deviceID: String,
     var clock: Long,
     private var state: JSONObject,
     private var baselineTasks: JSONArray,
     private var baselineGroups: JSONArray
 ) {
+    var deviceID: String = deviceID
+        private set
     val payload: JSONObject get() = copy(state)
     fun payload(): JSONObject = payload
 
+    /** A new process/connection actor never rewrites historical operation identities. */
+    fun rotateActor(deviceID: String = UUID.randomUUID().toString()) {
+        val actor = uuid(deviceID)
+        require(actor == this.deviceID || !state.getJSONObject("seen").has(actor)) { "同步设备标识已被使用。" }
+        this.deviceID = actor
+    }
+
+    /** Upgrade without rewriting old operation identities or legacy field values. */
+    fun upgraded(): SyncReplica {
+        val upgraded = upgradedPayload(state)
+        return SyncReplica(deviceID, clock, upgraded,
+            array(indexed(baselineTasks, true, 2).values), copy(baselineGroups))
+    }
+
     fun capture(tasks: JSONArray, groups: JSONArray) {
-        val currentTasks = indexed(tasks, true)
+        val version = state.getInt("version")
+        val currentTasks = indexed(tasks, true, version)
         val currentGroups = indexed(groups, false)
         validateDocument(currentTasks, currentGroups)
-        val oldTasks = indexed(baselineTasks, true)
+        val oldTasks = indexed(baselineTasks, true, version)
         val oldGroups = indexed(baselineGroups, false)
         // JSONObject equality is identity equality; compare normalized JSON values instead.
         if (mapsEqual(currentTasks, oldTasks) && mapsEqual(currentGroups, oldGroups)) return
@@ -47,12 +65,17 @@ class SyncReplica private constructor(
                     fields.put(ALIVE, register(false, stamp))
                 } else {
                     if (oldValue == null) fields.put(ALIVE, register(true, stamp))
-                    val names = if (task) TASK_FIELDS else GROUP_FIELDS
+                    val names = if (task) taskFields(version) else GROUP_FIELDS
+                    val lifecycleChanged = task && version == 2 && (oldValue == null || LIFECYCLE_FIELDS.any {
+                        !jsonEqual(currentValue.opt(it), oldValue.opt(it))
+                    })
                     for (name in names) {
+                        if (name == LIFECYCLE) continue
                         val value = currentValue.opt(name) ?: JSONObject.NULL
                         val old = oldValue?.opt(name) ?: JSONObject.NULL
-                        if (oldValue == null || !jsonEqual(value, old)) fields.put(name, register(value, stamp))
+                        if (oldValue == null || !jsonEqual(value, old) || (lifecycleChanged && name in LIFECYCLE_FIELDS)) fields.put(name, register(value, stamp))
                     }
+                    if (lifecycleChanged) fields.put(LIFECYCLE, register(lifecycleValue(currentValue), stamp))
                     if (task && (oldValue == null || currentValue.getString("note") != oldValue.getString("note"))) {
                         val notes = record.getJSONArray("notes")
                         notes.put(JSONObject().put("value", currentValue.getString("note")).put("stamp", stamp.json()).put("seen", copy(beforeSeen)))
@@ -72,8 +95,10 @@ class SyncReplica private constructor(
 
     /** The caller must capture committed local edits first, then persist projection+replica atomically. */
     fun merge(payload: JSONObject) {
-        val remote = validatedPayload(payload)
-        val combined = copy(state)
+        var remote = validatedPayload(payload)
+        val version = maxOf(state.getInt("version"), remote.getInt("version"))
+        val combined = if (version == 2) upgradedPayload(state) else copy(state)
+        if (version == 2) remote = upgradedPayload(remote)
         val seen = combined.getJSONObject("seen")
         remote.getJSONObject("seen").keys().forEach { id -> seen.put(id, maxOf(seen.optLong(id, 0), remote.getJSONObject("seen").getLong(id))) }
         val records = combined.getJSONObject("records")
@@ -82,9 +107,18 @@ class SyncReplica private constructor(
             val existing = records.optJSONObject(key)
             if (existing == null) records.put(key, copy(incoming)) else {
                 val fields = existing.getJSONObject("fields")
-                incoming.getJSONObject("fields").keys().forEach { name ->
+                incoming.getJSONObject("fields").keys().forEach fieldLoop@ { name ->
                     val value = incoming.getJSONObject("fields").getJSONObject(name)
                     val old = fields.optJSONObject(name)
+                    if (name == LIFECYCLE && old != null) {
+                        val oldBottom = old.isNull("value")
+                        val incomingBottom = value.isNull("value")
+                        if (!oldBottom && incomingBottom) return@fieldLoop
+                        if (oldBottom && !incomingBottom) {
+                            fields.put(name, copy(value))
+                            return@fieldLoop
+                        }
+                    }
                     if (old == null || Stamp.parse(value.getJSONObject("stamp")) > Stamp.parse(old.getJSONObject("stamp"))) fields.put(name, copy(value))
                     else if (Stamp.parse(value.getJSONObject("stamp")) == Stamp.parse(old.getJSONObject("stamp"))) {
                         require(jsonEqual(value.get("value"), old.get("value"))) { "同步字段版本冲突。" }
@@ -111,16 +145,20 @@ class SyncReplica private constructor(
 
     companion object {
         private const val ALIVE = "\$alive"
+        private const val LIFECYCLE = "lifecycle"
         private const val MAX_COUNTER = 9_007_199_254_740_991L
         private const val NOTE_SEPARATOR = "\n\n[Sync conflict]\n\n"
         private val TASK_FIELDS = listOf("title", "plannedDay", "groupID", "parentID", "phase", "order", "createdAt", "updatedAt", "startedAt", "completedAt")
+        private val LIFECYCLE_FIELDS = listOf("phase", "startedAt", "completedAt", "isProgressExplicit")
+        private fun taskFields(version: Int): List<String> = if (version == 2) TASK_FIELDS + LIFECYCLE else TASK_FIELDS
         private val GROUP_FIELDS = listOf("name", "colorHex")
         private val OPTIONAL_FIELDS = setOf("groupID", "parentID", "startedAt", "completedAt")
         private val UUID_PATTERN = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
-        fun fresh(deviceID: String = UUID.randomUUID().toString()): SyncReplica {
+        fun fresh(deviceID: String = UUID.randomUUID().toString(), version: Int = 1): SyncReplica {
+            require(version == 1 || version == 2) { "不支持此同步资料版本。" }
             val id = uuid(deviceID)
-            return SyncReplica(id, 0, JSONObject().put("version", 1).put("seen", JSONObject()).put("records", JSONObject()), JSONArray(), JSONArray())
+            return SyncReplica(id, 0, JSONObject().put("version", version).put("seen", JSONObject()).put("records", JSONObject()), JSONArray(), JSONArray())
         }
 
         fun fromJson(value: JSONObject): SyncReplica {
@@ -130,26 +168,44 @@ class SyncReplica private constructor(
             val payload = validatedPayload(value.getJSONObject("payload"))
             val clock = long(value.get("clock"))
             require(clock == maxSeen(payload.getJSONObject("seen")) && clock in 0..MAX_COUNTER) { "本机同步计数器无效。" }
-            val tasks = array(indexed(value.getJSONArray("baselineTasks"), true).values)
+            val tasks = array(indexed(value.getJSONArray("baselineTasks"), true, payload.getInt("version")).values)
             val groups = array(indexed(value.getJSONArray("baselineGroups"), false).values)
             validateDocument(indexed(tasks, true), indexed(groups, false))
             return SyncReplica(id, clock, payload, tasks, groups)
         }
 
+        fun upgradedPayload(value: JSONObject): JSONObject {
+            val payload = validatedPayload(value)
+            if (payload.getInt("version") == 2) return payload
+            payload.put("version", 2)
+            val records = payload.getJSONObject("records")
+            records.keys().forEach { key ->
+                if (key.startsWith("task:")) {
+                    val fields = records.getJSONObject(key).getJSONObject("fields")
+                    fields.put(LIFECYCLE, register(JSONObject.NULL, Stamp.parse(fields.getJSONObject("phase").getJSONObject("stamp"))))
+                }
+            }
+            return validatedPayload(payload)
+        }
+
         fun validatedPayload(value: JSONObject): JSONObject {
-            require(long(value.get("version")) == 1L) { "不支持此同步资料版本。" }
+            val rawVersion = long(value.get("version"))
+            require(rawVersion == 1L || rawVersion == 2L) { "不支持此同步资料版本。" }
+            val version = rawVersion.toInt()
             val payload = copy(value)
             val seen = payload.getJSONObject("seen")
             validateSeen(seen)
             val records = payload.getJSONObject("records")
             require(records.length() <= 200_000) { "同步资料过大。" }
+            var liveTasks = 0
+            var liveGroups = 0
             records.keys().forEach { key ->
                 val parts = key.split(':')
                 require(parts.size == 2 && parts[0] in setOf("task", "group") && uuid(parts[1]) == parts[1]) { "同步资料标识无效。" }
                 val task = parts[0] == "task"
                 val record = records.getJSONObject(key)
                 val fields = record.getJSONObject("fields")
-                val allowed = (if (task) TASK_FIELDS else GROUP_FIELDS).toSet() + ALIVE
+                val allowed = (if (task) taskFields(version) else GROUP_FIELDS).toSet() + ALIVE
                 require(fields.keys().asSequence().toSet() == allowed) { "同步资料缺少字段。" }
                 fields.keys().forEach { name ->
                     require(name in allowed) { "同步资料字段无效。" }
@@ -158,7 +214,15 @@ class SyncReplica private constructor(
                     require(seen.optLong(stamp.deviceID, 0) >= stamp.counter) { "同步资料版本无效。" }
                     val fieldValue = register.get("value")
                     if (name == ALIVE) require(fieldValue is Boolean)
+                    if (name == LIFECYCLE && fieldValue != JSONObject.NULL) {
+                        require(fieldValue is JSONObject) { "同步事项状态字段无效。" }
+                        validateLifecycle(fieldValue)
+                    }
                     if (name in setOf("parentID", "groupID") && fieldValue != JSONObject.NULL) require(uuid(fieldValue as String) == fieldValue)
+                }
+                if (fields.getJSONObject(ALIVE).getBoolean("value")) {
+                    if (task) liveTasks++ else liveGroups++
+                    require(liveTasks <= 10_000 && liveGroups <= 1_000) { "同步资料过大。" }
                 }
                 val notes = record.getJSONArray("notes")
                 require(notes.length() <= 10_000 && (if (task) notes.length() > 0 else notes.length() == 0))
@@ -180,11 +244,25 @@ class SyncReplica private constructor(
                 }
                 if (task) raw.put("note", projectedNote(record.getJSONArray("notes")))
                 normalized(raw, task)
+                if (task && version == 2) {
+                    val lifecycle = fields.getJSONObject(LIFECYCLE)
+                    if (!lifecycle.isNull("value")) {
+                        val stamp = Stamp.parse(lifecycle.getJSONObject("stamp"))
+                        val status = lifecycle.getJSONObject("value")
+                        for (name in listOf("phase", "startedAt", "completedAt")) {
+                            val legacy = fields.getJSONObject(name)
+                            if (Stamp.parse(legacy.getJSONObject("stamp")) == stamp) {
+                                require(jsonEqual(legacy.get("value"), status.get(name))) { "同步事项状态版本冲突。" }
+                            }
+                        }
+                    }
+                }
             }
             return payload
         }
 
         private fun project(payload: JSONObject): Pair<JSONArray, JSONArray> {
+            val version = payload.getInt("version")
             val tasks = mutableMapOf<String, JSONObject>()
             val groups = mutableMapOf<String, JSONObject>()
             val records = payload.getJSONObject("records")
@@ -196,8 +274,15 @@ class SyncReplica private constructor(
                 val task = key.startsWith("task:")
                 val value = JSONObject().put("id", id)
                 for (name in if (task) TASK_FIELDS else GROUP_FIELDS) value.put(name, fields.getJSONObject(name).get("value"))
+                if (task && version == 2) {
+                    val lifecycle = fields.getJSONObject(LIFECYCLE)
+                    if (!lifecycle.isNull("value") && Stamp.parse(fields.getJSONObject("phase").getJSONObject("stamp")) <= Stamp.parse(lifecycle.getJSONObject("stamp"))) {
+                        val state = lifecycle.getJSONObject("value")
+                        for (name in LIFECYCLE_FIELDS) value.put(name, state.get(name))
+                    }
+                }
                 if (task) value.put("note", projectedNote(record.getJSONArray("notes")))
-                (if (task) tasks else groups)[id] = normalized(value, task)
+                (if (task) tasks else groups)[id] = normalized(value, task, version)
             }
             val nameCounts = groups.values.groupingBy { nfc(it.getString("name")) }.eachCount()
             val emitted = mutableSetOf<String>()
@@ -233,11 +318,20 @@ class SyncReplica private constructor(
             val children = tasks.values.filter { optionalUUID(it, "parentID") != null }.groupBy { optionalUUID(it, "parentID")!! }
             for (id in tasks.keys.sortedWith(compareByDescending<String> { depth(it) }.thenBy { it })) {
                 val task = tasks.getValue(id)
-                val childTasks = children[id] ?: continue
+                val childTasks = children[id]
+                if (childTasks == null) {
+                    if (version == 2 && task.getString("phase") == "inProgress" && !task.getBoolean("isProgressExplicit")) {
+                        task.put("phase", "pending")
+                        normalizeLifecycle(task)
+                    }
+                    continue
+                }
                 val previous = task.getString("phase")
                 val phase = when {
                     childTasks.all { it.getString("phase") == "completed" } -> "completed"
+                    version == 2 && previous == "inProgress" && task.getBoolean("isProgressExplicit") -> "inProgress"
                     childTasks.any { it.getString("phase") == "inProgress" } -> "inProgress"
+                    version == 2 -> "pending"
                     previous == "completed" -> "pending"
                     else -> previous
                 }
@@ -246,16 +340,20 @@ class SyncReplica private constructor(
                     task.put("phase", phase).put("updatedAt", date).put("completedAt", if (phase == "completed") date else JSONObject.NULL)
                     if (phase == "inProgress" && task.isNull("startedAt")) task.put("startedAt", date)
                 }
+                if (version == 2) {
+                    task.put("isProgressExplicit", phase == "inProgress" && previous == "inProgress" && task.getBoolean("isProgressExplicit"))
+                    normalizeLifecycle(task)
+                }
             }
             val sortedTasks = tasks.values.sortedWith(compareBy<JSONObject> { it.getLong("order") }.thenBy { it.getDouble("createdAt") }.thenBy { it.getString("id") })
             return array(sortedTasks) to array(groups.toSortedMap().values)
         }
 
-        private fun indexed(values: JSONArray, task: Boolean): Map<String, JSONObject> {
+        private fun indexed(values: JSONArray, task: Boolean, version: Int = 1): Map<String, JSONObject> {
             val result = linkedMapOf<String, JSONObject>()
-            require(values.length() <= 100_000)
+            require(values.length() <= if (task) 10_000 else 1_000) { "同步资料过大。" }
             for (index in 0 until values.length()) {
-                val value = normalized(values.getJSONObject(index), task)
+                val value = normalized(values.getJSONObject(index), task, version)
                 require(result.put(value.getString("id"), value) == null) { "资料中存在重复标识。" }
             }
             return result
@@ -278,7 +376,7 @@ class SyncReplica private constructor(
             }
         }
 
-        private fun normalized(value: JSONObject, task: Boolean): JSONObject {
+        private fun normalized(value: JSONObject, task: Boolean, version: Int = 1): JSONObject {
             val result = JSONObject().put("id", uuid(value.getString("id")))
             if (!task) {
                 require(value.get("name") is String && value.get("colorHex") is String)
@@ -291,10 +389,10 @@ class SyncReplica private constructor(
             require(value.getString("phase") in setOf("pending", "inProgress", "completed"))
             val day = value.getJSONObject("plannedDay")
             for (component in listOf("year", "month", "day")) require(long(day.get(component)) in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong())
-            require(long(day.get("year")) >= 1)
+            require(long(day.get("year")) in 1..9999)
             LocalDate.of(long(day.get("year")).toInt(), long(day.get("month")).toInt(), long(day.get("day")).toInt())
             require(value.get("createdAt") is Number && value.get("updatedAt") is Number && value.getDouble("createdAt").isFinite() && value.getDouble("updatedAt").isFinite())
-            long(value.get("order"))
+            require(long(value.get("order")) in -MAX_COUNTER..MAX_COUNTER) { "同步事项顺序无效。" }
             for (name in TASK_FIELDS) {
                 val field = value.opt(name) ?: JSONObject.NULL
                 require(field != JSONObject.NULL || name in OPTIONAL_FIELDS)
@@ -309,7 +407,46 @@ class SyncReplica private constructor(
                 }
             }
             result.put("note", value.getString("note"))
+            if (version == 2) {
+                val explicit = value.opt("isProgressExplicit")
+                require(explicit == null || explicit == JSONObject.NULL || explicit is Boolean)
+                result.put("isProgressExplicit", if (explicit is Boolean) explicit else value.getString("phase") == "inProgress")
+                normalizeLifecycle(result)
+            }
             return result
+        }
+
+        private fun lifecycleValue(task: JSONObject): JSONObject = JSONObject().also { state ->
+            LIFECYCLE_FIELDS.forEach { name -> state.put(name, task.get(name)) }
+        }
+
+        private fun normalizeLifecycle(task: JSONObject) {
+            when (task.getString("phase")) {
+                "pending" -> task.put("startedAt", JSONObject.NULL).put("completedAt", JSONObject.NULL).put("isProgressExplicit", false)
+                "inProgress" -> {
+                    if (task.isNull("startedAt")) task.put("startedAt", task.get("updatedAt"))
+                    task.put("completedAt", JSONObject.NULL)
+                }
+                "completed" -> {
+                    if (task.isNull("completedAt")) task.put("completedAt", task.get("updatedAt"))
+                    task.put("isProgressExplicit", false)
+                }
+            }
+        }
+
+        private fun validateLifecycle(value: JSONObject) {
+            require(value.keys().asSequence().toSet() == LIFECYCLE_FIELDS.toSet()) { "同步事项状态字段无效。" }
+            require(value.get("phase") is String && value.getString("phase") in setOf("pending", "inProgress", "completed"))
+            require(value.get("isProgressExplicit") is Boolean)
+            for (name in listOf("startedAt", "completedAt")) {
+                val date = value.get(name)
+                require(date == JSONObject.NULL || (date is Number && date.toDouble().isFinite()))
+            }
+            when (value.getString("phase")) {
+                "pending" -> require(value.isNull("startedAt") && value.isNull("completedAt") && !value.getBoolean("isProgressExplicit"))
+                "inProgress" -> require(!value.isNull("startedAt") && value.isNull("completedAt"))
+                "completed" -> require(!value.isNull("completedAt") && !value.getBoolean("isProgressExplicit"))
+            }
         }
 
         private fun mergedNotes(notes: JSONArray): JSONArray {
@@ -339,8 +476,9 @@ class SyncReplica private constructor(
         private fun uuid(value: String): String = value.lowercase().also { require(it.matches(UUID_PATTERN)) { "同步标识无效。" } }
         private fun optionalUUID(value: JSONObject, key: String): String? = if (!value.has(key) || value.isNull(key)) null else uuid(value.getString(key))
         private fun long(value: Any): Long {
-            require(value is Number && value.toDouble().isFinite() && value.toDouble() == value.toLong().toDouble()) { "同步计数值无效。" }
-            return value.toLong()
+            require(value is Number && value.toDouble().isFinite()) { "同步计数值无效。" }
+            return try { BigDecimal(value.toString()).longValueExact() }
+            catch (error: ArithmeticException) { throw IllegalArgumentException("同步计数值无效。", error) }
         }
         private fun mapsEqual(a: Map<String, JSONObject>, b: Map<String, JSONObject>): Boolean = a.keys == b.keys && a.all { (key, value) -> jsonEqual(value, b[key]) }
         private fun copy(value: JSONObject) = JSONObject(value.toString())

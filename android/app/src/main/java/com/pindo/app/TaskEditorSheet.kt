@@ -16,6 +16,7 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -36,34 +37,55 @@ import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable internal fun TaskEditorSheet(store: AppStore, state: AppState, taskID: String?, parentID: String?, initialDay: LocalDate, onDismiss: () -> Unit) {
-    val task = state.tasks.find { it.id == taskID }
+    val currentTask = state.tasks.find { it.id == taskID }
+    val baselineText by rememberSaveable(taskID, parentID) { mutableStateOf(currentTask?.let { TaskEditBaseline.capture(it).encoded() }) }
+    val baseline = remember(baselineText) { baselineText?.let(TaskEditBaseline::decode) }
+    val task = currentTask
     val initialParent = state.tasks.find { it.id == parentID }
-    val originalTitle = task?.title ?: ""
+    val originalTitle = baseline?.title ?: ""
     val originalNote = task?.note ?: ""
-    val originalDay = task?.day ?: initialParent?.day ?: initialDay
-    val originalGroup = when { task != null -> task.groupID; initialParent != null -> initialParent.groupID; else -> state.preferences.defaultGroupID }
-    val originalParent = task?.parentID ?: parentID
+    val originalDay = baseline?.day ?: initialParent?.day ?: initialDay
+    val originalGroup = when { baseline != null -> baseline.groupID; initialParent != null -> initialParent.groupID; else -> state.preferences.defaultGroupID }
+    val originalParent = if (baseline != null) baseline.parentID else parentID
+    var draftWarning by remember { mutableStateOf<String?>(null) }
+    val noteDraft = remember(taskID, parentID) { store.noteDraftHandle() }
+    val noteSaver = remember(noteDraft, originalNote) {
+        Saver<TextFieldValue, String>(
+            save = { value -> noteDraft.save(NoteDraft(value.text, value.selection.start, value.selection.end)).also { draftWarning = noteDraft.error } },
+            restore = { token ->
+                val restored = noteDraft.restore(token)
+                draftWarning = noteDraft.error
+                restored?.let { TextFieldValue(it.text, TextRange(it.selectionStart, it.selectionEnd)) } ?: TextFieldValue(originalNote)
+            }
+        )
+    }
     var title by rememberSaveable(taskID, parentID) { mutableStateOf(originalTitle) }
-    var note by rememberSaveable(taskID, parentID, stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue(originalNote)) }
+    var note by rememberSaveable(taskID, parentID, stateSaver = noteSaver) { mutableStateOf(TextFieldValue(originalNote)) }
     var day by rememberSaveable(taskID, parentID) { mutableStateOf(originalDay.toString()) }
     var group by rememberSaveable(taskID, parentID) { mutableStateOf(originalGroup) }
     var parent by rememberSaveable(taskID, parentID) { mutableStateOf(originalParent) }
-    var phase by rememberSaveable(taskID, parentID) { mutableStateOf(task?.phase ?: "pending") }
+    var phase by rememberSaveable(taskID, parentID) { mutableStateOf(baseline?.phase ?: "pending") }
     var preview by rememberSaveable { mutableStateOf(false) }
     var datePicker by remember { mutableStateOf(false) }
     var parentPicker by remember { mutableStateOf(false) }
     var discard by remember { mutableStateOf(false) }
     var validation by remember { mutableStateOf<String?>(null) }
-    val dirty = title != originalTitle || note.text != originalNote || day != originalDay.toString() || group != originalGroup || parent != originalParent || phase != (task?.phase ?: "pending")
-    val requestClose = { if (dirty) discard = true else onDismiss() }
-    DisposableEffect(Unit) { store.setEditing(true); onDispose { store.setEditing(false) } }
+    val noteChanged = remember(note.text, baseline?.noteDigest) { baseline?.let { taskNoteDigest(note.text) != it.noteDigest } ?: (note.text != originalNote) }
+    val dirty = title != originalTitle || noteChanged || day != originalDay.toString() || group != originalGroup || parent != originalParent || phase != (baseline?.phase ?: "pending")
+    fun closeDraft() {
+        if (noteDraft.clear()) { draftWarning = null; onDismiss() }
+        else draftWarning = noteDraft.error
+    }
+    val requestClose = { if (dirty) discard = true else closeDraft() }
+    DisposableEffect(Unit) { val lease = store.beginEditing(); onDispose { store.endEditing(lease) } }
     fun save() {
         if (title.isBlank()) { validation = "先写下这件事的标题。"; return }
         val parsed = runCatching { LocalDate.parse(day) }.getOrNull()
         if (parsed == null) { validation = "请选择有效日期。"; return }
         val saved = if (taskID == null) store.addTask(title, note.text, parsed, group, parent)
-            else store.editTask(taskID, title, note.text, parsed, group, parent, phase)
-        if (saved) onDismiss()
+            else store.editTask(taskID, title, note.text, parsed, group, parent, phase,
+                baseline = baseline?.task(taskID), baselineNoteDigest = baseline?.noteDigest)
+        if (saved) closeDraft()
     }
     Dialog(onDismissRequest = requestClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         BackHandler(onBack = requestClose)
@@ -140,7 +162,7 @@ import java.time.format.DateTimeFormatter
                         }
                         Text("${note.text.length} 字符 · Markdown 原文保存在本地并加密同步", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    (validation ?: state.error)?.let { text ->
+                    listOfNotNull(draftWarning, validation ?: state.error).distinct().forEach { text ->
                         Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(14.dp)) { Text(text, Modifier.padding(13.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer) }
                     }
                     task?.json?.optDouble("updatedAt")?.takeIf { it.isFinite() }?.let { seconds ->
@@ -159,7 +181,7 @@ import java.time.format.DateTimeFormatter
         }
         if (parentPicker) ParentPicker(state.tasks, taskID, parent, onChoose = { parent = it; parentPicker = false }, onDismiss = { parentPicker = false })
         if (discard) AlertDialog(onDismissRequest = { discard = false }, title = { Text("放弃未保存的修改？") }, text = { Text("当前填写的内容还没有保存。") },
-            confirmButton = { TextButton(onClick = onDismiss) { Text("放弃修改") } }, dismissButton = { TextButton(onClick = { discard = false }) { Text("继续编辑") } })
+            confirmButton = { TextButton(onClick = { discard = false; closeDraft() }) { Text("放弃修改") } }, dismissButton = { TextButton(onClick = { discard = false }) { Text("继续编辑") } })
     }
 }
 

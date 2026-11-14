@@ -90,4 +90,7 @@ private enum class MainTab(val title: String, val icon: ImageVector) {
             }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("删除事项") } },
             dismissButton = { TextButton(onClick = { deletingIDs = null }) { Text("取消") } })
     }
+    // Compose invokes SideEffects after all restored DisposableEffects have
+    // registered their editing leases. onStart alone must never start a pull.
+    SideEffect { store.markUiReady() }
 }

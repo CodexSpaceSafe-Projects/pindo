@@ -10,6 +10,8 @@ final class SyncTransportTests: XCTestCase {
     // Generated independently using Python cryptography AESGCM, shared with Kotlin tests.
     private let fixture = Data(#"{"version":1,"nonce":"AAECAwQFBgcICQoL","ciphertext":"PCCgfreWq3TjY626ncsLCOa4pQ6LBnNeSgKG6m8Nc5A7a9OB","tag":"1SCj+RLdikLz5cIh6qzeNw=="}"#.utf8)
     private let plaintext = Data(#"{"version":1,"seen":{},"records":{}}"#.utf8)
+    private let plaintextV2 = Data(#"{"version":2,"seen":{},"records":{}}"#.utf8)
+    private let fixtureV2 = Data(#"{"ciphertext":"PCCgfreWq3TjY625ncsLCOa4pQ6LBnNeSgKG6m8Nc5A7a9OB","nonce":"AAECAwQFBgcICQoL","tag":"KIX2rgCTc/epvQCHI8SKwA==","version":2}"#.utf8)
 
     override func tearDown() { SyncHTTPProtocol.responses = []; super.tearDown() }
 
@@ -32,6 +34,86 @@ final class SyncTransportTests: XCTestCase {
         XCTAssertNotEqual(first, second)
         XCTAssertEqual(try cipher.open(first), plaintext)
         XCTAssertEqual(try cipher.open(second), plaintext)
+    }
+
+    func testV2IndependentEncryptionAndContentAddressVector() throws {
+        let encryption = try SyncEncryption(recoveryKey: recoveryKey)
+        let sealed = try encryption.sealV2(plaintextV2, nonce: AES.GCM.Nonce(data: Data(0..<12)))
+        XCTAssertEqual(sealed, fixtureV2)
+        XCTAssertEqual(try encryption.openV2(fixtureV2), plaintextV2)
+        let key = SyncEncryption.objectKey(vaultID: vault, encryptedData: fixtureV2)
+        XCTAssertEqual(key, "pindo/v2/\(vault)/objects/58139da27e697ce48e61dba26242fc655c3b20e1063af9175517d2be93c5d8d2.json")
+        try SyncEncryption.validateObject(data: fixtureV2, key: key, vaultID: vault)
+        XCTAssertEqual(SyncEncryption.migrationMarkerKey(vaultID: vault), "pindo/v1/\(vault)/heads/ffffffff-ffff-ffff-ffff-ffffffffffff.json")
+        XCTAssertThrowsError(try encryption.open(fixtureV2)) { XCTAssertEqual($0 as? SyncTransportError, .unsupportedVersion) }
+        XCTAssertThrowsError(try encryption.openV2(fixture)) { XCTAssertEqual($0 as? SyncTransportError, .unsupportedVersion) }
+        var downgraded = try XCTUnwrap(JSONSerialization.jsonObject(with: fixtureV2) as? [String: Any])
+        downgraded["version"] = 1
+        XCTAssertThrowsError(try encryption.open(JSONSerialization.data(withJSONObject: downgraded))) {
+            XCTAssertEqual($0 as? SyncTransportError, .invalidEncryptedData)
+        }
+        XCTAssertThrowsError(try SyncEncryption.validateObject(data: fixtureV2 + Data(" ".utf8), key: key, vaultID: vault)) {
+            XCTAssertEqual($0 as? SyncTransportError, .objectMismatch)
+        }
+        XCTAssertThrowsError(try SyncEncryption.validateObject(data: fixtureV2, key: key, vaultID: String(repeating: "a", count: 32)))
+        XCTAssertThrowsError(try encryption.sealV2(Data(repeating: 0, count: SyncEncryption.maximumPlaintextBytes + 1)))
+    }
+
+    func testV2ObjectUploadAndDownloadVerifyExactCiphertextDigest() async throws {
+        let transport = try makeTransport(), key = SyncEncryption.objectKey(vaultID: vault, encryptedData: fixtureV2)
+        SyncHTTPProtocol.responses = [.init(status: 200, body: ""), .init(status: 200, body: String(decoding: fixtureV2, as: UTF8.self))]
+        try await transport.upload(data: fixtureV2, key: key)
+        let downloaded = try await transport.download(key: key)
+        XCTAssertEqual(downloaded, fixtureV2)
+        XCTAssertEqual(SyncHTTPProtocol.requests.first?.httpBody, fixtureV2)
+        XCTAssertTrue(SyncHTTPProtocol.requests.first?.url?.path.hasSuffix("/objects/58139da27e697ce48e61dba26242fc655c3b20e1063af9175517d2be93c5d8d2.json") == true)
+        let count = SyncHTTPProtocol.requests.count
+        do { try await transport.upload(data: fixture, key: key); XCTFail("Different bytes must never overwrite the immutable key") }
+        catch { XCTAssertEqual(error as? SyncTransportError, .objectMismatch) }
+        XCTAssertEqual(SyncHTTPProtocol.requests.count, count)
+        SyncHTTPProtocol.responses = [.init(status: 200, body: String(decoding: fixture, as: UTF8.self))]
+        do { _ = try await transport.download(key: key); XCTFail("Changed remote bytes must fail before decryption") }
+        catch { XCTAssertEqual(error as? SyncTransportError, .objectMismatch) }
+        for path in [key.uppercased(), key + "/extra", "pindo/v2/\(vault)/objects/short.json", "pindo/v2/\(vault)/objects/../data.json"] {
+            do { _ = try await transport.download(key: path); XCTFail("Invalid path must fail") }
+            catch { XCTAssertEqual(error as? SyncTransportError, .invalidConfiguration) }
+        }
+    }
+
+    func testV2ListingPaginatesAndRejectsDuplicatesCrossVaultAndUnknownKeys() async throws {
+        let first = SyncEncryption.objectKey(vaultID: vault, encryptedData: fixtureV2)
+        let second = SyncEncryption.objectKey(vaultID: vault, encryptedData: fixture)
+        SyncHTTPProtocol.responses = [.init(status: 200, body: listing([(first, "one")], truncated: true, token: "+/=")),
+                                      .init(status: 200, body: listing([(second, "two")]))]
+        let objects = try await makeTransport().listObjects(vaultID: vault)
+        XCTAssertEqual(objects,
+                       [SyncRemoteHead(key: first, etag: "one"), SyncRemoteHead(key: second, etag: "two")].sorted { $0.key < $1.key })
+        XCTAssertTrue(SyncHTTPProtocol.requests[1].url!.absoluteString.contains("continuation-token=%2B%2F%3D"))
+        let foreign = SyncEncryption.objectKey(vaultID: String(repeating: "a", count: 32), encryptedData: fixtureV2)
+        for entries in [[(first, "one"), (first, "two")], [(foreign, "one")], [(first.uppercased(), "one")], [(SyncEncryption.headKey(vaultID: vault, deviceID: device), "one")]] {
+            SyncHTTPProtocol.responses = [.init(status: 200, body: listing(entries))]
+            do { _ = try await makeTransport().listObjects(vaultID: vault); XCTFail("Invalid immutable listing must fail") }
+            catch { XCTAssertEqual(error as? SyncTransportError, .invalidRemoteData) }
+        }
+    }
+
+    func testV2ObjectLimitFailsClosedAndLegacyMarkerDoesNotConsumeADeviceSlot() async throws {
+        let entries = (0..<10_001).map { ("pindo/v2/\(vault)/objects/\(String(format: "%064x", $0)).json", "etag") }
+        SyncHTTPProtocol.responses = stride(from: 0, to: entries.count, by: 100).map { start in
+            let end = min(start + 100, entries.count)
+            return .init(status: 200, body: listing(Array(entries[start..<end]), truncated: end < entries.count,
+                                                  token: end < entries.count ? "page-\(end)" : nil))
+        }
+        do { _ = try await makeTransport().listObjects(vaultID: vault); XCTFail("The immutable journal must have a bounded listing") }
+        catch { XCTAssertEqual(error as? SyncTransportError, .tooManyObjects) }
+        let heads = (1...100).map { (SyncEncryption.headKey(vaultID: vault, deviceID: String(format: "00000000-0000-0000-0000-%012x", $0)), "etag") }
+        SyncHTTPProtocol.responses = [.init(status: 200, body: listing(heads, truncated: true, token: "marker-page")),
+                                      .init(status: 200, body: listing([(SyncEncryption.migrationMarkerKey(vaultID: vault), "marker")]))]
+        let allowedHeads = try await makeTransport().listHeads(vaultID: vault)
+        XCTAssertEqual(allowedHeads.count, 101)
+        SyncHTTPProtocol.responses = [.init(status: 200, body: listing(heads + [(SyncEncryption.headKey(vaultID: vault, deviceID: "00000000-0000-0000-0000-000000000101"), "extra")]))]
+        do { _ = try await makeTransport().listHeads(vaultID: vault); XCTFail("A 101st writer must still fail") }
+        catch { XCTAssertEqual(error as? SyncTransportError, .tooManyDevices) }
     }
 
     func testPlaintextLimitMatchesAndroidBeforeEncryption() throws {
@@ -58,6 +140,45 @@ final class SyncTransportTests: XCTestCase {
             XCTAssertThrowsError(try SyncEncryption(recoveryKey: bad))
         }
         XCTAssertThrowsError(try cipher.open(Data("not JSON".utf8)))
+    }
+
+    func testLegacyConditionalReadRequiresTheListedETagEvenWhenTheServerIgnoresIfMatch() async throws {
+        let key = SyncEncryption.headKey(vaultID: vault, deviceID: device)
+        SyncHTTPProtocol.responses = [.init(status: 200, body: String(decoding: fixture, as: UTF8.self), headers: ["ETag": "\"listed\""])]
+        let bytes = try await makeTransport().download(key: key, expectedETag: "\"listed\"")
+        XCTAssertEqual(bytes, fixture)
+        XCTAssertEqual(SyncHTTPProtocol.requests.first?.value(forHTTPHeaderField: "If-Match"), "\"listed\"")
+        for response in [SyncHTTPProtocol.Response(status: 412, body: ""),
+                         .init(status: 200, body: "", headers: ["ETag": "\"changed\""]), .init(status: 200, body: "")] {
+            SyncHTTPProtocol.responses = [response]
+            do { _ = try await makeTransport().download(key: key, expectedETag: "\"listed\""); XCTFail("A raced or unversioned response must not be cached under the listed version") }
+            catch { XCTAssertEqual(error as? SyncTransportError, .remoteChanged) }
+        }
+        SyncHTTPProtocol.responses = []
+        do { _ = try await makeTransport().download(key: key, expectedETag: "bad\r\nInjected: value"); XCTFail("Unsafe ETag must fail before network") }
+        catch { XCTAssertEqual(error as? SyncTransportError, .invalidRemoteData) }
+        XCTAssertTrue(SyncHTTPProtocol.requests.isEmpty)
+    }
+
+    func testImmutableListingRejectsAmbiguousCriticalFieldsAndRepeatedPaginationTokens() async throws {
+        let key = SyncEncryption.objectKey(vaultID: vault, encryptedData: fixtureV2)
+        for body in [
+            "<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>\(key)</Key><Key>\(key)</Key><ETag>one</ETag></Contents></ListBucketResult>",
+            "<ListBucketResult><IsTruncated>false</IsTruncated><Other><Contents><Key>\(key)</Key><ETag>one</ETag></Contents></Other></ListBucketResult>",
+            listing([(key, "one")], truncated: true, token: String(repeating: "x", count: 8193))
+        ] {
+            SyncHTTPProtocol.responses = [.init(status: 200, body: body)]
+            do { _ = try await makeTransport().listObjects(vaultID: vault); XCTFail("Ambiguous listing must fail") }
+            catch { XCTAssertEqual(error as? SyncTransportError, .invalidRemoteData) }
+        }
+        let other = SyncEncryption.objectKey(vaultID: vault, encryptedData: fixture)
+        SyncHTTPProtocol.responses = [.init(status: 200, body: listing([(key, "one")], truncated: true, token: "same")),
+                                      .init(status: 200, body: listing([(other, "two")], truncated: true, token: "same"))]
+        do { _ = try await makeTransport().listObjects(vaultID: vault); XCTFail("Repeated pagination token must fail") }
+        catch { XCTAssertEqual(error as? SyncTransportError, .invalidRemoteData) }
+        SyncHTTPProtocol.responses = [.init(status: 200, body: "", headers: ["Content-Length": String(1024 * 1024 + 1)])]
+        do { _ = try await makeTransport().listObjects(vaultID: vault); XCTFail("Every listing page has a one MiB bound") }
+        catch { XCTAssertEqual(error as? SyncTransportError, .responseTooLarge) }
     }
 
     func testSigV4MatchesIndependentHMACVector() throws {

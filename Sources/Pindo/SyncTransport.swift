@@ -38,6 +38,7 @@ struct BitifulCredentials: Codable, Equatable, Sendable {
 enum SyncTransportError: Error, LocalizedError, Equatable {
     case invalidConfiguration, invalidCredentials, invalidRecoveryKey, randomGenerationFailed
     case invalidEncryptedData, unsupportedVersion, invalidRemoteData, responseTooLarge, tooManyDevices
+    case tooManyObjects, objectMismatch, remoteChanged
     case accessDenied, bucketNotFound, rateLimited, serverUnavailable, redirectRefused, networkUnavailable
     case httpStatus(Int)
 
@@ -52,6 +53,9 @@ enum SyncTransportError: Error, LocalizedError, Equatable {
         case .invalidRemoteData: return "The sync listing is invalid. No remote data was applied."
         case .responseTooLarge: return "Sync data exceeds the 7 MiB plaintext or 10 MiB encrypted safety limit."
         case .tooManyDevices: return "The vault contains more than 100 device heads."
+        case .tooManyObjects: return "The vault contains more than 10,000 immutable sync objects. Local changes are preserved."
+        case .objectMismatch: return "The sync object's path does not match its encrypted contents. No remote data was applied."
+        case .remoteChanged: return "The remote sync object changed while it was being read. Sync will retry without applying partial data."
         case .accessDenied: return "Bitiful denied access. Check the keys and bucket permissions."
         case .bucketNotFound: return "The Bitiful bucket or sync object was not found."
         case .rateLimited: return "Bitiful is limiting requests. Sync will retry later."
@@ -93,27 +97,63 @@ struct SyncEncryption: Sendable {
         headKey(vaultID: vaultID, deviceID: deviceID.uuidString)
     }
 
+    static func migrationMarkerKey(vaultID: String) -> String {
+        headKey(vaultID: vaultID, deviceID: "ffffffff-ffff-ffff-ffff-ffffffffffff")
+    }
+
+    static func objectKey(vaultID: String, encryptedData: Data) -> String {
+        "pindo/v2/\(vaultID)/objects/\(Data(SHA256.hash(data: encryptedData)).syncHex).json"
+    }
+
+    static func validateObject(data: Data, key: String, vaultID: String) throws {
+        guard data.count <= maximumBytes else { throw SyncTransportError.responseTooLarge }
+        guard vaultID.range(of: "^[a-f0-9]{32}\\z", options: .regularExpression) != nil,
+              key == objectKey(vaultID: vaultID, encryptedData: data) else { throw SyncTransportError.objectMismatch }
+    }
+
     func seal(_ data: Data) throws -> Data {
         try seal(data, nonce: AES.GCM.Nonce())
     }
 
     /// Internal nonce injection exists only for the cross-platform test vector.
     func seal(_ data: Data, nonce: AES.GCM.Nonce) throws -> Data {
+        try seal(data, nonce: nonce, version: 1)
+    }
+
+    func sealV2(_ data: Data) throws -> Data {
+        try sealV2(data, nonce: AES.GCM.Nonce())
+    }
+
+    /// Fixed nonces are used only in interoperable test vectors.
+    func sealV2(_ data: Data, nonce: AES.GCM.Nonce) throws -> Data {
+        try seal(data, nonce: nonce, version: 2)
+    }
+
+    private func seal(_ data: Data, nonce: AES.GCM.Nonce, version: Int) throws -> Data {
         guard data.count <= Self.maximumPlaintextBytes else { throw SyncTransportError.responseTooLarge }
-        let box = try AES.GCM.seal(data, using: key, nonce: nonce, authenticating: associatedData)
-        let envelope = SyncEncryptedEnvelope(version: 1, nonce: Data(box.nonce).base64EncodedString(),
+        let box = try AES.GCM.seal(data, using: key, nonce: nonce, authenticating: associatedData(version: version))
+        let envelope = SyncEncryptedEnvelope(version: version, nonce: Data(box.nonce).base64EncodedString(),
                                              ciphertext: box.ciphertext.base64EncodedString(), tag: box.tag.base64EncodedString())
-        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = version == 2 ? [.sortedKeys, .withoutEscapingSlashes] : [.sortedKeys]
         let encoded = try encoder.encode(envelope)
         guard encoded.count <= Self.maximumBytes else { throw SyncTransportError.responseTooLarge }
         return encoded
     }
 
     func open(_ data: Data) throws -> Data {
+        try open(data, version: 1)
+    }
+
+    func openV2(_ data: Data) throws -> Data {
+        try open(data, version: 2)
+    }
+
+    private func open(_ data: Data, version: Int) throws -> Data {
         guard data.count <= Self.maximumBytes else { throw SyncTransportError.responseTooLarge }
         do {
             let envelope = try JSONDecoder().decode(SyncEncryptedEnvelope.self, from: data)
-            guard envelope.version == 1 else { throw SyncTransportError.unsupportedVersion }
+            guard envelope.version == version else { throw SyncTransportError.unsupportedVersion }
             guard let nonce = Data(base64Encoded: envelope.nonce), nonce.count == 12,
                   let cipher = Data(base64Encoded: envelope.ciphertext),
                   let tag = Data(base64Encoded: envelope.tag), tag.count == 16 else {
@@ -121,12 +161,12 @@ struct SyncEncryption: Sendable {
             }
             guard cipher.count <= Self.maximumPlaintextBytes else { throw SyncTransportError.responseTooLarge }
             let box = try AES.GCM.SealedBox(nonce: AES.GCM.Nonce(data: nonce), ciphertext: cipher, tag: tag)
-            return try AES.GCM.open(box, using: key, authenticating: associatedData)
+            return try AES.GCM.open(box, using: key, authenticating: associatedData(version: version))
         } catch let error as SyncTransportError { throw error }
         catch { throw SyncTransportError.invalidEncryptedData }
     }
 
-    private var associatedData: Data { Data("PindoSync/v1/\(vaultID)".utf8) }
+    private func associatedData(version: Int) -> Data { Data("PindoSync/v\(version)/\(vaultID)".utf8) }
 }
 
 private struct SyncEncryptedEnvelope: Codable {
@@ -141,8 +181,7 @@ struct SyncRemoteHead: Equatable, Sendable {
     let etag: String
 }
 
-/// Every caller uploads only its local installation's head; other heads are read-only inputs.
-/// Independent writers never replace one another's object, so no S3 conditional-write extension is needed.
+/// V2 writes content-addressed immutable ciphertext. V1 paths remain available only for migration.
 final class BitifulTransport: @unchecked Sendable {
     let configuration: BitifulConfiguration
     private let credentials: BitifulCredentials
@@ -168,17 +207,27 @@ final class BitifulTransport: @unchecked Sendable {
     deinit { session.invalidateAndCancel() }
 
     func listHeads(vaultID: String) async throws -> [SyncRemoteHead] {
+        try await list(vaultID: vaultID, immutable: false)
+    }
+
+    func listObjects(vaultID: String) async throws -> [SyncRemoteHead] {
+        try await list(vaultID: vaultID, immutable: true)
+    }
+
+    private func list(vaultID: String, immutable: Bool) async throws -> [SyncRemoteHead] {
         guard Self.validVaultID(vaultID) else { throw SyncTransportError.invalidConfiguration }
-        let prefix = "pindo/v1/\(vaultID)/heads/"
+        let prefix = immutable ? "pindo/v2/\(vaultID)/objects/" : "pindo/v1/\(vaultID)/heads/"
+        let maximumCount = immutable ? 10_000 : 101 // 100 legacy writers plus the reserved upgrade marker.
+        var legacyWriters = 0
         var heads: [SyncRemoteHead] = [], knownKeys: Set<String> = [], tokens: Set<String> = []
         var token: String?
         var pages = 0
         repeat {
             pages += 1
-            guard pages <= 100 else { throw SyncTransportError.invalidRemoteData }
+            guard pages <= maximumCount else { throw SyncTransportError.invalidRemoteData }
             var query = [("list-type", "2"), ("prefix", prefix), ("max-keys", "100")]
             if let token { query.append(("continuation-token", token)) }
-            let data = try await request(method: "GET", key: nil, query: query)
+            let data = try await request(method: "GET", key: nil, query: query, maximumBytes: 1024 * 1024)
             // S3 listings are UTF-8 XML. Reject DTDs before parsing; checking the
             // same strict encoding also prevents UTF-16 from bypassing this check.
             guard let xml = String(data: data, encoding: .utf8), !xml.contains("\0"),
@@ -189,10 +238,16 @@ final class BitifulTransport: @unchecked Sendable {
             let parser = XMLParser(data: data); parser.shouldResolveExternalEntities = false; parser.delegate = listing
             guard parser.parse(), listing.valid, listing.root == "ListBucketResult" else { throw SyncTransportError.invalidRemoteData }
             for head in listing.heads {
-                guard Self.validHeadKey(head.key), head.key.hasPrefix(prefix), !head.etag.isEmpty,
+                guard (immutable ? Self.validObjectKey(head.key) : Self.validHeadKey(head.key)),
+                      head.key.hasPrefix(prefix), !head.etag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      Self.validETag(head.etag),
                       knownKeys.insert(head.key).inserted else { throw SyncTransportError.invalidRemoteData }
                 heads.append(head)
-                guard heads.count <= 100 else { throw SyncTransportError.tooManyDevices }
+                if !immutable, head.key != SyncEncryption.migrationMarkerKey(vaultID: vaultID) { legacyWriters += 1 }
+                guard legacyWriters <= 100 else { throw SyncTransportError.tooManyDevices }
+                guard heads.count <= maximumCount else {
+                    throw immutable ? SyncTransportError.tooManyObjects : SyncTransportError.tooManyDevices
+                }
             }
             if listing.isTruncated {
                 guard !listing.heads.isEmpty, let next = listing.nextToken, !next.isEmpty, next.utf8.count <= 8192,
@@ -204,18 +259,33 @@ final class BitifulTransport: @unchecked Sendable {
     }
 
     func download(key: String) async throws -> Data {
-        guard Self.validHeadKey(key) else { throw SyncTransportError.invalidConfiguration }
-        return try await request(method: "GET", key: key)
+        try await downloadObject(key: key, expectedETag: nil)
+    }
+
+    func download(key: String, expectedETag: String) async throws -> Data {
+        guard Self.validETag(expectedETag) else { throw SyncTransportError.invalidRemoteData }
+        return try await downloadObject(key: key, expectedETag: expectedETag)
+    }
+
+    private func downloadObject(key: String, expectedETag: String?) async throws -> Data {
+        guard Self.validHeadKey(key) || Self.validObjectKey(key) else { throw SyncTransportError.invalidConfiguration }
+        let data = try await request(method: "GET", key: key, expectedETag: expectedETag)
+        if Self.validObjectKey(key) { try SyncEncryption.validateObject(data: data, key: key, vaultID: String(key.split(separator: "/")[2])) }
+        return data
     }
 
     func upload(data: Data, key: String) async throws {
-        guard Self.validHeadKey(key) else { throw SyncTransportError.invalidConfiguration }
+        guard Self.validHeadKey(key) || Self.validObjectKey(key) else { throw SyncTransportError.invalidConfiguration }
         guard data.count <= SyncEncryption.maximumBytes else { throw SyncTransportError.responseTooLarge }
+        if Self.validObjectKey(key) { try SyncEncryption.validateObject(data: data, key: key, vaultID: String(key.split(separator: "/")[2])) }
         _ = try await request(method: "PUT", key: key, body: data)
     }
 
-    private func request(method: String, key: String?, query: [(String, String)] = [], body: Data = Data()) async throws -> Data {
-        let request = try signedRequest(method: method, key: key, query: query, body: body)
+    private func request(method: String, key: String?, query: [(String, String)] = [], body: Data = Data(),
+                         maximumBytes: Int = SyncEncryption.maximumBytes, expectedETag: String? = nil) async throws -> Data {
+        try Task.checkCancellation()
+        var request = try signedRequest(method: method, key: key, query: query, body: body)
+        if let expectedETag { request.setValue(expectedETag, forHTTPHeaderField: "If-Match") }
         do {
             let (bytes, response) = try await session.bytes(for: request)
             guard let http = response as? HTTPURLResponse else { throw SyncTransportError.networkUnavailable }
@@ -224,18 +294,21 @@ final class BitifulTransport: @unchecked Sendable {
             case 301...399: throw SyncTransportError.redirectRefused
             case 401, 403: throw SyncTransportError.accessDenied
             case 404: throw SyncTransportError.bucketNotFound
+            case 412 where expectedETag != nil: throw SyncTransportError.remoteChanged
             case 429: throw SyncTransportError.rateLimited
             case 500...599: throw SyncTransportError.serverUnavailable
             default: throw SyncTransportError.httpStatus(http.statusCode)
             }
-            guard response.expectedContentLength <= Int64(SyncEncryption.maximumBytes) else {
+            if let expectedETag, http.value(forHTTPHeaderField: "ETag") != expectedETag { throw SyncTransportError.remoteChanged }
+            guard response.expectedContentLength <= Int64(maximumBytes) else {
                 throw SyncTransportError.responseTooLarge
             }
             var data = Data()
             for try await byte in bytes {
                 data.append(byte)
-                guard data.count <= SyncEncryption.maximumBytes else { throw SyncTransportError.responseTooLarge }
+                guard data.count <= maximumBytes else { throw SyncTransportError.responseTooLarge }
             }
+            try Task.checkCancellation()
             return data
         } catch is CancellationError { throw CancellationError() }
         catch let error as URLError where error.code == .cancelled { throw CancellationError() }
@@ -256,8 +329,15 @@ final class BitifulTransport: @unchecked Sendable {
     private static func validVaultID(_ value: String) -> Bool {
         value.range(of: "^[a-f0-9]{32}\\z", options: .regularExpression) != nil
     }
+    private static func validETag(_ value: String) -> Bool {
+        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && value.utf8.count <= 1024 &&
+            value.utf8.allSatisfy { $0 >= 32 && $0 != 127 }
+    }
     private static func validHeadKey(_ value: String) -> Bool {
         value.range(of: "^pindo/v1/[a-f0-9]{32}/heads/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.json\\z", options: .regularExpression) != nil
+    }
+    private static func validObjectKey(_ value: String) -> Bool {
+        value.range(of: "^pindo/v2/[a-f0-9]{32}/objects/[a-f0-9]{64}\\.json\\z", options: .regularExpression) != nil
     }
 }
 
@@ -336,20 +416,23 @@ private final class SyncListParser: NSObject, XMLParserDelegate {
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String]) {
         if stack.isEmpty { root = elementName }
         stack.append(elementName); text = ""
-        if elementName == "Contents" { key = nil; etag = nil }
+        if elementName == "Contents" {
+            if stack.count != 2 || stack.first != "ListBucketResult" { valid = false }
+            key = nil; etag = nil
+        }
     }
     func parser(_ parser: XMLParser, foundCharacters string: String) { text += string }
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
         let parent = stack.dropLast().last
         if parent == "Contents" {
-            if elementName == "Key" { key = text }
-            if elementName == "ETag" { etag = text }
+            if elementName == "Key" { if key != nil { valid = false }; key = text }
+            if elementName == "ETag" { if etag != nil { valid = false }; etag = text }
         } else if parent == "ListBucketResult" {
             if elementName == "IsTruncated" {
                 if sawTruncated || !["true", "false"].contains(text.trimmingCharacters(in: .whitespacesAndNewlines)) { valid = false }
                 sawTruncated = true; isTruncated = text.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
             }
-            if elementName == "NextContinuationToken" { nextToken = text }
+            if elementName == "NextContinuationToken" { if nextToken != nil { valid = false }; nextToken = text }
         }
         if elementName == "Contents" {
             if let key, let etag { heads.append(SyncRemoteHead(key: key, etag: etag)) }

@@ -39,6 +39,35 @@ class BackupCodecTest {
         assertEquals("任务", imported.getJSONArray("tasks").getJSONObject(0).getString("title"))
     }
 
+    @Test fun explicitProgressSourceAndLargeOrdersSurvivePortableBackupRoundTrip() {
+        val source = document()
+        val task = source.getJSONArray("tasks").getJSONObject(0)
+        task.put("phase", "inProgress").put("startedAt", 1.0).put("isProgressExplicit", true)
+            .put("order", 4_294_967_296L)
+        val restored = BackupCodec.decode(BackupCodec.encode(source)).getJSONArray("tasks").getJSONObject(0)
+        assertTrue(restored.getBoolean("isProgressExplicit"))
+        assertEquals(4_294_967_296L, Todo.from(restored).order)
+        task.put("isProgressExplicit", false)
+        assertFalse(BackupCodec.decode(BackupCodec.encode(source)).getJSONArray("tasks").getJSONObject(0).getBoolean("isProgressExplicit"))
+    }
+
+    @Test fun backupRejectsNonBooleanProgressSourceInsteadOfCoercingIt() {
+        for (flag in listOf<Any>("true", "false", 1, JSONObject())) {
+            val source = document()
+            source.getJSONArray("tasks").getJSONObject(0).put("isProgressExplicit", flag)
+            assertThrows(IllegalArgumentException::class.java) { BackupCodec.decode(source.toString()) }
+        }
+    }
+
+    @Test fun backupRejectsFractionalAndOutOfRangeDatesBeforeImport() {
+        for ((field, value) in listOf("year" to "2026", "year" to 0, "year" to 10000,
+                                     "year" to 4_294_967_296L, "month" to 11.5, "day" to 12.5)) {
+            val source = document()
+            source.getJSONArray("tasks").getJSONObject(0).getJSONObject("plannedDay").put(field, value)
+            assertThrows(IllegalArgumentException::class.java) { BackupCodec.decode(source.toString()) }
+        }
+    }
+
     @Test fun invalidVersionDuplicateIdentifiersAndMalformedUUIDAreRejected() {
         assertThrows(IllegalArgumentException::class.java) { BackupCodec.decode(document().put("version", 9).toString()) }
         val duplicate = document()

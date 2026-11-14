@@ -37,7 +37,10 @@ import java.time.LocalDate
     val selected = selectedIDs.toSet().intersect(matchingIDs)
     val rows = TodoQueries.outline(state.tasks, query, if (search.isNotBlank() || selectionMode) emptySet() else collapsed.toSet())
     LaunchedEffect(search, groupID, phaseName, sortName) { selectedIDs = emptyList() }
-    DisposableEffect(selectionMode) { if (selectionMode) store.setEditing(true); onDispose { if (selectionMode) store.setEditing(false) } }
+    DisposableEffect(selectionMode) {
+        val lease = if (selectionMode) store.beginEditing() else null
+        onDispose { if (lease != null) store.endEditing(lease) }
+    }
     BackHandler(enabled = selectionMode) { selectionMode = false; selectedIDs = emptyList() }
     fun perform(action: TodoBatchAction) {
         if (selected.isNotEmpty() && store.applyBatch(selected, action)) { selectedIDs = emptyList(); selectionMode = false }

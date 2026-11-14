@@ -18,6 +18,7 @@ struct TodoManagementView: View {
     @State private var selectedIDs: Set<UUID> = []
     @State private var pendingDeletion: Set<UUID> = []
     @State private var confirmDeletion = false
+    @State private var interactionLease: UUID?
     private var tasks: [TodoItem] { model.managedTasks(query: query, status: status, group: group) }
     private var visibleIDs: Set<UUID> { Set(tasks.map(\.id)) }
     private var selectedVisibleIDs: Set<UUID> { selectedIDs.intersection(visibleIDs) }
@@ -28,7 +29,7 @@ struct TodoManagementView: View {
             Divider()
             ErrorBanner(model: model)
             if let id = noteID, let task = model.task(id) {
-                NoteView(model: model, task: task, onBack: { noteID = nil }).id(id).frame(minHeight: 200, maxHeight: .infinity)
+                NoteView(model: model, task: task, onBack: { noteID = nil; releaseDetailIfClosed() }).id(id).frame(minHeight: 200, maxHeight: .infinity)
             } else {
                 VStack(alignment: .leading, spacing: 10) {
                     filters
@@ -44,6 +45,12 @@ struct TodoManagementView: View {
             .sheet(isPresented: Binding(get: { addingParentID != nil }, set: { if !$0 { addingParentID = nil } })) {
                 if let id = addingParentID, let parent = model.task(id) { AddSubtaskView(model: model, parent: parent) { addingParentID = nil } }
             }
+            .onChange(of: noteID) { _, _ in releaseDetailIfClosed() }
+            .onChange(of: editingTask?.id) { _, _ in releaseDetailIfClosed() }
+            .onChange(of: addingParentID) { _, _ in releaseDetailIfClosed() }
+            .onDisappear {
+                if let interactionLease { model.releaseSyncEditing(interactionLease); self.interactionLease = nil }
+            }
             .onChange(of: model.document.groups.map(\.id)) { _, ids in
                 if case .group(let id) = group, !ids.contains(id) { group = .all }
             }
@@ -54,6 +61,7 @@ struct TodoManagementView: View {
             .onChange(of: model.document.tasks.map(\.id)) { _, ids in
                 if let id = addingParentID, !ids.contains(id) { addingParentID = nil }
                 if let task = editingTask, !ids.contains(task.id) { editingTask = nil }
+                if let id = noteID, !ids.contains(id) { noteID = nil }
             }
             .alert(l10n("删除选中的 %ld 条待办？", model.document.descendantIDs(including: pendingDeletion).count), isPresented: $confirmDeletion) {
                 Button(l10n("取消"), role: .cancel) { pendingDeletion = [] }
@@ -135,9 +143,9 @@ struct TodoManagementView: View {
                         onSelect: { task in
                             if batchMode && visibleIDs.contains(task.id) {
                                 if !selectedIDs.insert(task.id).inserted { selectedIDs.remove(task.id) }
-                            } else { noteID = task.id }
-                        }, onSelectNote: { noteID = $0.id }, onEdit: { editingTask = $0 },
-                        onAddChild: { addingParentID = $0.id },
+                            } else { protectDetail(); noteID = task.id }
+                        }, onSelectNote: { protectDetail(); noteID = $0.id }, onEdit: { protectDetail(); editingTask = $0 },
+                        onAddChild: { protectDetail(); addingParentID = $0.id },
                         onDelete: { pendingDeletion = [$0.id]; confirmDeletion = true })
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onDisappear { model.endTaskDrag() }
@@ -151,6 +159,15 @@ struct TodoManagementView: View {
     private func clearSelection() {
         model.endTaskDrag()
         selectedIDs = []; pendingDeletion = []; confirmDeletion = false
+    }
+
+    private func protectDetail() {
+        if interactionLease == nil { interactionLease = model.acquireSyncEditing() }
+    }
+
+    private func releaseDetailIfClosed() {
+        guard noteID == nil, editingTask == nil, addingParentID == nil, let interactionLease else { return }
+        model.releaseSyncEditing(interactionLease); self.interactionLease = nil
     }
 }
 

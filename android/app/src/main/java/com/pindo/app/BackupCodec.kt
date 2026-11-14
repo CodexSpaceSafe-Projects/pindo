@@ -7,7 +7,7 @@ import java.util.UUID
 /** Portable plaintext export. Whitelisting keeps credentials and replica history out. */
 object BackupCodec {
     const val MAX_BYTES = 10 * 1024 * 1024
-    private val taskFields = setOf("id", "title", "note", "plannedDay", "groupID", "parentID", "phase", "order", "createdAt", "updatedAt", "startedAt", "completedAt")
+    private val taskFields = setOf("id", "title", "note", "plannedDay", "groupID", "parentID", "phase", "order", "createdAt", "updatedAt", "startedAt", "completedAt", "isProgressExplicit")
     private val groupFields = setOf("id", "name", "colorHex")
     private val uuidShape = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
@@ -31,22 +31,16 @@ object BackupCodec {
         val groups = JSONArray()
         for (source in document.getJSONArray("tasks").objects()) {
             val task = keep(source, taskFields)
-            val order = task.get("order")
-            require(order is Number && order.toDouble().isFinite() && order.toDouble() == order.toInt().toDouble()) { "事项排序无效。" }
-            task.put("order", order.toInt())
+            task.put("order", validatedTaskOrder(task.get("order")))
+            if (task.has("isProgressExplicit") && !task.isNull("isProgressExplicit")) {
+                require(task.get("isProgressExplicit") is Boolean) { "事项进度来源无效。" }
+            }
             for (field in listOf("title", "note", "phase")) {
                 if (field == "note" && !task.has(field)) continue
                 require(task.get(field) is String) { "事项文字或状态无效。" }
             }
             val day = task.getJSONObject("plannedDay")
-            val normalizedDay = JSONObject()
-            for (field in listOf("year", "month", "day")) {
-                val value = day.get(field)
-                require(value is Number && value.toDouble().isFinite() && value.toDouble() == value.toInt().toDouble()) { "事项日期无效。" }
-                normalizedDay.put(field, value.toInt())
-            }
-            require(normalizedDay.getInt("year") >= 1) { "事项日期无效。" }
-            task.put("plannedDay", normalizedDay)
+            task.put("plannedDay", TodoRules.dayJSON(validatedTaskDay(day)))
             task.put("id", canonicalID(task.getString("id")))
             for (field in listOf("groupID", "parentID")) {
                 if (task.has(field) && !task.isNull(field)) task.put(field, canonicalID(task.getString(field)))

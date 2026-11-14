@@ -23,13 +23,13 @@ internal class DocumentStorage(context: Context) {
 
 data class CloudSettings(val enabled: Boolean = false, val endpoint: String = "https://s3.bitiful.net",
     val bucket: String = "", val region: String = "cn-east-1", val accessKey: String = "",
-    val secretKey: String = "", val recoveryKey: String = "") {
+    val secretKey: String = "", val recoveryKey: String = "", val createVault: Boolean = false) {
     fun json(): JSONObject = JSONObject().put("enabled", enabled).put("endpoint", endpoint).put("bucket", bucket)
-        .put("region", region).put("accessKey", accessKey).put("secretKey", secretKey).put("recoveryKey", recoveryKey)
+        .put("region", region).put("accessKey", accessKey).put("secretKey", secretKey).put("recoveryKey", recoveryKey).put("createVault", createVault)
     companion object {
         fun from(value: JSONObject) = CloudSettings(value.getBoolean("enabled"), value.getString("endpoint"),
             value.getString("bucket"), value.getString("region"), value.getString("accessKey"),
-            value.getString("secretKey"), value.getString("recoveryKey"))
+            value.getString("secretKey"), value.getString("recoveryKey"), value.optBoolean("createVault", false))
     }
 }
 
@@ -37,20 +37,20 @@ internal class SecretStorage(context: Context) {
     private val file = AtomicFile(File(context.noBackupFilesDir, "sync-secrets.json"))
     private val alias = "com.pindo.app.sync.credentials.v1"
     private val aad = "Pindo/AndroidSecrets/v1".toByteArray()
-    fun read(): CloudSettings? {
+    fun readJournal(): SettingsJournal? {
         if (!file.baseFile.exists() && !File(file.baseFile.path + ".bak").exists()) return null
         val envelope = file.openRead().use { JSONObject(it.readBytes().toString(Charsets.UTF_8)) }
         require(envelope.getInt("version") == 1) { "不支持的凭据格式。" }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key(create = false), GCMParameterSpec(128, Base64.decode(envelope.getString("nonce"), Base64.NO_WRAP)))
         cipher.updateAAD(aad)
-        return CloudSettings.from(JSONObject(cipher.doFinal(Base64.decode(envelope.getString("ciphertext"), Base64.NO_WRAP)).toString(Charsets.UTF_8)))
+        return SettingsJournal.from(JSONObject(cipher.doFinal(Base64.decode(envelope.getString("ciphertext"), Base64.NO_WRAP)).toString(Charsets.UTF_8)))
     }
-    fun write(settings: CloudSettings) {
+    fun writeJournal(journal: SettingsJournal) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key(create = true))
         cipher.updateAAD(aad)
-        val data = cipher.doFinal(settings.json().toString().toByteArray())
+        val data = cipher.doFinal(journal.json().toString().toByteArray())
         val envelope = JSONObject().put("version", 1).put("nonce", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
             .put("ciphertext", Base64.encodeToString(data, Base64.NO_WRAP))
         atomicWrite(file, envelope.toString().toByteArray())

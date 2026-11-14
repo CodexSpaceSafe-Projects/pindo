@@ -56,6 +56,11 @@ import PindoCore
         // The app remains inactive, so explicitly order the panel across applications.
         orderFrontRegardless()
     }
+
+    override func orderOut(_ sender: Any?) {
+        NotificationCenter.default.post(name: .syncEditingWindowWillHide, object: self)
+        super.orderOut(sender)
+    }
 }
 
 @MainActor enum NativeStatusMenu {
@@ -80,7 +85,7 @@ import PindoCore
     private var statusItem: NSStatusItem?
     private(set) var listPanel: QuickPanel?
     private(set) var quickPanel: QuickPanel?
-    private var settingsWindow: NSWindow?
+    private(set) var settingsWindow: NSWindow?
     private var previousApplication: NSRunningApplication?
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
@@ -225,9 +230,16 @@ import PindoCore
         statusItem?.button?.highlight(false)
     }
     private func closeList(restoreFocus: Bool = false) {
-        guard listPanel?.isVisible == true else { return }
-        listPanel?.makeFirstResponder(nil)
-        model?.flush(); listPanel?.orderOut(nil); statusItem?.button?.highlight(false)
+        guard let panel = listPanel, panel.isVisible else { return }
+        finishSyncWindowEditing(panel)
+        if let sheet = panel.attachedSheet {
+            finishSyncWindowEditing(sheet)
+            panel.endSheet(sheet)
+            NotificationCenter.default.post(name: .syncEditingWindowWillHide, object: sheet)
+            sheet.orderOut(nil)
+        }
+        model?.editingID = nil; model?.endTaskDrag(); model?.leaveNote()
+        panel.orderOut(nil); statusItem?.button?.highlight(false)
         if restoreFocus { previousApplication?.activate(options: [.activateIgnoringOtherApps]) }
     }
     private func applyPin(_ pinned: Bool) {
@@ -335,7 +347,7 @@ import PindoCore
               app.processIdentifier != ProcessInfo.processInfo.processIdentifier, app.activationPolicy != .prohibited else { return }
         dismissTransientPanels(respectComposition: false)
     }
-    @objc private func showSettings() {
+    @objc func showSettings() {
         if model?.isPinned != true { closeList() }
         closeQuick(); guard let model else { return }
         if settingsWindow == nil {
@@ -350,7 +362,20 @@ import PindoCore
         NSApp.activate(ignoringOtherApps: true); settingsWindow?.makeKeyAndOrderFront(nil)
     }
     func windowWillClose(_ notification: Notification) {
-        if let window = notification.object as? NSWindow, window === settingsWindow { GroupColorEditor.shared.close() }
+        if let window = notification.object as? NSWindow, window === settingsWindow {
+            finishSyncWindowEditing(window)
+            if let sheet = window.attachedSheet {
+                finishSyncWindowEditing(sheet); window.endSheet(sheet)
+                NotificationCenter.default.post(name: .syncEditingWindowWillHide, object: sheet)
+                sheet.orderOut(nil)
+            }
+            model?.flush()
+            NotificationCenter.default.post(name: .syncEditingWindowWillHide, object: window)
+            GroupColorEditor.shared.close()
+            // Closing settings destroys its drafts/leases. The next open starts
+            // at General; the ordinary list keeps its hosting view and geometry.
+            window.contentView = nil; settingsWindow = nil
+        }
         model?.flush()
     }
     func windowDidMove(_ notification: Notification) {

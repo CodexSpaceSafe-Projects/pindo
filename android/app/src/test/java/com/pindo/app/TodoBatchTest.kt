@@ -22,19 +22,19 @@ class TodoBatchTest {
         assertTrue(reopened.objects().all { it.getString("phase") == "pending" })
     }
 
-    @Test fun invalidCompletionIsAtomicAndDoesNotPartiallyUpdateOtherSelectedTasks() {
+    @Test fun invalidPhaseIsAtomicAndDoesNotPartiallyUpdateOtherSelectedTasks() {
         val parent = task("父项")
         val child = task("未完成子项", parent.getString("id"))
         val other = task("其他事项")
         val tasks = JSONArray().put(parent).put(child).put(other)
         val before = tasks.toString()
         assertThrows(IllegalArgumentException::class.java) {
-            TodoRules.batch(tasks, setOf(parent.getString("id"), other.getString("id")), TodoBatchAction.SetPhase("completed"))
+            TodoRules.batch(tasks, setOf(parent.getString("id"), other.getString("id")), TodoBatchAction.SetPhase("invalid"))
         }
         assertEquals(before, tasks.toString())
     }
 
-    @Test fun explicitlyReopeningParentDoesNotReopenCompletedChildrenOrImmediatelyCompleteItAgain() {
+    @Test fun reopeningParentReopensChildrenWhileStartingParentOnlyStartsTheParent() {
         val parent = task("父项")
         val child = task("子项", parent.getString("id"))
         val done = TodoRules.batch(JSONArray().put(parent).put(child),
@@ -42,8 +42,9 @@ class TodoBatchTest {
         for (phase in listOf("pending", "inProgress")) {
             val changed = TodoRules.batch(done, setOf(parent.getString("id")), TodoBatchAction.SetPhase(phase))
             assertEquals(phase, changed.getJSONObject(0).getString("phase"))
-            assertEquals("completed", changed.getJSONObject(1).getString("phase"))
+            assertEquals(if (phase == "pending") "pending" else "completed", changed.getJSONObject(1).getString("phase"))
             assertTrue(changed.getJSONObject(0).isNull("completedAt"))
+            if (phase == "inProgress") assertTrue(changed.getJSONObject(0).getBoolean("isProgressExplicit"))
         }
         assertTrue(done.objects().all { it.getString("phase") == "completed" })
     }
@@ -88,6 +89,34 @@ class TodoBatchTest {
         val remaining = TodoRules.batch(tasks, ids, TodoBatchAction.Delete)
         assertEquals(listOf(other.getString("id")), remaining.objects().map { it.getString("id") })
         assertEquals(4, tasks.length())
+    }
+
+    @Test fun movingOrDeletingTheLastChildOnlyClearsDerivedParentProgress() {
+        for (explicit in listOf(false, true)) {
+            val parent = task("parent")
+            val child = task("child", parent.getString("id"))
+            var started = JSONArray().put(parent).put(child)
+            if (explicit) started = TodoRules.setPhase(started, parent.getString("id"), "inProgress")
+            started = TodoRules.setPhase(started, child.getString("id"), "inProgress")
+            val moved = TodoRules.moveTask(started, child.getString("id"), null)
+            assertEquals(if (explicit) "inProgress" else "pending", moved.getJSONObject(0).getString("phase"))
+            assertEquals("inProgress", moved.getJSONObject(1).getString("phase"))
+            val deleted = TodoRules.batch(started, setOf(child.getString("id")), TodoBatchAction.Delete)
+            assertEquals(1, deleted.length())
+            assertEquals(if (explicit) "inProgress" else "pending", deleted.getJSONObject(0).getString("phase"))
+            if (!explicit) {
+                assertTrue(moved.getJSONObject(0).isNull("startedAt"))
+                assertTrue(deleted.getJSONObject(0).isNull("startedAt"))
+            }
+        }
+    }
+
+    @Test fun movingLastLegacyDerivedChildUsesThePreviousTreeToInferTheProgressSource() {
+        val parent = task("parent").put("phase", "inProgress").put("startedAt", 1.0)
+        val child = task("child", parent.getString("id")).put("phase", "inProgress").put("startedAt", 1.0)
+        val moved = TodoRules.moveTask(JSONArray().put(parent).put(child), child.getString("id"), null)
+        assertEquals("pending", moved.getJSONObject(0).getString("phase"))
+        assertTrue(moved.getJSONObject(0).isNull("startedAt"))
     }
 
     @Test fun groupAndDateChangesOnlyAffectSelectedTasksAndPreserveHierarchyAndNotes() {

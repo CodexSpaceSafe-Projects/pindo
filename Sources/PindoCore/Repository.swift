@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 public protocol StorageIO {
     func createDirectory(_ url: URL) throws
@@ -17,8 +22,32 @@ public struct FileStorage: StorageIO {
         return try Data(contentsOf: url)
     }
     public func write(_ data: Data, to url: URL) throws {
-        try data.write(to: url, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        let parent = url.deletingLastPathComponent()
+        let temporary = parent.appendingPathComponent(".pindo-write-\(UUID().uuidString).tmp")
+        let descriptor = temporary.path.withCString { open($0, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode_t(0o600)) }
+        guard descriptor >= 0 else { throw fileError(temporary) }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer {
+            try? handle.close()
+            try? FileManager.default.removeItem(at: temporary)
+        }
+        // Every operation which can report failure finishes before replacing the
+        // destination. In particular a chmod error must not masquerade as rollback.
+        guard fchmod(descriptor, mode_t(0o600)) == 0 else { throw fileError(temporary) }
+        try handle.write(contentsOf: data)
+        try handle.synchronize()
+        try handle.close()
+        let committed = temporary.path.withCString { source in url.path.withCString { destination in rename(source, destination) } }
+        guard committed == 0 else { throw fileError(url) }
+
+        // Best effort only: after rename, reporting failure would falsely claim
+        // the old file survived. fsync does not promise power-loss durability on
+        // every filesystem/device; the data file was synchronized before commit.
+        let directory = parent.path.withCString { open($0, O_RDONLY | O_CLOEXEC) }
+        if directory >= 0 { _ = fsync(directory); _ = close(directory) }
+    }
+    private func fileError(_ url: URL) -> NSError {
+        NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSFilePathErrorKey: url.path])
     }
     public func remove(_ url: URL) throws {
         if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
@@ -46,6 +75,7 @@ public final class PindoRepository {
     public var journalURL: URL { directory.appendingPathComponent("recovery.json") }
     public var syncState: SyncReplica? { document.syncState }
     public var syncPayload: SyncPayload? { document.syncState?.payload }
+    public var syncSession: SyncSessionState? { document.syncSession }
     private let io: StorageIO
     private var backupIsReadable = true
     private var lastSnapshotState: JSONValue
@@ -99,10 +129,22 @@ public final class PindoRepository {
         // A document replacement cannot adopt metadata belonging to an imported
         // file or another device. Every ordinary commit retains this identity.
         next.syncState = document.syncState
+        next.syncSession = document.syncSession; next.syncChannels = document.syncChannels
         _ = try next.validated()
         try next.captureSyncChanges()
         try io.write(DocumentCodec.encode(next), to: dataURL)
         document = next; hasUnsavedChanges = false
+    }
+
+    /// Re-read the durable commit point after an ambiguous storage error.
+    /// Callers must flush first when discarding in-memory edits is not intended.
+    public func reloadCurrentDocument() throws {
+        guard !needsRecovery else { throw PindoError.recoveryRequired }
+        guard let bytes = try io.read(dataURL) else { throw PindoError.corruptFile("data.json") }
+        let current: PindoDocument
+        do { current = try DocumentCodec.decode(PindoDocument.self, from: bytes).validated() }
+        catch { throw PindoError.corruptFile("data.json") }
+        document = current; hasUnsavedChanges = false
     }
 
     /// Only stages text in memory. AppModel coalesces disk writes after 600 ms.
@@ -148,10 +190,97 @@ public final class PindoRepository {
         document = next; hasUnsavedChanges = false
     }
 
+    /// Called by the application before any edits, even when credentials are disconnected.
+    public func beginSyncSession(actorID: UUID = UUID()) throws {
+        guard !needsRecovery else { throw PindoError.recoveryRequired }
+        guard document.syncState != nil else { return }
+        var next = document
+        try next.syncState!.rotateActor(actorID)
+        try next.captureSyncChanges()
+        try saveSyncDocument(next)
+    }
+
+    /// Connection identity and replica selection share one atomic data.json commit.
+    public func prepareSync(channelID: String, preserveLegacy: Bool = true, actorID: UUID = UUID(), transactionID: String? = nil) throws {
+        guard !needsRecovery else { throw PindoError.recoveryRequired }
+        _ = try SyncSessionState(channelID: channelID, connectionTransaction: transactionID).validated()
+        var next = document
+        try next.captureSyncChanges()
+        if next.syncSession?.channelID != channelID {
+            var channels = next.syncChannels ?? [:]
+            if let session = next.syncSession, let replica = next.syncState {
+                channels[session.channelID] = SyncChannelArchive(tasks: next.tasks, groups: next.groups, syncState: replica, syncSession: session)
+            }
+            if let archived = channels.removeValue(forKey: channelID) {
+                next.tasks = archived.tasks; next.groups = archived.groups
+                next.syncState = archived.syncState; next.syncSession = archived.syncSession
+            } else {
+                guard channels.count < SyncSessionState.maximumChannels else { throw PindoError.invalidData("同步资料库归档已满") }
+                if next.syncSession != nil || !preserveLegacy { next.syncState = nil }
+                next.syncSession = SyncSessionState(channelID: channelID)
+            }
+            next.syncChannels = channels.isEmpty ? nil : channels
+        }
+        for index in next.tasks.indices {
+            next.tasks[index].isProgressExplicit = next.tasks[index].phase == .inProgress ? (next.tasks[index].isProgressExplicit ?? true) : false
+        }
+        if next.syncState == nil {
+            next.syncState = SyncReplica(deviceID: actorID, version: 2)
+            try next.captureSyncChanges()
+        } else {
+            next.syncState = try next.syncState!.upgraded()
+            try next.syncState!.rotateActor(actorID)
+        }
+        try next.captureSyncChanges()
+        let projection = try next.syncState!.merge(SyncPayload(version: 2))
+        next.tasks = projection.tasks; next.groups = projection.groups
+        next.syncSession?.connectionTransaction = transactionID
+        if let channels = next.syncChannels {
+            guard try DocumentCodec.encode(channels).count <= 64 * 1024 * 1024 else { throw PindoError.invalidData("同步资料库归档超过 64 MiB 上限") }
+        }
+        if let group = next.preferences.defaultGroupID, !next.groups.contains(where: { $0.id == group }) { next.preferences.defaultGroupID = nil }
+        try saveSyncDocument(next)
+    }
+
+    public func stageSyncUpload(key: String, data: Data, payloadDigest: String) throws {
+        guard !needsRecovery, var session = document.syncSession else { throw PindoError.recoveryRequired }
+        let pending = SyncPendingObject(key: key, data: data, payloadDigest: payloadDigest)
+        if let existing = session.pendingObject {
+            guard existing == pending else { throw PindoError.invalidData("尚有同步资料等待确认") }
+            return
+        }
+        var next = document
+        try next.captureSyncChanges()
+        session.pendingObject = pending; next.syncSession = session
+        try saveSyncDocument(next)
+    }
+
+    public func acknowledgeSyncUpload(key: String, payloadDigest: String) throws {
+        guard !needsRecovery, var session = document.syncSession else { throw PindoError.recoveryRequired }
+        guard let pending = session.pendingObject, pending.key == key, pending.payloadDigest == payloadDigest else {
+            throw PindoError.invalidData("同步确认不匹配待上传资料")
+        }
+        var next = document
+        try next.captureSyncChanges()
+        session.pendingObject = nil
+        session.acknowledgedObjects = Array(Set(session.acknowledgedObjects).union([key])).sorted()
+        session.objectETags.removeValue(forKey: key)
+        session.acknowledgedPayloadDigest = payloadDigest; session.acknowledgedObjectKey = key
+        next.syncSession = session
+        try saveSyncDocument(next)
+    }
+
+    private func saveSyncDocument(_ next: PindoDocument) throws {
+        _ = try next.validated()
+        try io.write(DocumentCodec.encode(next), to: dataURL)
+        document = next; hasUnsavedChanges = false
+    }
+
     /// Pending committed note edits are captured before merging. The new CRDT
     /// and its projection are one data.json replacement, with no cursor window
     /// in which a crash could turn stale data back into new local edits.
-    public func applySync(_ payload: SyncPayload) throws {
+    public func applySync(_ payload: SyncPayload, acknowledgedObjects: [String]? = nil, legacyETags: [String: String]? = nil,
+                          objectETags: [String: String]? = nil) throws {
         guard !needsRecovery else { throw PindoError.recoveryRequired }
         _ = try payload.validated()
         var next = document
@@ -159,6 +288,12 @@ public final class PindoRepository {
         try next.captureSyncChanges()
         let projection = try next.syncState!.merge(payload)
         next.tasks = projection.tasks; next.groups = projection.groups
+        if var session = next.syncSession {
+            if let acknowledgedObjects { session.acknowledgedObjects = Array(Set(acknowledgedObjects)).sorted() }
+            if let legacyETags { session.legacyETags = legacyETags }
+            if let objectETags { session.objectETags = objectETags }
+            next.syncSession = session
+        } else if acknowledgedObjects != nil || legacyETags != nil || objectETags != nil { throw PindoError.invalidData("同步缓存缺少会话") }
         if let id = next.preferences.defaultGroupID, !next.groups.contains(where: { $0.id == id }) { next.preferences.defaultGroupID = nil }
         _ = try next.validated()
         if next != document || hasUnsavedChanges { try io.write(DocumentCodec.encode(next), to: dataURL) }
@@ -185,6 +320,7 @@ public final class PindoRepository {
         try flush()
         var target = try PindoDocument.fromSnapshot(archive.state(at: snapshotID))
         target.syncState = document.syncState
+        target.syncSession = document.syncSession; target.syncChannels = document.syncChannels
         try target.captureSyncChanges()
         guard target != document else { return }
         let next = try protectedArchive(replacingWith: target, beforeLabel: "恢复前的保护快照", afterLabel: "恢复后的快照", now: now)
@@ -204,7 +340,7 @@ public final class PindoRepository {
     /// Export current data or the verified backup. Export never rewrites the originals.
     public func exportDocument() throws -> Data {
         try flush()
-        var exported = document; exported.syncState = nil
+        var exported = document; exported.syncState = nil; exported.syncSession = nil; exported.syncChannels = nil
         return try DocumentCodec.encode(exported)
     }
     public func exportSnapshots() throws -> Data {
@@ -216,11 +352,13 @@ public final class PindoRepository {
         // history always belong to this installation, not to an imported file.
         guard case .object(var values) = try DocumentCodec.decode(JSONValue.self, from: data) else { throw PindoError.invalidData("导入资料格式无效") }
         values.removeValue(forKey: "syncState")
+        values.removeValue(forKey: "syncSession"); values.removeValue(forKey: "syncChannels")
         var imported = try DocumentCodec.decode(PindoDocument.self, from: DocumentCodec.encode(JSONValue.object(values))).validated()
         guard !needsRecovery else { throw PindoError.recoveryRequired }
         try flush()
         guard backupIsReadable else { throw PindoError.corruptFile("snapshots.json") }
         imported.syncState = document.syncState
+        imported.syncSession = document.syncSession; imported.syncChannels = document.syncChannels
         try imported.captureSyncChanges()
         let next = try protectedArchive(replacingWith: imported, beforeLabel: "导入前的保护快照", afterLabel: "导入后的快照")
         let transaction = RecoveryTransaction(document: imported, archive: next)

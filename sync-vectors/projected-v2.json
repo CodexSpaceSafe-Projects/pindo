@@ -1,0 +1,47 @@
+{
+  "groups": [{
+    "name": "工作 Work",
+    "id": "20000000-0000-4000-8000-000000000001",
+    "colorHex": "#228833"
+  }],
+  "tasks": [
+    {
+      "phase": "inProgress",
+      "note": "Android 离线备注\n另一个版本 ✅\n\n[Sync conflict]\n\nMac 离线备注\n保留中文 👩\u200d💻",
+      "completedAt": null,
+      "groupID": "20000000-0000-4000-8000-000000000001",
+      "startedAt": 37.5,
+      "plannedDay": {
+        "month": 11,
+        "year": 2026,
+        "day": 12
+      },
+      "isProgressExplicit": true,
+      "title": "显式进行中 / Explicit parent",
+      "parentID": null,
+      "createdAt": 0,
+      "id": "10000000-0000-4000-8000-000000000001",
+      "order": 0,
+      "updatedAt": 55
+    },
+    {
+      "phase": "pending",
+      "note": "",
+      "completedAt": null,
+      "groupID": "20000000-0000-4000-8000-000000000001",
+      "startedAt": null,
+      "plannedDay": {
+        "month": 11,
+        "year": 2026,
+        "day": 12
+      },
+      "isProgressExplicit": false,
+      "title": "子项 ✅",
+      "parentID": "10000000-0000-4000-8000-000000000001",
+      "createdAt": 12.5,
+      "id": "10000000-0000-4000-8000-000000000002",
+      "order": 1,
+      "updatedAt": 55
+    }
+  ]
+}

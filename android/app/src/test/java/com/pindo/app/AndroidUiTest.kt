@@ -13,6 +13,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.unit.Density
 import androidx.test.core.app.ApplicationProvider
 import java.io.File
@@ -146,6 +147,62 @@ class AndroidUiTest {
             assertTrue("Local protection backup must preserve the exact note",
                 largeNote == restoredStore.state.value.tasks.single().note)
         }
+    }
+
+    @Test fun restoredEditorOwnsItsLeaseBeforeForegroundSynchronizationCanStart() {
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val connection = CloudSettings(enabled = true, bucket = "test-bucket", accessKey = "test-access", secretKey = "test-secret",
+            recoveryKey = "01".repeat(32), createVault = true)
+        compose.runOnUiThread {
+            store.transportFactory = { _, _ ->
+                calls.incrementAndGet()
+                object : com.pindo.app.sync.SyncTransport {
+                    override fun listHeads(): List<com.pindo.app.sync.SyncRemoteHead> = error("The UI restoration gate must prevent networking")
+                    override fun listObjects(): List<com.pindo.app.sync.SyncRemoteHead> = emptyList()
+                    override fun download(key: String, expectedETag: String?): ByteArray = error("unexpected download")
+                    override fun upload(data: ByteArray, key: String) = error("unexpected upload")
+                    override fun cancel() {}
+                }
+            }
+            check(store.addTask("恢复编辑中的事项", "上次已保存的备注", LocalDate.now(), null, null))
+            store.startForeground()
+            assertTrue("onStart must not open the network gate", !store.networkUiReady())
+            assertTrue("Even connection probes wait for restored UI leases", !store.saveSettings(connection))
+            assertEquals(0, calls.get())
+            store.dismissError()
+        }
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent {
+            val state by store.state.collectAsState()
+            PindoTheme(state.preferences.theme) { Surface { PindoScreen(store) } }
+        }
+        try {
+            compose.onNodeWithTag("dashboard").performScrollToNode(hasText("恢复编辑中的事项"))
+            compose.onNodeWithText("恢复编辑中的事项").performClick()
+            val draft = "旋转与恢复之后仍未提交的备注"
+            compose.onNodeWithTag("task-note").performScrollTo().performTextReplacement(draft)
+            compose.runOnUiThread { store.stopForeground() }
+            restoration.emulateSavedInstanceStateRestore()
+            compose.onNodeWithTag("task-note").performScrollTo().assertTextEquals(draft)
+            compose.runOnUiThread {
+                store.startForeground()
+                assertTrue(!store.networkUiReady())
+            }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertTrue("The restored editor lease survives the root SideEffect", !store.networkUiReady())
+                assertTrue(!store.saveSettings(connection))
+                assertEquals(0, calls.get())
+                assertEquals("上次已保存的备注", store.state.value.tasks.single().note)
+                val nested = store.beginEditing()
+                store.endEditing(nested)
+                assertTrue("Releasing a nested editor cannot release the restored editor", !store.networkUiReady())
+            }
+            compose.onNodeWithContentDescription("关闭编辑").performClick()
+            compose.onNodeWithText("放弃修改").performClick()
+            compose.onNodeWithTag("task-editor").assertDoesNotExist()
+            compose.runOnIdle { assertTrue(store.networkUiReady()); assertEquals(0, calls.get()) }
+        } finally { compose.runOnUiThread { store.stopForeground() } }
     }
 
     private fun showApp(fontScale: Float = 1f) {

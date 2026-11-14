@@ -1,0 +1,363 @@
+{
+  "records": {
+    "task:10000000-0000-4000-8000-000000000001": {
+      "notes": [
+        {
+          "stamp": {
+            "counter": 4,
+            "deviceID": "00000000-0000-4000-8000-000000000102"
+          },
+          "value": "Android 离线备注\n另一个版本 ✅",
+          "seen": {
+            "00000000-0000-4000-8000-000000000002": 2,
+            "00000000-0000-4000-8000-000000000001": 3
+          }
+        },
+        {
+          "stamp": {
+            "counter": 4,
+            "deviceID": "00000000-0000-4000-8000-000000000101"
+          },
+          "value": "Mac 离线备注\n保留中文 👩\u200d💻",
+          "seen": {
+            "00000000-0000-4000-8000-000000000002": 2,
+            "00000000-0000-4000-8000-000000000001": 3
+          }
+        }
+      ],
+      "fields": {
+        "phase": {
+          "stamp": {
+            "counter": 4,
+            "deviceID": "00000000-0000-4000-8000-000000000101"
+          },
+          "value": "inProgress"
+        },
+        "lifecycle": {
+          "stamp": {
+            "counter": 4,
+            "deviceID": "00000000-0000-4000-8000-000000000101"
+          },
+          "value": {
+            "phase": "inProgress",
+            "completedAt": null,
+            "startedAt": 37.5,
+            "isProgressExplicit": true
+          }
+        },
+        "$alive": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": true
+        },
+        "createdAt": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": 0
+        },
+        "completedAt": {
+          "stamp": {
+            "counter": 4,
+            "deviceID": "00000000-0000-4000-8000-000000000101"
+          },
+          "value": null
+        },
+        "groupID": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": "20000000-0000-4000-8000-000000000001"
+        },
+        "startedAt": {
+          "stamp": {
+            "counter": 4,
+            "deviceID": "00000000-0000-4000-8000-000000000101"
+          },
+          "value": 37.5
+        },
+        "plannedDay": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": {
+            "month": 11,
+            "year": 2026,
+            "day": 12
+          }
+        },
+        "title": {
+          "stamp": {
+            "counter": 4,
+            "deviceID": "00000000-0000-4000-8000-000000000101"
+          },
+          "value": "显式进行中 / Explicit parent"
+        },
+        "parentID": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": null
+        },
+        "order": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": 0
+        },
+        "updatedAt": {
+          "stamp": {
+            "counter": 4,
+            "deviceID": "00000000-0000-4000-8000-000000000102"
+          },
+          "value": 55
+        }
+      }
+    },
+    "task:10000000-0000-4000-8000-000000000003": {
+      "notes": [{
+        "stamp": {
+          "counter": 1,
+          "deviceID": "00000000-0000-4000-8000-000000000001"
+        },
+        "value": "",
+        "seen": {}
+      }],
+      "fields": {
+        "phase": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": "pending"
+        },
+        "lifecycle": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": null
+        },
+        "$alive": {
+          "stamp": {
+            "counter": 3,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": false
+        },
+        "createdAt": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": 30
+        },
+        "completedAt": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": null
+        },
+        "groupID": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": null
+        },
+        "startedAt": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": null
+        },
+        "plannedDay": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": {
+            "month": 11,
+            "year": 2026,
+            "day": 12
+          }
+        },
+        "title": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": "Deleted"
+        },
+        "parentID": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": null
+        },
+        "order": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": 2
+        },
+        "updatedAt": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": 30
+        }
+      }
+    },
+    "task:10000000-0000-4000-8000-000000000002": {
+      "notes": [{
+        "stamp": {
+          "counter": 1,
+          "deviceID": "00000000-0000-4000-8000-000000000001"
+        },
+        "value": "",
+        "seen": {}
+      }],
+      "fields": {
+        "phase": {
+          "stamp": {
+            "counter": 4,
+            "deviceID": "00000000-0000-4000-8000-000000000102"
+          },
+          "value": "pending"
+        },
+        "lifecycle": {
+          "stamp": {
+            "counter": 4,
+            "deviceID": "00000000-0000-4000-8000-000000000102"
+          },
+          "value": {
+            "phase": "pending",
+            "completedAt": null,
+            "startedAt": null,
+            "isProgressExplicit": false
+          }
+        },
+        "$alive": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": true
+        },
+        "createdAt": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": 12.5
+        },
+        "completedAt": {
+          "stamp": {
+            "counter": 4,
+            "deviceID": "00000000-0000-4000-8000-000000000102"
+          },
+          "value": null
+        },
+        "groupID": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": "20000000-0000-4000-8000-000000000001"
+        },
+        "startedAt": {
+          "stamp": {
+            "counter": 4,
+            "deviceID": "00000000-0000-4000-8000-000000000102"
+          },
+          "value": null
+        },
+        "plannedDay": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": {
+            "month": 11,
+            "year": 2026,
+            "day": 12
+          }
+        },
+        "title": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": "子项 ✅"
+        },
+        "parentID": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": "10000000-0000-4000-8000-000000000001"
+        },
+        "order": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": 1
+        },
+        "updatedAt": {
+          "stamp": {
+            "counter": 4,
+            "deviceID": "00000000-0000-4000-8000-000000000102"
+          },
+          "value": 55
+        }
+      }
+    },
+    "group:20000000-0000-4000-8000-000000000001": {
+      "notes": [],
+      "fields": {
+        "$alive": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": true
+        },
+        "name": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": "工作 Work"
+        },
+        "colorHex": {
+          "stamp": {
+            "counter": 1,
+            "deviceID": "00000000-0000-4000-8000-000000000001"
+          },
+          "value": "#228833"
+        }
+      }
+    }
+  },
+  "version": 2,
+  "seen": {
+    "00000000-0000-4000-8000-000000000002": 2,
+    "00000000-0000-4000-8000-000000000101": 4,
+    "00000000-0000-4000-8000-000000000102": 4,
+    "00000000-0000-4000-8000-000000000001": 3
+  }
+}

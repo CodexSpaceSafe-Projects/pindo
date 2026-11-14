@@ -24,7 +24,7 @@ open dist/Pindo.app
 
 Android 在 [Build Android app](https://github.com/CodexSpaceSafe-Projects/pindo/actions/workflows/android.yml) 运行单元测试、lint 和构建。`main` 构建成功后，在 [Android 下载列表](https://github.com/CodexSpaceSafe-Projects/pindo/releases?q=android-build-&expanded=true) 自动发布 `Pindo Android (build 构建号)`，点击附件 `Pindo-Android-debug.apk` 即可直接下载，不需要 GitHub 登录或解压。Android 使用独立的 `android-build-构建号` 标签，不影响 macOS 的 Latest。安装包使用调试签名，尚未作为应用商店正式版本发布；最低 Android 8.0（API 26）。Actions 的 Artifacts 仍保留 14 天作为备用，需要 GitHub 登录。本地安装 JDK 17 和 Android SDK 35 后，在 `android/` 运行 `./gradlew testDebugUnitTest lintDebug assembleDebug`。
 
-Android 0.2 提供「清单／日历／管理／设置」四个页面，包括今日进度、月历计数、批量操作、Markdown 预览、主题切换、分组编辑与保护备份。[安卓使用说明](android/README.md)
+Android 0.3 提供「清单／日历／管理／设置」四个页面，包括今日进度、月历计数、批量操作、Markdown 预览、主题切换、分组编辑与保护备份。[安卓使用说明](android/README.md)
 
 每次推送 `main` 或在 `main` 上手动运行 [Actions](https://github.com/CodexSpaceSafe-Projects/pindo/actions/workflows/macos.yml)，通过测试、编译和打包后，都会自动创建 [GitHub Release](https://github.com/CodexSpaceSafe-Projects/pindo/releases/latest)。无需手动打标签：自动发布的标签为 `build-构建编号`，标题为 `Pindo 版本号 (build 构建编号)`，并附上对应提交和构建记录。
 
@@ -45,7 +45,7 @@ git push origin v0.1.0
 
 ## 使用
 
-- **缤纷云同步**：在「设置 → 云同步」填写自己的私有存储桶、子用户凭据及恢复密钥。默认在客户端进行 AES-256-GCM 加密，两端使用同一恢复密钥；凭据和密钥分别进入 macOS Keychain、Android Keystore，不进入云端或导出资料。离线编辑先保存到本地，前台定时检查并合并变化；详情、免费额度和验收范围见 [同步说明](docs/SYNC.md)。
+- **缤纷云同步 v2**：macOS 与 Android 使用同一私有存储桶和恢复密钥，以 AES-256-GCM 加密的不可变检查点同步。待上传字节先存入本地发件箱，上传后读回确认；离线编辑、并发备注和删除墓碑保留。同库重连继续原历史，切库保存独立副本。升级先确认 v2 资料，再让旧协议客户端明确停止同步。凭据仅保存在 Keychain／Keystore；创建与加入、容量上限及实机验收见 [同步说明](docs/SYNC.md)，工程计划与故障矩阵见 [同步重设计](docs/SYNC-REDESIGN.md)。
 
 - **自适应清单**：拖动窗口边框调整大小，重新打开时保留尺寸。顶部保留 pin 和设置，待办占据主要区域；日期切换、日历和带下拉箭头的分组筛选位于底部。添加栏一直显示，点击文字区或上下留白均可聚焦输入；右侧可独立选择分组，Return 提交。
 - **日期概览**：点击底部日期展开月历，每天以橙色显示未完成数量、绿色显示已完成数量，按计划日期统计并跟随分组筛选；可以切换月份或回到今天。

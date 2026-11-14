@@ -241,6 +241,9 @@ struct NoteView: View {
         }
     }
     var body: some View {
+        SyncEditingScope(model: model, taskID: task.id, onUnavailable: back) { noteContent }
+    }
+    private var noteContent: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 5) {
                 TaskTitleEditor(text: title, fontChoice: model.fontPreferences.task, onSubmit: { model.flush() })
@@ -268,9 +271,13 @@ struct EditTaskView: View {
     @State private var day: Date
     @State private var groupID: UUID?
     @State private var confirmDelete = false
+    @State private var original: TodoItem
     var dismiss: (() -> Void)? = nil
-    init(model: AppModel, task: TodoItem, dismiss: (() -> Void)? = nil) { self.model = model; self.task = task; self.dismiss = dismiss; _title = State(initialValue: task.title); _day = State(initialValue: task.plannedDay.date()); _groupID = State(initialValue: task.groupID) }
+    init(model: AppModel, task: TodoItem, dismiss: (() -> Void)? = nil) { self.model = model; self.task = task; self.dismiss = dismiss; _title = State(initialValue: task.title); _day = State(initialValue: task.plannedDay.date()); _groupID = State(initialValue: task.groupID); _original = State(initialValue: task) }
     var body: some View {
+        SyncEditingScope(model: model, taskID: task.id, onUnavailable: close) { editorContent }
+    }
+    private var editorContent: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text(l10n("修改待办")).font(.headline)
             TextField(l10n("事项内容"), text: $title)
@@ -291,8 +298,8 @@ struct EditTaskView: View {
                 Button(l10n("删除"), role: .destructive) { model.delete(task); close() }
             } message: { Text(l10n("将删除 %ld 条待办及其备注。", model.document.descendantIDs(including: [task.id]).count)) }
     }
-    private func close() { if let dismiss { dismiss() } else { model.editingID = nil } }
-    private func save() { if model.edit(task.id, title: title, day: DayKey(day), groupID: groupID) { close() } }
+    private func close() { if let dismiss { dismiss() } else { model.editingID = nil }; model.cloudSync.editingDidEnd() }
+    private func save() { if model.edit(task.id, title: title, day: DayKey(day), groupID: groupID, original: original) { close() } }
 }
 
 struct AddSubtaskView: View {
@@ -303,6 +310,9 @@ struct AddSubtaskView: View {
     @State private var title = ""
     @FocusState private var focused: Bool
     var body: some View {
+        SyncEditingScope(model: model, onUnavailable: close) { editorContent }
+    }
+    private var editorContent: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(l10n("添加子项")).font(.headline)
             Text(parent.title).font(model.fontPreferences.task.swiftUIFont(defaultSize: 13)).foregroundStyle(.secondary).lineLimit(2)

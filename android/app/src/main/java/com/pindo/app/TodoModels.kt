@@ -2,34 +2,64 @@ package com.pindo.app
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.math.BigDecimal
+import java.time.DateTimeException
 import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
 
 data class Todo(val id: String, val title: String, val note: String, val day: LocalDate,
-                val groupID: String?, val parentID: String?, val phase: String, val order: Int,
-                val json: JSONObject) {
+                val groupID: String?, val parentID: String?, val phase: String, val order: Long,
+                val json: JSONObject, val isProgressExplicit: Boolean? = null) {
     companion object {
         fun from(json: JSONObject): Todo {
             val day = json.getJSONObject("plannedDay")
-            return Todo(json.getString("id").lowercase(), json.getString("title"), json.optString("note"),
-                LocalDate.of(day.getInt("year"), day.getInt("month"), day.getInt("day")),
-                json.optionalID("groupID"), json.optionalID("parentID"), json.getString("phase"),
-                json.getInt("order"), json)
+            if (!json.isNull("isProgressExplicit")) require(json.get("isProgressExplicit") is Boolean) { "事项进度来源无效。" }
+            return Todo(json.requiredString("id").lowercase(), json.requiredString("title"),
+                if (json.has("note")) json.requiredString("note") else "", validatedTaskDay(day),
+                json.optionalID("groupID"), json.optionalID("parentID"), json.requiredString("phase"),
+                validatedTaskOrder(json.get("order")), json,
+                if (json.isNull("isProgressExplicit")) null else json.getBoolean("isProgressExplicit"))
         }
     }
 }
 
 data class TodoGroup(val id: String, val name: String, val color: String) {
     companion object {
-        fun from(json: JSONObject) = TodoGroup(json.getString("id").lowercase(), json.getString("name"), json.getString("colorHex"))
+        fun from(json: JSONObject) = TodoGroup(json.requiredString("id").lowercase(), json.requiredString("name"), json.requiredString("colorHex"))
     }
 }
 
-internal fun JSONObject.optionalID(key: String): String? = if (isNull(key) || !has(key)) null else getString(key).lowercase()
+internal fun JSONObject.requiredString(key: String): String {
+    val value = get(key)
+    require(value is String) { "事项文字或标识无效。" }
+    return value
+}
+internal fun JSONObject.optionalID(key: String): String? = if (isNull(key) || !has(key)) null else requiredString(key).lowercase()
 internal fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
 internal fun List<JSONObject>.jsonArray(): JSONArray = JSONArray().also { a -> forEach(a::put) }
 internal fun swiftNow(): Double = Instant.now().toEpochMilli() / 1000.0 - 978307200.0
+internal const val MAX_TASK_ORDER = 9_007_199_254_740_991L
+internal fun validatedTaskOrder(value: Any?): Long {
+    val order = exactLong(value, "事项排序无效。")
+    require(order in -MAX_TASK_ORDER..MAX_TASK_ORDER) { "事项排序超出跨端支持的范围。" }
+    return order
+}
+internal fun validatedTaskDay(value: JSONObject): LocalDate {
+    val year = exactLong(value.get("year"), "事项日期无效。")
+    val month = exactLong(value.get("month"), "事项日期无效。")
+    val day = exactLong(value.get("day"), "事项日期无效。")
+    require(year in 1..9999 && month in 1..12 && day in 1..31) { "事项日期无效。" }
+    return try { LocalDate.of(year.toInt(), month.toInt(), day.toInt()) }
+    catch (_: DateTimeException) { throw IllegalArgumentException("事项日期无效。") }
+}
+private fun exactLong(value: Any?, message: String): Long {
+    require(value is Number) { message }
+    val order = try { BigDecimal(value.toString()).longValueExact() }
+    catch (_: NumberFormatException) { throw IllegalArgumentException(message) }
+    catch (_: ArithmeticException) { throw IllegalArgumentException(message) }
+    return order
+}
 
 sealed class TodoBatchAction {
     data class SetPhase(val phase: String) : TodoBatchAction()
@@ -39,8 +69,13 @@ sealed class TodoBatchAction {
 }
 
 object TodoRules {
-    fun newTask(title: String, note: String, day: LocalDate, groupID: String?, parentID: String?, order: Int): JSONObject {
+    fun newTask(title: String, note: String, day: LocalDate, groupID: String?, parentID: String?, order: Int): JSONObject =
+        newTask(title, note, day, groupID, parentID, order.toLong())
+
+    fun newTask(title: String, note: String, day: LocalDate, groupID: String?, parentID: String?, order: Long): JSONObject {
         require(title.isNotBlank()) { "请填写事项内容。" }
+        require(day.year in 1..9999) { "事项日期无效。" }
+        validatedTaskOrder(order)
         val now = swiftNow()
         return JSONObject().put("id", UUID.randomUUID().toString()).put("title", title.trim()).put("note", note)
             .put("plannedDay", dayJSON(day)).put("groupID", groupID ?: JSONObject.NULL)
@@ -80,6 +115,8 @@ object TodoRules {
     fun moveTask(tasks: JSONArray, id: String, parentID: String?): JSONArray {
         val items = tasks.objects().map { JSONObject(it.toString()) }
         val parsed = items.map(Todo::from)
+        val previousChildren = tasks.objects().filter { it.optionalID("parentID") != null }
+            .groupBy { it.optionalID("parentID")!! }
         val taskID = id.lowercase()
         val newParent = parentID?.lowercase()
         val item = items.find { it.getString("id").equals(taskID, true) } ?: error("找不到这条待办。")
@@ -106,7 +143,7 @@ object TodoRules {
             return count
         }
         affected.sortedWith(compareByDescending<String>(::depth).thenBy { it }).forEach { ancestor ->
-            byID[ancestor]?.let { reconcileNode(it, children[ancestor].orEmpty()) }
+            byID[ancestor]?.let { reconcileNode(it, children[ancestor].orEmpty(), previousChildren[ancestor].orEmpty()) }
         }
         return items.jsonArray()
     }
@@ -124,12 +161,15 @@ object TodoRules {
         when (action) {
             TodoBatchAction.Delete -> {
                 val removed = deletionIDs(parsed, selected)
-                return reconcile(items.filter { it.getString("id").lowercase() !in removed }.jsonArray())
+                return reconcile(items.filter { it.getString("id").lowercase() !in removed }.jsonArray(), tasks)
             }
             is TodoBatchAction.SetPhase -> {
                 require(action.phase in listOf("pending", "inProgress", "completed")) { "事项状态无效。" }
                 val byID = items.associateBy { it.getString("id").lowercase() }
                 val children = items.filter { it.optionalID("parentID") != null }.groupBy { it.optionalID("parentID")!! }
+                val previousChildren = tasks.objects().filter { it.optionalID("parentID") != null }
+                    .groupBy { it.optionalID("parentID")!! }
+                val selectedForPhase = if (action.phase == "inProgress") selected else deletionIDs(parsed, selected)
                 fun depth(item: Todo): Int {
                     var parent = item.parentID
                     val visited = mutableSetOf(item.id)
@@ -145,12 +185,13 @@ object TodoRules {
                 for (task in parsed.sortedWith(compareByDescending<Todo>(::depth).thenBy { it.id })) {
                     val item = byID.getValue(task.id)
                     val before = item.getString("phase")
-                    if (task.id in dirty) reconcileNode(item, children[task.id].orEmpty())
-                    if (task.id in selected && item.getString("phase") != action.phase) {
+                    if (task.id in selectedForPhase && item.getString("phase") != action.phase) {
                         require(action.phase != "completed" || children[task.id].orEmpty().all { it.getString("phase") == "completed" }) {
                             "请同时选择未完成的子项，或先完成所有子项。"
                         }
-                        setPhaseValue(item, action.phase)
+                        setPhaseValue(item, action.phase, explicit = true)
+                    } else if (task.id !in selectedForPhase && task.id in dirty) {
+                        reconcileNode(item, children[task.id].orEmpty(), previousChildren[task.id].orEmpty())
                     }
                     if (item.getString("phase") != before) task.parentID?.let(dirty::add)
                 }
@@ -170,37 +211,50 @@ object TodoRules {
         return items.jsonArray()
     }
 
-    fun reconcile(tasks: JSONArray): JSONArray {
+    fun reconcile(tasks: JSONArray, previous: JSONArray? = null): JSONArray {
         val items = tasks.objects().map { JSONObject(it.toString()) }
         val byID = items.associateBy { it.getString("id").lowercase() }
+        val previousChildren = (previous ?: tasks).objects().filter { it.optionalID("parentID") != null }
+            .groupBy { it.optionalID("parentID")!! }
         fun visit(id: String, seen: MutableSet<String>) {
             require(seen.add(id)) { "待办层级存在循环。" }
             val children = items.filter { it.optionalID("parentID") == id }
             children.forEach { visit(it.getString("id").lowercase(), seen) }
-            reconcileNode(byID.getValue(id), children)
+            reconcileNode(byID.getValue(id), children, previousChildren[id].orEmpty())
             seen.remove(id)
         }
         items.filter { it.optionalID("parentID") == null }.forEach { visit(it.getString("id").lowercase(), mutableSetOf()) }
         return items.jsonArray()
     }
 
-    private fun reconcileNode(item: JSONObject, children: List<JSONObject>) {
-        if (children.isEmpty()) return
+    private fun reconcileNode(item: JSONObject, children: List<JSONObject>, previousChildren: List<JSONObject> = children) {
+        if (item.getString("phase") == "inProgress" && item.isNull("isProgressExplicit")) {
+            // Legacy records have no source marker. Preserve a parent's own start
+            // if it had no child progress before this operation, as on macOS.
+            item.put("isProgressExplicit", previousChildren.all { it.getString("phase") == "pending" })
+        }
+        val explicit = item.optBoolean("isProgressExplicit", false)
         val phase = when {
+            children.isEmpty() -> {
+                if (item.getString("phase") != "inProgress" || explicit) return
+                "pending"
+            }
             children.all { it.getString("phase") == "completed" } -> "completed"
             children.any { it.getString("phase") == "inProgress" } -> "inProgress"
-            item.getString("phase") == "completed" -> "pending"
-            else -> item.getString("phase")
+            explicit -> "inProgress"
+            else -> "pending"
         }
         setPhaseValue(item, phase)
     }
 
-    private fun setPhaseValue(item: JSONObject, phase: String) {
-        if (item.optString("phase") == phase) return
+    private fun setPhaseValue(item: JSONObject, phase: String, explicit: Boolean = false) {
+        val previous = item.getString("phase")
+        if (previous == phase) return
         val now = swiftNow()
         item.put("phase", phase).put("updatedAt", now)
+        if (phase == "inProgress") item.put("isProgressExplicit", explicit) else item.remove("isProgressExplicit")
         if (phase == "completed") item.put("completedAt", now) else item.remove("completedAt")
-        if (phase == "inProgress" && item.isNull("startedAt")) item.put("startedAt", now)
-        if (phase == "pending") item.remove("startedAt")
+        if (phase == "inProgress") item.put("startedAt", now)
+        else if (phase == "pending" || previous != "inProgress") item.remove("startedAt")
     }
 }
