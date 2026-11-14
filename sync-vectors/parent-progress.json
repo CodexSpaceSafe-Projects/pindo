@@ -1,0 +1,103 @@
+{
+  "tasks": [
+    {
+      "id": "10000000-0000-4000-8000-000000000001",
+      "title": "父项",
+      "note": "备注",
+      "plannedDay": {
+        "year": 2026,
+        "month": 11,
+        "day": 14
+      },
+      "parentID": null,
+      "phase": "pending",
+      "order": 0,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "startedAt": null,
+      "completedAt": null
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000002",
+      "title": "子项",
+      "note": "备注",
+      "plannedDay": {
+        "year": 2026,
+        "month": 11,
+        "day": 14
+      },
+      "parentID": "10000000-0000-4000-8000-000000000001",
+      "phase": "pending",
+      "order": 1,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "startedAt": null,
+      "completedAt": null
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000003",
+      "title": "已完成孙项",
+      "note": "备注",
+      "plannedDay": {
+        "year": 2026,
+        "month": 11,
+        "day": 14
+      },
+      "parentID": "10000000-0000-4000-8000-000000000002",
+      "phase": "completed",
+      "order": 2,
+      "createdAt": 1,
+      "updatedAt": 10,
+      "startedAt": null,
+      "completedAt": 10
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000004",
+      "title": "未开始子项",
+      "note": "备注",
+      "plannedDay": {
+        "year": 2026,
+        "month": 11,
+        "day": 14
+      },
+      "parentID": "10000000-0000-4000-8000-000000000001",
+      "phase": "pending",
+      "order": 3,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "startedAt": null,
+      "completedAt": null
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000005",
+      "title": "独立事项",
+      "note": "备注",
+      "plannedDay": {
+        "year": 2026,
+        "month": 11,
+        "day": 14
+      },
+      "parentID": null,
+      "phase": "pending",
+      "order": 4,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "startedAt": null,
+      "completedAt": null
+    }
+  ],
+  "expectedPhases": {
+    "10000000-0000-4000-8000-000000000001": "inProgress",
+    "10000000-0000-4000-8000-000000000002": "completed",
+    "10000000-0000-4000-8000-000000000003": "completed",
+    "10000000-0000-4000-8000-000000000004": "pending",
+    "10000000-0000-4000-8000-000000000005": "pending"
+  },
+  "expectedUpdatedAt": {
+    "10000000-0000-4000-8000-000000000001": 10,
+    "10000000-0000-4000-8000-000000000002": 10,
+    "10000000-0000-4000-8000-000000000003": 10,
+    "10000000-0000-4000-8000-000000000004": 1,
+    "10000000-0000-4000-8000-000000000005": 1
+  }
+}

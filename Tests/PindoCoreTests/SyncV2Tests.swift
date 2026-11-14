@@ -128,6 +128,32 @@ final class SyncV2Tests: XCTestCase {
         XCTAssertEqual(item.isProgressExplicit, false)
     }
 
+    func testSharedPartialCompletionVectorRepairsAncestorsWithoutRewritingRegisters() throws {
+        struct Vector: Decodable {
+            let tasks: [TodoItem]
+            let expectedPhases: [String: TaskPhase]
+            let expectedUpdatedAt: [String: Double]
+        }
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let vector = try DocumentCodec.decode(Vector.self, from: Data(contentsOf: root.appendingPathComponent("sync-vectors/parent-progress.json")))
+        for version in [1, 2] {
+            var replica = SyncReplica(deviceID: actorA, version: version)
+            try replica.capture(tasks: vector.tasks, groups: [])
+            let raw = replica.payload
+            let projected = try replica.payload.projected().tasks
+            for task in projected {
+                let id = task.id.uuidString.lowercased()
+                XCTAssertEqual(task.phase, vector.expectedPhases[id])
+                XCTAssertEqual(task.updatedAt.timeIntervalSinceReferenceDate, vector.expectedUpdatedAt[id])
+            }
+            XCTAssertEqual(projected[0].startedAt, Date(timeIntervalSinceReferenceDate: 10))
+            XCTAssertNil(projected[0].completedAt)
+            if version == 2 { XCTAssertEqual(projected[0].isProgressExplicit, false) }
+            XCTAssertEqual(try replica.payload.projected().tasks, projected)
+            XCTAssertEqual(replica.payload, raw)
+        }
+    }
+
     func testLifecycleValidationRejectsTornMirrorsAndMalformedEvents() throws {
         let payload = try pair(version: 2).0.payload
         var torn = payload

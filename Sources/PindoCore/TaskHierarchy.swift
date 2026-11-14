@@ -225,14 +225,17 @@ private extension PindoDocument {
             guard let index = tree.positions[id] else { continue }
             if selected.contains(id) {
                 // 由下至上应用目标状态，每条事项只写入一次。
-                guard tasks[index].phase != phase else { continue }
-                if phase == .completed, (tree.children[id] ?? []).contains(where: { tasks[$0].phase != .completed }) {
-                    throw PindoError.incompleteChildren
+                if tasks[index].phase != phase {
+                    if phase == .completed, (tree.children[id] ?? []).contains(where: { tasks[$0].phase != .completed }) {
+                        throw PindoError.incompleteChildren
+                    }
+                    setRawPhase(phase, at: index, now: now, explicit: true)
                 }
-                setRawPhase(phase, at: index, now: now, explicit: true)
             } else {
-                guard dirtyParents.contains(id), reconcileParent(id, tree: tree, now: now) else { continue }
+                guard dirtyParents.contains(id) else { continue }
+                reconcileParent(id, tree: tree, now: now)
             }
+            // Even an unchanged phase can sit below a stale ancestor from older data.
             if let parent = tasks[index].parentID { dirtyParents.insert(parent) }
         }
     }
@@ -264,7 +267,7 @@ private extension PindoDocument {
             guard tasks[index].phase == .inProgress, tasks[index].isProgressExplicit != true else { return false }
             phase = .pending
         } else if children.allSatisfy({ tasks[$0].phase == .completed }) { phase = .completed }
-        else if children.contains(where: { tasks[$0].phase == .inProgress }) { phase = .inProgress }
+        else if children.contains(where: { tasks[$0].phase != .pending }) { phase = .inProgress }
         else { phase = tasks[index].isProgressExplicit == true ? .inProgress : .pending }
         guard tasks[index].phase != phase else { return false }
         setRawPhase(phase, at: index, now: now)

@@ -246,7 +246,7 @@ final class SyncStateTests: XCTestCase {
         XCTAssertEqual(repo.document.tasks.first(where: { $0.id == itemID })?.startedAt, date.addingTimeInterval(10))
     }
 
-    func testSyncDoesNotTurnPartialCompletionIntoInProgress() throws {
+    func testSyncPreservesProgressFromPartialCompletion() throws {
         var document = initial()
         let child = TodoItem(title: "已完成子项", parentID: itemID, now: date)
         let sibling = TodoItem(title: "未开始子项", parentID: itemID, now: date)
@@ -257,8 +257,8 @@ final class SyncStateTests: XCTestCase {
         try repo.enableSync(deviceID: aID)
         try repo.applySync(XCTUnwrap(repo.syncPayload))
         let parent = try XCTUnwrap(repo.document.tasks.first(where: { $0.id == itemID }))
-        XCTAssertEqual(parent.phase, .pending)
-        XCTAssertNil(parent.startedAt)
+        XCTAssertEqual(parent.phase, .inProgress)
+        XCTAssertEqual(parent.startedAt, date.addingTimeInterval(10))
     }
 
     func testConcurrentDuplicateGroupNamesNormalizeWithoutRewritingRegisters() throws {

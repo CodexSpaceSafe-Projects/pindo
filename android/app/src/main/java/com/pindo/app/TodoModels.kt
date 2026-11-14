@@ -184,7 +184,6 @@ object TodoRules {
                 val dirty = mutableSetOf<String>()
                 for (task in parsed.sortedWith(compareByDescending<Todo>(::depth).thenBy { it.id })) {
                     val item = byID.getValue(task.id)
-                    val before = item.getString("phase")
                     if (task.id in selectedForPhase && item.getString("phase") != action.phase) {
                         require(action.phase != "completed" || children[task.id].orEmpty().all { it.getString("phase") == "completed" }) {
                             "请同时选择未完成的子项，或先完成所有子项。"
@@ -193,7 +192,8 @@ object TodoRules {
                     } else if (task.id !in selectedForPhase && task.id in dirty) {
                         reconcileNode(item, children[task.id].orEmpty(), previousChildren[task.id].orEmpty())
                     }
-                    if (item.getString("phase") != before) task.parentID?.let(dirty::add)
+                    // Reconcile the whole chain even if an intermediate phase is unchanged.
+                    if (task.id in selectedForPhase || task.id in dirty) task.parentID?.let(dirty::add)
                 }
                 return items.jsonArray()
             }
@@ -240,7 +240,7 @@ object TodoRules {
                 "pending"
             }
             children.all { it.getString("phase") == "completed" } -> "completed"
-            children.any { it.getString("phase") == "inProgress" } -> "inProgress"
+            children.any { it.getString("phase") != "pending" } -> "inProgress"
             explicit -> "inProgress"
             else -> "pending"
         }

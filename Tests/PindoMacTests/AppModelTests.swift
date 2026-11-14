@@ -222,6 +222,38 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.saveState, .failed)
     }
 
+    @MainActor func testChildStatusClicksPersistPartialAncestorProgressAtomically() async throws {
+        let model = try makeModel(), day = model.today
+        XCTAssertTrue(model.addTask(title: "父项", day: day, groupID: nil))
+        let root = try XCTUnwrap(model.document.tasks.last)
+        XCTAssertTrue(model.addTask(title: "子项", day: day, groupID: nil, parentID: root.id))
+        let child = try XCTUnwrap(model.document.tasks.last)
+        XCTAssertTrue(model.addTask(title: "孙项", day: day, groupID: nil, parentID: child.id))
+        let grandchild = try XCTUnwrap(model.document.tasks.last)
+        XCTAssertTrue(model.addTask(title: "未开始子项", day: day, groupID: nil, parentID: root.id))
+        let sibling = try XCTUnwrap(model.document.tasks.last)
+        var feedback: [TaskFeedback] = []
+        model.playFeedback = { feedback.append($0) }
+        let start = root.createdAt.addingTimeInterval(1)
+
+        model.advancePhase(grandchild, now: start)
+        model.advancePhase(grandchild, now: start.addingTimeInterval(1))
+        XCTAssertEqual(model.task(root.id)?.phase, .inProgress)
+        XCTAssertEqual(model.task(root.id)?.startedAt, start)
+        XCTAssertNil(model.task(root.id)?.completedAt)
+        XCTAssertEqual(model.task(child.id)?.phase, .completed)
+        XCTAssertEqual(model.task(sibling.id), sibling)
+        XCTAssertEqual(feedback, [.started, .completed])
+        XCTAssertEqual(try PindoRepository(directory: model.repository.directory).document, model.document)
+
+        let before = model.document
+        try FileManager.default.removeItem(at: model.repository.dataURL)
+        try FileManager.default.createDirectory(at: model.repository.dataURL, withIntermediateDirectories: false)
+        XCTAssertFalse(model.applyBatch(.setPhase(.completed), to: [sibling.id]))
+        XCTAssertEqual(model.document, before)
+        XCTAssertEqual(feedback, [.started, .completed])
+    }
+
     @MainActor func testParentStatusClickStartsThenCompletesAndReopensTheWholeBranch() async throws {
         let model = try makeModel(), day = model.today
         XCTAssertTrue(model.addTask(title: "父项", day: day, groupID: nil))
@@ -435,7 +467,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.outlineSections.unfinished.map(\.depth), [0, 1, 2, 1])
         XCTAssertTrue(model.applyBatch(.setPhase(.completed), to: matches))
         XCTAssertEqual(model.task(child.id)?.phase, .completed)
-        XCTAssertEqual(model.task(root.id)?.phase, .pending)
+        XCTAssertEqual(model.task(root.id)?.phase, .inProgress)
         XCTAssertEqual(model.outlineSections.unfinished.count, 4)
         XCTAssertTrue(model.outlineSections.completed.isEmpty)
 

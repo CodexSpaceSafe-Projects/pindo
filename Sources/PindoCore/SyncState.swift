@@ -184,7 +184,7 @@ public struct SyncPayload: Codable, Equatable, Sendable {
                 let phase: TaskPhase
                 if indices.isEmpty { phase = tasks[i].phase == .inProgress && !explicit ? .pending : tasks[i].phase }
                 else if indices.allSatisfy({ tasks[$0].phase == .completed }) { phase = .completed }
-                else if explicit || indices.contains(where: { tasks[$0].phase == .inProgress }) { phase = .inProgress }
+                else if explicit || indices.contains(where: { tasks[$0].phase != .pending }) { phase = .inProgress }
                 else { phase = .pending }
                 if phase != tasks[i].phase {
                     let date = max(tasks[i].updatedAt, indices.map { tasks[$0].updatedAt }.max() ?? tasks[i].updatedAt)
@@ -201,7 +201,7 @@ public struct SyncPayload: Codable, Equatable, Sendable {
             guard let indices = children[tasks[i].id], !indices.isEmpty else { continue }
             let phase: TaskPhase
             if indices.allSatisfy({ tasks[$0].phase == .completed }) { phase = .completed }
-            else if indices.contains(where: { tasks[$0].phase == .inProgress }) { phase = .inProgress }
+            else if indices.contains(where: { tasks[$0].phase != .pending }) { phase = .inProgress }
             else { phase = tasks[i].phase == .completed ? .pending : tasks[i].phase }
             if phase != tasks[i].phase {
                 let date = max(tasks[i].updatedAt, indices.map { tasks[$0].updatedAt }.max()!)

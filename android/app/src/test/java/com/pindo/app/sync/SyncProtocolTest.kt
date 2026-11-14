@@ -124,7 +124,7 @@ class SyncProtocolTest {
         assertEquals(prior, first.toJson().toMap())
     }
 
-    @Test fun partialCompletionDoesNotStartParentDuringSync() {
+    @Test fun partialCompletionStartsParentDuringSync() {
         val replica = SyncReplica.fresh(a)
         val pendingID = "33333333-3333-3333-3333-333333333333"
         replica.capture(tasks(task(taskID), task(secondID, parent = taskID, phase = "completed"),
@@ -132,8 +132,8 @@ class SyncProtocolTest {
         val other = SyncReplica.fresh(b)
         other.merge(replica.payload)
         val parent = other.projected().first.getJSONObject(0)
-        assertEquals("pending", parent.getString("phase"))
-        assertTrue(parent.isNull("startedAt"))
+        assertEquals("inProgress", parent.getString("phase"))
+        assertEquals(1.0, parent.getDouble("startedAt"), 0.0)
     }
 
     @Test fun capturingUnchangedDocumentDoesNotConsumeRequestsOrCounters() {

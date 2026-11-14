@@ -330,7 +330,7 @@ class SyncReplica private constructor(
                 val phase = when {
                     childTasks.all { it.getString("phase") == "completed" } -> "completed"
                     version == 2 && previous == "inProgress" && task.getBoolean("isProgressExplicit") -> "inProgress"
-                    childTasks.any { it.getString("phase") == "inProgress" } -> "inProgress"
+                    childTasks.any { it.getString("phase") != "pending" } -> "inProgress"
                     version == 2 -> "pending"
                     previous == "completed" -> "pending"
                     else -> previous

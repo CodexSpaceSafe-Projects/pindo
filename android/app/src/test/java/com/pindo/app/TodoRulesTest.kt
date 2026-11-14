@@ -126,13 +126,60 @@ class TodoRulesTest {
         }
     }
 
-    @Test fun partialCompletionDoesNotStartParent() {
+    @Test fun partialCompletionStartsParent() {
         val parent = task("父项")
         val child = task("完成的子项", parent.getString("id"))
         val sibling = task("未开始的子项", parent.getString("id"))
         val result = TodoRules.setPhase(JSONArray().put(parent).put(child).put(sibling), child.getString("id"), "completed")
-        assertEquals("pending", result.getJSONObject(0).getString("phase"))
-        assertTrue(result.getJSONObject(0).isNull("startedAt"))
+        assertEquals("inProgress", result.getJSONObject(0).getString("phase"))
+        assertFalse(result.getJSONObject(0).isNull("startedAt"))
+        assertFalse(result.getJSONObject(0).getBoolean("isProgressExplicit"))
+    }
+
+    @Test fun everyChildPhaseCombinationReconcilesParentProgress() {
+        for (first in listOf("pending", "inProgress", "completed")) {
+            for (second in listOf("pending", "inProgress", "completed")) {
+                val parent = task("父项")
+                val child = task("子项", parent.getString("id"))
+                val sibling = task("另一子项", parent.getString("id"))
+                var result = JSONArray().put(parent).put(child).put(sibling)
+                result = TodoRules.setPhase(result, child.getString("id"), first)
+                result = TodoRules.setPhase(result, sibling.getString("id"), second)
+                val expected = when {
+                    first == "completed" && second == "completed" -> "completed"
+                    first != "pending" || second != "pending" -> "inProgress"
+                    else -> "pending"
+                }
+                assertEquals("$first, $second", expected, result.getJSONObject(0).getString("phase"))
+                assertEquals(expected == "completed", !result.getJSONObject(0).isNull("completedAt"))
+                validateDocument(emptyDocument().put("tasks", result))
+            }
+        }
+    }
+
+    @Test fun completingActiveChildPreservesParentStartAndResettingAllChildrenClearsDerivedProgress() {
+        val parent = task("父项")
+        val child = task("子项", parent.getString("id"))
+        val grandchild = task("孙项", child.getString("id"))
+        val sibling = task("另一子项", parent.getString("id"))
+        val started = TodoRules.setPhase(JSONArray().put(parent).put(child).put(grandchild).put(sibling), grandchild.getString("id"), "inProgress")
+        val result = TodoRules.setPhase(started, grandchild.getString("id"), "completed")
+        assertEquals(started.getJSONObject(0).toMap(), result.getJSONObject(0).toMap())
+        assertEquals("completed", result.getJSONObject(1).getString("phase"))
+        val reopened = TodoRules.setPhase(result, grandchild.getString("id"), "pending")
+        assertTrue(reopened.objects().all { it.getString("phase") == "pending" && it.isNull("startedAt") && it.isNull("completedAt") })
+    }
+
+    @Test fun unchangedIntermediateProgressStillRepairsStaleAncestors() {
+        val parent = task("父项")
+        val child = task("子项", parent.getString("id"))
+        val grandchild = task("孙项", child.getString("id"))
+        val original = TodoRules.setPhase(JSONArray().put(parent).put(child).put(grandchild), grandchild.getString("id"), "inProgress")
+        original.getJSONObject(0).put("phase", "pending").remove("startedAt")
+        original.getJSONObject(0).remove("isProgressExplicit")
+        val result = TodoRules.setPhase(original, grandchild.getString("id"), "inProgress")
+        assertEquals("inProgress", result.getJSONObject(0).getString("phase"))
+        assertEquals(original.getJSONObject(1).toMap(), result.getJSONObject(1).toMap())
     }
 
     @Test fun preventsFourthLevelAndCyclesIncludingMovingWholeSubtree() {

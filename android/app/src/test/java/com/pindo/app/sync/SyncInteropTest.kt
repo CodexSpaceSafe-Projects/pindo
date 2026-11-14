@@ -7,6 +7,29 @@ import org.junit.Test
 import java.io.File
 
 class SyncInteropTest {
+    @Test fun sharedPartialCompletionVectorRepairsAncestorsWithoutRewritingRegisters() {
+        val vectors = generateSequence(File(System.getProperty("user.dir")).canonicalFile) { it.parentFile }
+            .map { File(it, "sync-vectors") }.first { it.isDirectory }
+        val vector = JSONObject(File(vectors, "parent-progress.json").readText())
+        for (version in listOf(1, 2)) {
+            val replica = SyncReplica.fresh("00000000-0000-4000-8000-000000000099", version = version)
+            replica.capture(vector.getJSONArray("tasks"), JSONArray())
+            val raw = replica.payload.toMap()
+            val projected = replica.projected().first
+            for (i in 0 until projected.length()) {
+                val task = projected.getJSONObject(i)
+                val id = task.getString("id")
+                assertEquals(vector.getJSONObject("expectedPhases").getString(id), task.getString("phase"))
+                assertEquals(vector.getJSONObject("expectedUpdatedAt").getDouble(id), task.getDouble("updatedAt"), 0.0)
+            }
+            assertEquals(10.0, projected.getJSONObject(0).getDouble("startedAt"), 0.0)
+            assertEquals(true, projected.getJSONObject(0).isNull("completedAt"))
+            if (version == 2) assertEquals(false, projected.getJSONObject(0).getBoolean("isProgressExplicit"))
+            assertEquals(projected.toList(), replica.projected().first.toList())
+            assertEquals(raw, replica.payload.toMap())
+        }
+    }
+
     @Test fun actualSwiftPayloadProjectsIdenticallyAndEmitsKotlinRoundTrip() {
         val vectors = generateSequence(File(System.getProperty("user.dir")).canonicalFile) { it.parentFile }
             .map { File(it, "sync-vectors") }.first { it.isDirectory }
