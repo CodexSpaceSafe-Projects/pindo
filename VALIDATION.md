@@ -1,10 +1,11 @@
 # 验证记录
 
-## 2026-11-14：Cloudflare staging 部署准备
+## 2026-11-14：Cloudflare staging 部署
 
 - 新增独立 staging 资源清单、稳定服务身份、构建提交 / bundle SHA-256 和 Cloudflare multipart metadata 生成脚本。构建要求 backend 工作区已提交，生产模式继续关闭。
 - 新增无需凭据的 `/` / `/health`，健康检查逐一验证四张必需表，同时返回 `clientSyncAvailable:false`；缺表返回 503，不影响资料 API 的设备鉴权。
-- 13 项本地 workerd / D1 测试通过，开发配置的类型生成及 TypeScript 检查通过；staging 配置单独生成类型验证。线上部署与联调结果以 Cloudflare API 读回记录为准，客户端仍未接入。
+- 13 项本地 workerd / D1 测试通过，开发与 staging 配置均生成类型并通过 TypeScript 检查。Cloudflare 插件已创建独立 D1、应用 schema / 迁移账本并读回确认，Worker 已上传并启用 workers.dev，API 确认版本分配 100%、绑定、兼容日期与 observability。
+- 新增仓库 CI 的公开健康 / 未授权 401 探测，结果以当前提交为准。聊天环境与插件禁止直接 fetch workers.dev，因此没有在聊天中完成带令牌的线上 push / pull / 撤销验证，也没有创建公开令牌或永久测试设备。资源、构建摘要与边界见 [部署记录](docs/CLOUDFLARE-STAGING.md)，客户端仍未接入。
 
 ## 2026-11-14：Cloudflare v3 首批基础与旧云服务退役
 
