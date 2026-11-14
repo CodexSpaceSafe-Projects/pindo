@@ -23,6 +23,7 @@ public enum SyncV3Error: String, Error, Codable, Sendable {
     case quotaUnavailable = "quota_unavailable", storageUnavailable = "storage_unavailable"
     case maintenance, invalidRequest = "invalid_request", cursorMismatch = "cursor_mismatch"
     case notFound = "not_found", unsupportedFeature = "unsupported_feature"
+    case bootstrapClosed = "bootstrap_closed", pairingInvalid = "pairing_invalid", checkpointConflict = "checkpoint_conflict", artifactMissing = "artifact_missing", leaseExpired = "lease_expired"
 }
 
 public struct SyncV3Identity: Codable, Equatable, Sendable {
@@ -50,7 +51,7 @@ public struct SyncV3EnvelopeContext: Codable, Equatable, Sendable {
     public func associatedData() throws -> Data {
         guard identity.provider == "cloudflare-v3" else { throw SyncV3Error.invalidRequest }
         try [identity.serviceID, identity.vaultID, epoch, objectID].forEach(SyncV3.validateID)
-        guard artifactIDs.count <= 50, artifactIDs == artifactIDs.sorted(), Set(artifactIDs).count == artifactIDs.count,
+        guard artifactIDs.count <= 512, artifactIDs == artifactIDs.sorted(), Set(artifactIDs).count == artifactIDs.count,
               artifactIDs.allSatisfy({ $0.utf8.count == 64 && $0.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) } }) else {
             throw SyncV3Error.invalidRequest
         }

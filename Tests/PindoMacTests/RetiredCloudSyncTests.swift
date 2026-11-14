@@ -9,7 +9,7 @@ final class RetiredCloudSyncTests: XCTestCase {
         let suite = "PindoRetiredCloudTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
-        let model = try AppModel(directory: directory, defaults: defaults)
+        let model = try AppModel(useSQLite: false, directory: directory, defaults: defaults)
         model.playFeedback = { _ in }
         XCTAssertTrue(model.addTask(title: "Offline", day: model.today, groupID: nil))
         XCTAssertTrue(model.flush())
@@ -17,8 +17,10 @@ final class RetiredCloudSyncTests: XCTestCase {
         let frozen = Data("frozen legacy ciphertext".utf8)
         try model.repository.stageSyncUpload(key: "legacy-object", data: frozen, payloadDigest: String(repeating: "a", count: 64))
         let before = model.repository.document
-        model.cloudSync.start()
-        XCTAssertFalse(model.cloudSync.isConfigured)
+        struct EmptySecrets: V3SecretStorage { func load() throws -> Data? { nil }; func save(_ data: Data) throws {} }
+        let controller=CloudSyncController(model:model,secrets:EmptySecrets())
+        controller.start()
+        XCTAssertFalse(controller.isConfigured)
         XCTAssertEqual(model.repository.document, before)
         let lease = try XCTUnwrap(model.acquireSyncEditing())
         model.releaseSyncEditing(lease)

@@ -30,7 +30,7 @@ final class SyncEditingTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("PindoSyncEditing-\(UUID().uuidString)")
         let suite = "PindoSyncEditing.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        let model = try AppModel(directory: directory, defaults: defaults)
+        let model = try AppModel(useSQLite: false, directory: directory, defaults: defaults)
         model.playFeedback = { _ in }
         return (model, {
             defaults.removePersistentDomain(forName: suite)

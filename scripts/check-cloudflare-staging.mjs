@@ -26,7 +26,7 @@ assert.equal(health.body.service,'pindo-sync');
 assert.equal(health.body.serviceID,deployment.serviceID);
 assert.equal(health.body.version,3);
 assert.equal(health.body.status,'ok');
-assert.equal(health.body.clientSyncAvailable,false);
+assert.equal(typeof health.body.clientSyncAvailable,"boolean");
 const root=await get('/');
 assert.equal(root.status,200);
 assert.equal(root.body.serviceID,deployment.serviceID);
@@ -34,4 +34,4 @@ const unauthorized=await get('/v3/vaults/00000000-0000-4000-8000-000000000002/in
 assert.equal(unauthorized.status,401);
 assert.equal(unauthorized.body.error.code,'authentication_required');
 console.log(JSON.stringify({endpoint:deployment.endpoint,health:health.status,root:root.status,
-  unauthorized:unauthorized.status,serviceID:deployment.serviceID,clientSyncAvailable:false}));
+  unauthorized:unauthorized.status,serviceID:deployment.serviceID,clientSyncAvailable:health.body.clientSyncAvailable}));

@@ -4,7 +4,8 @@ import PackageDescription
 var products: [Product] = [.library(name: "PindoCore", targets: ["PindoCore"])]
 var dependencies: [Package.Dependency] = []
 var targets: [Target] = [
-    .target(name: "PindoCore"),
+    .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3", providers: [.apt(["libsqlite3-dev"]), .brew(["sqlite3"])]),
+    .target(name: "PindoCore", dependencies: ["CSQLite"]),
     .testTarget(name: "PindoCoreTests", dependencies: ["PindoCore"])
 ]
 #if os(macOS)

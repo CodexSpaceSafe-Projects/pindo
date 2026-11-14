@@ -30,7 +30,7 @@ final class FontPreferencesTests: XCTestCase {
         let suite = "PindoFontPreferencesTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: folder) }
-        let model = try AppModel(directory: folder, defaults: defaults)
+        let model = try AppModel(useSQLite: false, directory: folder, defaults: defaults)
         model.playFeedback = { _ in }
         XCTAssertTrue(model.addTask(title: "本地事项", note: "备注", day: model.selectedDay, groupID: nil))
         let taskData = try Data(contentsOf: model.repository.dataURL)
@@ -40,11 +40,11 @@ final class FontPreferencesTests: XCTestCase {
         preferences.task = PindoFontChoice(primaryFamily: "Menlo", fallbackFamily: "PingFang SC", pointSize: 22)
         preferences.note = PindoFontChoice(primaryFamily: "Helvetica", fallbackFamily: "Songti SC", pointSize: 19)
         model.setFontPreferences(preferences)
-        let reopened = try AppModel(directory: folder, defaults: defaults)
+        let reopened = try AppModel(useSQLite: false, directory: folder, defaults: defaults)
         XCTAssertEqual(reopened.fontPreferences, preferences)
         preferences.task = PindoFontChoice()
         reopened.setFontPreferences(preferences)
-        XCTAssertEqual(try AppModel(directory: folder, defaults: defaults).fontPreferences, preferences)
+        XCTAssertEqual(try AppModel(useSQLite: false, directory: folder, defaults: defaults).fontPreferences, preferences)
         XCTAssertEqual(try Data(contentsOf: reopened.repository.dataURL), taskData)
     }
 

@@ -22,7 +22,9 @@ const metadata = {
   bindings:[
     {type:'d1',name:'DB',database_id:deployment.databaseId},
     {type:'plain_text',name:'SERVICE_ID',text:deployment.serviceID},
-    {type:'plain_text',name:'LOG_CORE_ENABLED',text:'development-only'}
+    {type:'plain_text',name:'SYNC_ENABLED',text:'true'},
+    {type:'inherit',name:'BOOTSTRAP_SECRET'},
+    {type:'inherit',name:'RECOVERY_SECRET'}
   ],
   observability:deployment.observability,
   tags:['pindo','sync-v3','staging'],

@@ -14,7 +14,7 @@ jobs:
   native:
     name: Test and build universal macOS app
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: 45
     outputs:
       version: ${{ steps.metadata.outputs.version }}
       archive: ${{ steps.metadata.outputs.archive }}
@@ -39,10 +39,45 @@ jobs:
           fi
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'archive=Pindo-%s-macOS-universal.zip\n' "$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Start real Worker and D1 for client tests
+        run: |
+          npm --prefix backend/cloudflare ci
+          npm --prefix backend/cloudflare run build:test
+          node backend/cloudflare/test/http-server.mjs > /tmp/pindo-worker.log 2>&1 &
+          for attempt in {1..40}; do
+            if curl -fsS http://127.0.0.1:8787/health; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/pindo-worker.log
+          exit 1
       - name: Core tests and native compilation
+        env:
+          PINDO_SYNC_TEST_ENDPOINT: http://127.0.0.1:8787
         run: |
           set -euo pipefail
           swift test --jobs 4 2>&1 | tee /tmp/pindo-tests.log
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+          log-accepted-android-sdk-licenses: false
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Android reads Swift ciphertext and writes to the same Worker
+        env:
+          PINDO_SYNC_TEST_ENDPOINT: http://127.0.0.1:8787
+          PINDO_INTEROP_PHASE: android
+        run: android/gradlew -p android --no-daemon testDebugUnitTest --tests com.pindo.app.V3IntegrationTest
+      - name: Swift reads Android ciphertext from the same Worker
+        env:
+          PINDO_SYNC_TEST_ENDPOINT: http://127.0.0.1:8787
+          PINDO_INTEROP_PHASE: verify
+        run: swift test --jobs 4 --filter SyncV3HTTPTests
       - name: Bundle and verify application
         env:
           PINDO_UNIVERSAL: '1'

@@ -23,11 +23,11 @@ final class LocalizationAndFeedbackTests: XCTestCase {
             defaults.removePersistentDomain(forName: suite)
         }
         defaults.set(InterfaceLanguage.english.rawValue, forKey: InterfaceLanguage.defaultsKey)
-        let model = try AppModel(directory: directory, defaults: defaults)
+        let model = try AppModel(useSQLite: false, directory: directory, defaults: defaults)
         XCTAssertEqual(model.document.groups.map(\.name), ["Work", "Personal"])
         model.setInterfaceLanguage(.simplifiedChinese)
         XCTAssertEqual(model.localization("新待办默认分组"), "新待办默认分组")
-        let reopened = try AppModel(directory: directory, defaults: defaults)
+        let reopened = try AppModel(useSQLite: false, directory: directory, defaults: defaults)
         XCTAssertEqual(reopened.interfaceLanguage, .simplifiedChinese)
         XCTAssertEqual(reopened.document.groups.map(\.name), ["Work", "Personal"])
     }
