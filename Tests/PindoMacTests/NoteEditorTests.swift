@@ -79,6 +79,7 @@ final class NoteEditorTests: XCTestCase {
         view.breakUndoCoalescing()
         XCTAssertTrue(undo.canUndo)
         undo.undo()
+        XCTAssertEqual(view.string, source)
         XCTAssertGreaterThan((storage.attribute(.kern, at: 1, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0, 0)
         await editor.settle()
         XCTAssertEqual(editor.buffer.text, source)

@@ -43,6 +43,7 @@ struct NoteEditor: NSViewRepresentable {
         private var eventMonitor: Any?
         private var applyingTypography = false
         private var typographyFont: PindoFontChoice?
+        private var undoCommitScheduled = false
         private var ended = false
         private var stopped = false
         private var returning = false
@@ -169,12 +170,28 @@ struct NoteEditor: NSViewRepresentable {
                     // engine's retained attributes or its authoritative callback.
                 }
                 linkMetadata = shifted
+                if view.undoManager?.isUndoing == true || view.undoManager?.isRedoing == true {
+                    scheduleUndoCommit()
+                }
             }
             linkMetadata = WikiLinkService.makeStorageState(from: view.string, existingMetadata: linkMetadata,
                                                             textStorage: storage).metadata
             // didProcessEditing is still inside TextKit's editing transaction,
             // before layout consumers see the Markdown engine's new attributes.
             applyTypography(in: storage.editedRange)
+        }
+
+        private func scheduleUndoCommit() {
+            guard !undoCommitScheduled else { return }
+            undoCommitScheduled = true
+            // Native undo can restore characters without the engine publishing
+            // its binding. Commit after the undo group finishes; layout stays
+            // synchronous in storageChanged and never waits for this callback.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.undoCommitScheduled = false
+                self.commit()
+            }
         }
 
         func applyTypography(in editedRange: NSRange? = nil) {
