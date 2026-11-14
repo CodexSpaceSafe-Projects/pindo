@@ -57,6 +57,24 @@ final class SyncV3HTTPTests: XCTestCase {
         // Resolve intentionally before handing the common encrypted fixture to Kotlin.
         try repo.reloadCurrentDocument();try repo.update{$0.tasks[0].note=String(repeating:"长",count:70_000)}
         _ = try await engine.synchronize(c)
+        // The actual settings controller commits SQL before Keychain promotion.
+        // Losing that last credential write must be recoverable on next startup.
+        let model=try AppModel(directory:dir.appendingPathComponent("controller"))
+        let pendingSecrets=FailPromotionSecrets()
+        let pairID=UUID().uuidString.lowercased(), pairCode=token(15)
+        let controllerPair:JSONValue = .object(["id":.string(pairID),"code":.string(pairCode),"epoch":.string(epoch)])
+        _ = try await http.request(method:"POST",path:"/v3/vaults/\(vault)/pairings",body:DocumentCodec.encode(controllerPair),token:c.token)
+        let invitation=V3Invitation(endpoint:endpoint,serviceID:service,vaultID:vault,epoch:epoch,pairingID:pairID,code:pairCode,recoveryKey:key)
+        let controller=CloudSyncController(model:model,secrets:pendingSecrets,transport:{try SyncV3HTTP(endpoint:$0,allowLoopbackHTTP:true)})
+        controller.join(invitation:String(decoding:try DocumentCodec.encode(invitation),as:UTF8.self))
+        for _ in 0..<500 {if !controller.isSyncing {break};try await Task.sleep(nanoseconds:10_000_000)}
+        XCTAssertNotNil(try model.repository.sqlite?.binding)
+        XCTAssertNotNil(controller.errorMessage)
+        let recovered=CloudSyncController(model:model,secrets:pendingSecrets,transport:{try SyncV3HTTP(endpoint:$0,allowLoopbackHTTP:true)})
+        recovered.start()
+        XCTAssertTrue(recovered.isConfigured)
+        XCTAssertFalse(recovered.hasPendingConnection)
+        recovered.disconnect()
         let androidPair:JSONValue = .object(["id":.string("00000000-0000-4000-8000-000000000012"),"code":.string(token(10)),"epoch":.string(epoch)])
         _ = try await http.request(method:"POST",path:"/v3/vaults/\(vault)/pairings",body:DocumentCodec.encode(androidPair),token:c.token)
     }
@@ -71,4 +89,10 @@ private actor LostPushACK: SyncV3Transport {
         if path.hasSuffix("/push") && lose {lose=false;throw SyncV3Error.storageUnavailable}
         return response
     }
+}
+
+private final class FailPromotionSecrets: V3SecretStorage {
+    var bytes:Data?;var saves=0
+    func load() throws -> Data? {bytes}
+    func save(_ data:Data)throws {saves+=1;if saves==2 {throw SyncV3Error.storageUnavailable};bytes=data}
 }
