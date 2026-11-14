@@ -125,11 +125,21 @@ final class NoteEditorTests: XCTestCase {
         }
         XCTAssertEqual(view.string, source)
         XCTAssertEqual(editor.buffer.text, source)
+        XCTAssertTrue(editor.window.makeFirstResponder(view))
         view.setSelectedRange(NSRange(location: 0, length: 7))
-        let pasteboard = NSPasteboard.withUniqueName()
-        defer { pasteboard.releaseGlobally() }
-        pasteboard.declareTypes([.string], owner: nil)
-        XCTAssertTrue(view.writeSelection(to: pasteboard, types: [.string]))
+        XCTAssertEqual(view.selectedRange(), NSRange(location: 0, length: 7))
+        // MarkdownEngine overrides copy(_:), keeping raw Markdown as the plain
+        // flavor alongside its rich formats. Exercise that real user command.
+        let pasteboard = NSPasteboard.general
+        let saved = (pasteboard.pasteboardItems ?? []).map { original in
+            let item = NSPasteboardItem()
+            for type in original.types {
+                if let data = original.data(forType: type) { item.setData(data, forType: type) }
+            }
+            return item
+        }
+        defer { pasteboard.clearContents(); pasteboard.writeObjects(saved) }
+        view.copy(nil)
         XCTAssertEqual(pasteboard.string(forType: .string), "你好abc再见")
         XCTAssertNotNil(view.textLayoutManager)
     }
