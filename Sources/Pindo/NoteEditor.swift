@@ -46,6 +46,7 @@ struct NoteEditor: NSViewRepresentable {
         private var ended = false
         private var stopped = false
         private var returning = false
+        private var linkMetadata: [WikiLinkService.RangeKey: WikiLinkService.LinkMetadata] = [:]
 
         init(_ parent: NoteEditor) { self.parent = parent; source = parent.text }
 
@@ -70,11 +71,7 @@ struct NoteEditor: NSViewRepresentable {
             config.services.bus = formatBus
             return NativeTextViewWrapper(
                 text: Binding(get: { [weak self] in self?.source ?? "" }, set: { [weak self] value in
-                    guard let self, !self.stopped, self.textView?.hasMarkedText() != true,
-                          !self.ended || value == self.source else { return }
-                    self.source = value
-                    if self.parent.text != value { self.parent.text = value }
-                    self.scheduleTypography()
+                    self?.acceptEngineText(value)
                 }),
                 configuration: config, fontName: font.fontName, fontSize: font.pointSize, documentId: documentID,
                 onBuildContextMenu: { [weak self] menu, _ in self?.formatMenu(menu) ?? menu }
@@ -84,6 +81,7 @@ struct NoteEditor: NSViewRepresentable {
         func attach() {
             guard !stopped, textView == nil, let host, let view = Self.findTextView(in: host) else { return }
             textView = view
+            linkMetadata = WikiLinkService.makeDisplayState(from: source).metadata
             view.setAccessibilityLabel(parent.accessibilityName ?? parent.l10n("待办备注内容"))
             let center = NotificationCenter.default
             notifications.append(center.addObserver(forName: NSText.didBeginEditingNotification, object: view, queue: .main) { [weak self] _ in
@@ -92,8 +90,10 @@ struct NoteEditor: NSViewRepresentable {
             notifications.append(center.addObserver(forName: NSText.didEndEditingNotification, object: view, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.commit(); self?.ended = true }
             })
-            notifications.append(center.addObserver(forName: NSTextStorage.didProcessEditingNotification, object: view.textStorage, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.scheduleTypography() }
+            notifications.append(center.addObserver(forName: NSTextStorage.didProcessEditingNotification, object: view.textStorage, queue: .main) { [weak self] notification in
+                MainActor.assumeIsolated {
+                    if let storage = notification.object as? NSTextStorage { self?.storageChanged(storage) }
+                }
             })
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .keyDown]) { [weak self] event in
                 guard let self, let host = self.host, event.window === host.window else { return event }
@@ -117,7 +117,7 @@ struct NoteEditor: NSViewRepresentable {
         }
 
         static func findTextView(in root: NSView) -> NSTextView? {
-            if let text = root as? NSTextView { return text }
+            if let text = root as? NSTextView, text.delegate is NativeTextViewCoordinator { return text }
             return root.subviews.lazy.compactMap { findTextView(in: $0) }.first
         }
 
@@ -125,11 +125,52 @@ struct NoteEditor: NSViewRepresentable {
         /// even when the engine's asynchronous binding callback is still queued.
         func commit() {
             guard !stopped, let textView, !textView.hasMarkedText() else { return }
-            let metadata = WikiLinkService.makeDisplayState(from: source).metadata
-            let value = WikiLinkService.makeStorageState(from: textView.string, existingMetadata: metadata,
-                                                        textStorage: textView.textStorage).storage
-            source = value
-            if parent.text != value { parent.text = value }
+            let state = WikiLinkService.makeStorageState(from: textView.string, existingMetadata: linkMetadata,
+                                                        textStorage: textView.textStorage)
+            linkMetadata = state.metadata
+            source = state.storage
+            if parent.text != source { parent.text = source }
+        }
+
+        private func acceptEngineText(_ value: String) {
+            guard !stopped, textView?.hasMarkedText() != true, !ended || value == source else { return }
+            let incoming = WikiLinkService.makeDisplayState(from: value)
+            if let view = textView {
+                // A newer native edit can precede an older queued binding write.
+                guard incoming.display == view.string else { return }
+                var metadata = incoming.metadata
+                for (key, link) in linkMetadata where metadata[key]?.id == nil { metadata[key] = link }
+                let resolved = WikiLinkService.makeStorageState(from: view.string, existingMetadata: metadata,
+                                                                textStorage: view.textStorage)
+                linkMetadata = resolved.metadata
+                source = resolved.storage
+            } else { source = value }
+            if parent.text != source { parent.text = source }
+            scheduleTypography()
+        }
+
+        private func storageChanged(_ storage: NSTextStorage) {
+            guard !stopped, !applyingTypography, let view = textView, !view.hasMarkedText() else { return }
+            if storage.editedMask.contains(.editedCharacters) {
+                let edited = storage.editedRange, delta = storage.changeInLength
+                let oldEnd = edited.location + max(0, edited.length - delta)
+                var shifted: [WikiLinkService.RangeKey: WikiLinkService.LinkMetadata] = [:]
+                for (key, link) in linkMetadata {
+                    let range = NSRange(location: key.location, length: key.length)
+                    if NSMaxRange(range) <= edited.location {
+                        shifted[key] = link
+                    } else if range.location >= oldEnd {
+                        let moved = NSRange(location: range.location + delta, length: range.length)
+                        if moved.location >= 0 { shifted[WikiLinkService.RangeKey(moved)] = link }
+                    }
+                    // Links intersecting a replacement are recovered from the
+                    // engine's retained attributes or its authoritative callback.
+                }
+                linkMetadata = shifted
+            }
+            linkMetadata = WikiLinkService.makeStorageState(from: view.string, existingMetadata: linkMetadata,
+                                                            textStorage: storage).metadata
+            scheduleTypography()
         }
 
         func scheduleTypography() {

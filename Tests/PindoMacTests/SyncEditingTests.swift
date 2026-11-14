@@ -51,6 +51,7 @@ final class SyncEditingTests: XCTestCase {
     }
 
     @MainActor private func find<T: NSView>(_ type: T.Type, in view: NSView) -> T? {
+        if type == NSTextView.self { return NoteEditor.Coordinator.findTextView(in: view) as? T }
         if let match = view as? T { return match }
         return view.subviews.lazy.compactMap { self.find(type, in: $0) }.first
     }

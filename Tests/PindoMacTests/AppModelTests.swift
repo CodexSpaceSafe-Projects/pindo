@@ -893,7 +893,7 @@ final class AppModelTests: XCTestCase {
         defer { panel.orderOut(nil); panel.contentView = nil }
         try await Task.sleep(nanoseconds: 300_000_000)
         func noteEditor(in view: NSView) -> NSTextView? {
-            (view as? NSTextView) ?? view.subviews.lazy.compactMap { noteEditor(in: $0) }.first
+            NoteEditor.Coordinator.findTextView(in: view)
         }
         let note = try XCTUnwrap(noteEditor(in: try XCTUnwrap(panel.contentView)))
         XCTAssertTrue(panel.makeFirstResponder(note))

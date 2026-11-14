@@ -6,7 +6,7 @@ import MarkdownEngine
 
 final class NoteEditorTests: XCTestCase {
     @MainActor func testRealEngineUsesTextKit2AndStylesMarkdownWithoutChangingStoredSource() async throws {
-        let source = "# Heading\n\n**Bold** and ~~old~~ and `code`\n\n- [ ] Task\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n正文"
+        let source = "# Heading\n\n**Bold** and ~~gone~~ and `code`\n\n- [ ] Task\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n正文"
         let editor = try await NoteEditorHarness.make(source)
         defer { editor.close() }
         let view = editor.view, storage = try XCTUnwrap(editor.view.textStorage)
@@ -20,7 +20,7 @@ final class NoteEditorTests: XCTestCase {
         }
         XCTAssertGreaterThan(try XCTUnwrap(attribute(.font, "Heading") as? NSFont).pointSize, 14)
         XCTAssertTrue(NSFontManager.shared.traits(of: try XCTUnwrap(attribute(.font, "Bold") as? NSFont)).contains(.boldFontMask))
-        XCTAssertNotNil(attribute(.strikethroughStyle, "old"))
+        XCTAssertNotNil(attribute(.strikethroughStyle, "gone"))
         XCTAssertTrue(try XCTUnwrap(attribute(.font, "code") as? NSFont).isFixedPitch)
         XCTAssertEqual(editor.buffer.text, source)
         XCTAssertEqual(view.string, source)
@@ -128,6 +128,7 @@ final class NoteEditorTests: XCTestCase {
         view.setSelectedRange(NSRange(location: 0, length: 7))
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
+        pasteboard.declareTypes([.string], owner: nil)
         XCTAssertTrue(view.writeSelection(to: pasteboard, types: [.string]))
         XCTAssertEqual(pasteboard.string(forType: .string), "你好abc再见")
         XCTAssertNotNil(view.textLayoutManager)
