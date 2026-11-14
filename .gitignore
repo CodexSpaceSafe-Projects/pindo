@@ -6,3 +6,11 @@ dist/
 DerivedData/
 __pycache__/
 *.pyc
+
+# Local implementation work and Cloudflare tooling
+work/
+node_modules/
+.dev.vars*
+.cf/
+.wrangler/
+.cloudflare/

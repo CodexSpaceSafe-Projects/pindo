@@ -2,7 +2,7 @@
 
 [![macOS build](https://github.com/CodexSpaceSafe-Projects/pindo/actions/workflows/macos.yml/badge.svg)](https://github.com/CodexSpaceSafe-Projects/pindo/actions/workflows/macos.yml)
 
-轻量的 macOS 菜单栏待办，支持分组、日期、备注、本地快照与可选的缤纷云端到端加密同步。清单可随时唤出，也可 pin 在前台持续查看。仓库同时提供 Android 客户端。
+轻量的 macOS 菜单栏待办，支持分组、日期、备注、本地快照；Cloudflare 端到端加密同步正在开发。清单可随时唤出，也可 pin 在前台持续查看。仓库同时提供 Android 客户端。
 
 原生实现使用 **SwiftUI + AppKit**，最低 macOS 14；备注集成版本固定的 [SwiftMarkdownEngine](https://github.com/nodes-app/swift-markdown-engine) 原生编辑器，无需额外安装运行环境。
 
@@ -45,7 +45,7 @@ git push origin v0.1.0
 
 ## 使用
 
-- **缤纷云同步 v2**：macOS 与 Android 使用同一私有存储桶和恢复密钥，以 AES-256-GCM 加密的不可变检查点同步。待上传字节先存入本地发件箱，上传后读回确认；离线编辑、并发备注和删除墓碑保留。同库重连继续原历史，切库保存独立副本。升级先确认 v2 资料，再让旧协议客户端明确停止同步。凭据仅保存在 Keychain／Keystore；创建与加入、容量上限及实机验收见 [同步说明](docs/SYNC.md)，工程计划与故障矩阵见 [同步重设计](docs/SYNC-REDESIGN.md)。
+- **云同步调整**：已移除缤纷云连接与网络支持，当前两端仅在本机保存。旧资料、因果历史、冻结发件箱和安全存储中的恢复信息继续保留；普通导出仍只包含待办、分组和备注。Cloudflare v3 已开始实现协议与 D1 日志核心，尚未接入客户端或部署，进度见[同步说明](docs/SYNC.md)。
 
 - **自适应清单**：拖动窗口边框调整大小，重新打开时保留尺寸。顶部保留 pin 和设置，待办占据主要区域；日期切换、日历和带下拉箭头的分组筛选位于底部。添加栏一直显示，点击文字区或上下留白均可聚焦输入；右侧可独立选择分组，Return 提交。
 - **日期概览**：点击底部日期展开月历，每天以橙色显示未完成数量、绿色显示已完成数量，按计划日期统计并跟随分组筛选；可以切换月份或回到今天。
@@ -97,7 +97,8 @@ git push origin v0.1.0
 Sources/PindoCore/       数据模型、日期语义、文本差异、快照保留、原子保存和恢复日志
 Sources/Pindo/           原生菜单栏、自适应置顶面板、实时 Markdown 编辑器、月历、设置与全局热键
 android/                Kotlin Android 客户端、离线存储及相同的加密同步协议
-docs/SYNC.md            缤纷云配置、数据格式和同步边界
+backend/cloudflare/     开发中的 Workers / D1 日志核心、迁移与隔离测试
+docs/SYNC.md            当前同步状态与 Cloudflare v3 开发边界
 Tests/PindoCoreTests/    可跨平台运行的数据与恢复测试
 Tests/PindoMacTests/     macOS 模型、编辑器组词、自动保存、管理列表及视图构造测试
 Resources/Info.plist     应用标识、菜单栏应用声明、最低系统版本

@@ -1,5 +1,13 @@
 # 验证记录
 
+## 2026-11-14：Cloudflare v3 首批基础与旧云服务退役
+
+- 移除 macOS / Android 的缤纷云连接与 S3 网络实现，取消自动连接 / 轮询，当前仅本机保存；保留旧副本、墓碑、冻结发件箱、库归档和加密凭据日志。新增两端启动与离线修改的保留回归，旧密码学、v1/v2 协议与迁移向量测试继续保留。
+- 新增 v3 库身份、规范 AAD、AES-GCM 组合密文和共享向量，限定安全整数和大小边界；备注参考寄存器以实际观察的 note dot 仲裁，乱序替代、真实并发、空备注、重复和损坏上下文有可执行断言。这些原语尚未接入本机权威存储与领域投影。
+- 新增 Workers + D1 开发日志核心。11 项本地 workerd / D1 测试通过，覆盖并发、幂等、撤销、事务后步失败整批回滚、分页 / 缺口、epoch / 预算、保留回执及模拟 GC 后不重用 revision。`npm run types`、TypeScript 类型检查通过。
+- Linux Swift 6.0.3 的 113 项核心测试通过，`git diff --check` 通过。新增 macOS 加密与保留回归、Android 加密与保留回归，以及独立后端 CI；macOS 原生编译 / 通用包和 Android 测试 / lint / APK 等待本提交的 CI 确认。
+- 尚未完成 P0 全部操作契约、P1 / P2 / P4 / P5，也未部署 Cloudflare。没有测量真云 CPU / 容量，没有真云配对、GC、迁移或 Mac / Android 实机验收。锁定的本地运行时兼容日期为 2026-07-30，生产配置目标 2026-11-14，发布前必须升级运行时重测。
+
 ## 2026-11-14：备注集成 SwiftMarkdownEngine
 
 - 将备注页和快速记录备注统一替换为固定版本 SwiftMarkdownEngine 0.15.0 的 NativeTextViewWrapper；删除旧 LiveMarkdown、装饰绘制和自研格式变换，格式命令通过每个编辑器独立的引擎通知总线执行。仅链接核心 MarkdownEngine 产品，SwiftMath 只随上游清单解析、不链接；Apache 2.0 许可随应用打包。

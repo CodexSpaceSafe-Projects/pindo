@@ -1,11 +1,5 @@
 package com.pindo.app
 
-import android.content.ClipData
-import android.content.ClipDescription
-import android.content.ClipboardManager
-import android.content.Context
-import android.os.Build
-import android.os.PersistableBundle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -16,7 +10,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
@@ -29,12 +22,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.core.graphics.toColorInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -91,7 +80,7 @@ import java.time.LocalDate
         }
     }
     if (cloudOpen) {
-        CloudSettingsScreen(store, state) { cloudOpen = false }
+        CloudSettingsScreen() { cloudOpen = false }
         return
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(top = 18.dp, bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -144,7 +133,7 @@ import java.time.LocalDate
             SettingsRow(Icons.Outlined.Folder, "分组管理", "名称、颜色与事项数量") { groupsOpen = true }
         }
         SettingsSection("数据与同步") {
-            SettingsRow(Icons.Outlined.CloudSync, "云同步", if (state.syncEnabled) "缤纷云 · 端到端加密" else "连接你自己的缤纷云账号") { cloudOpen = true }
+            SettingsRow(Icons.Outlined.CloudSync, "云同步", "Cloudflare 同步正在开发 · 仅本机保存") { cloudOpen = true }
             HorizontalDivider(Modifier.padding(horizontal = 16.dp))
             SettingsRow(Icons.Outlined.FileDownload, "导出资料", "保存待办、分组与 Markdown 备注", !busy && !state.readOnly) { export.launch("Pindo-${LocalDate.now()}.json") }
             HorizontalDivider(Modifier.padding(horizontal = 16.dp))
@@ -222,84 +211,16 @@ import java.time.LocalDate
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable internal fun CloudSettingsScreen(store: AppStore, state: AppState, onBack: () -> Unit) {
-    val context = LocalContext.current
-    var draft by remember { mutableStateOf(store.settingsDraft()) }
-    SideEffect { store.stageSettingsDraft(draft) }
-    var advanced by rememberSaveable { mutableStateOf(false) }
-    var regenerate by remember { mutableStateOf(false) }
-    var disconnect by remember { mutableStateOf(false) }
-    var localError by remember { mutableStateOf<String?>(null) }
-    var copied by remember { mutableStateOf(false) }
-    val initialConnectionRevision = remember { state.connectionRevision }
-    LaunchedEffect(state.connectionRevision) { if (state.connectionRevision != initialConnectionRevision) onBack() }
-    DisposableEffect(Unit) { onDispose { store.cancelSettingsValidation() } }
+@Composable internal fun CloudSettingsScreen(onBack: () -> Unit) {
     BackHandler(onBack = onBack)
     Scaffold(topBar = { TopAppBar(title = { Text("云同步") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Outlined.ArrowBack, "返回设置") } }) }) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.primaryContainer) {
-                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                    Icon(Icons.Outlined.Security, null, tint = MaterialTheme.colorScheme.primary)
-                    Text("只有你的设备能解密", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                    Text("使用自己的缤纷云账号，待办、分组与备注在上传前完成端到端加密。", style = MaterialTheme.typography.bodyMedium)
-                    Text("新版同步会暂停旧版设备的云同步，请先将所有设备升级到 0.3 或更新版本。", style = MaterialTheme.typography.bodySmall)
-                    Text(state.syncStatus, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
-                }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("启用云同步", style = MaterialTheme.typography.titleMedium)
-                    Text("离线修改会在联网后自动重试", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Switch(draft.enabled, { draft = draft.copy(enabled = it) }, enabled = !state.readOnly && !state.validatingConnection)
-            }
-            OutlinedTextField(draft.bucket, { draft = draft.copy(bucket = it, createVault = false) }, enabled = !state.validatingConnection, label = { Text("存储桶名称") }, supportingText = { Text("各设备填写相同的私有 Bucket") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-            SecretField("Access Key", draft.accessKey, enabled = !state.validatingConnection) { draft = draft.copy(accessKey = it) }
-            SecretField("Secret Key", draft.secretKey, enabled = !state.validatingConnection) { draft = draft.copy(secretKey = it) }
-            TextButton(onClick = { advanced = !advanced }) { Text("服务地址与区域"); Icon(if (advanced) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null) }
-            if (advanced) {
-                OutlinedTextField(draft.endpoint, { draft = draft.copy(endpoint = it) }, enabled = !state.validatingConnection, label = { Text("S3 Endpoint") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                OutlinedTextField(draft.region, { draft = draft.copy(region = it) }, enabled = !state.validatingConnection, label = { Text("Region") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-            }
-            HorizontalDivider()
-            Text("恢复密钥", style = MaterialTheme.typography.titleMedium)
-            Text("已有资料库请粘贴另一台设备的密钥；加入时找不到资料会报错，不会默建空库。首次使用请生成新密钥。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("首次连接新资料库会合并当前本机待办；返回已连接过的资料库会恢复该库的本机副本与离线历史。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = !draft.createVault, onClick = { draft = draft.copy(createVault = false) }, enabled = !state.validatingConnection, label = { Text("加入已有资料库") })
-                FilterChip(selected = draft.createVault, onClick = { draft = draft.copy(createVault = true) }, enabled = !state.validatingConnection, label = { Text("创建新资料库") })
-            }
-            SecretField("64 位十六进制恢复密钥", draft.recoveryKey, enabled = !state.validatingConnection) { draft = draft.copy(recoveryKey = it, createVault = false); copied = false }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(enabled = !state.validatingConnection, onClick = { if (draft.recoveryKey.isBlank()) draft = draft.copy(recoveryKey = store.generateRecoveryKey(), createVault = true) else regenerate = true }) { Icon(Icons.Outlined.Key, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text("生成密钥") }
-                OutlinedButton(enabled = draft.recoveryKey.isNotBlank(), onClick = {
-                    val clip = ClipData.newPlainText("Pindo 恢复密钥", draft.recoveryKey)
-                    if (Build.VERSION.SDK_INT >= 33) clip.description.extras = PersistableBundle().apply { putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true) }
-                    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(clip)
-                    copied = true
-                }) { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text(if (copied) "已复制" else "复制密钥") }
-            }
-            Text("凭据和恢复密钥由 Android Keystore 加密保存在此设备，不会进入导出资料。前台约每 30 秒检查，后台不保证即时同步。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            (localError ?: state.error)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            Button(onClick = { localError = null; if (!store.saveSettings(draft)) localError = store.state.value.error ?: "配置未保存，请检查输入和错误提示。" }, enabled = !state.readOnly && !state.validatingConnection, modifier = Modifier.fillMaxWidth().height(50.dp)) { Text(if (state.validatingConnection) "正在验证连接…" else if (draft.enabled) "保存并连接" else "保存设置") }
-            if (state.syncEnabled) {
-                OutlinedButton(onClick = { store.requestSync(true) }, enabled = !state.syncing && !state.validatingConnection, modifier = Modifier.fillMaxWidth()) { Text(if (state.syncing) "正在同步…" else "立即同步") }
-                TextButton(onClick = { disconnect = true }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("断开同步", color = MaterialTheme.colorScheme.error) }
-            }
+        Column(Modifier.fillMaxSize().padding(padding).padding(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            Text("Cloudflare", style = MaterialTheme.typography.titleLarge)
+            Text("Cloudflare 同步正在开发，当前仅保存在本机。")
+            Text("旧云服务已停用。本机资料、离线修改和恢复信息会继续保留。")
+            Text("可在设置中导出待办、分组和备注。", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
-    if (regenerate) AlertDialog(onDismissRequest = { regenerate = false }, title = { Text("生成新的恢复密钥？") },
-        text = { Text("新密钥对应独立的同步空间。请先保留旧密钥，其他设备也需要改用新密钥。") },
-        confirmButton = { TextButton(onClick = { draft = draft.copy(recoveryKey = store.generateRecoveryKey(), createVault = true); regenerate = false }) { Text("生成新密钥") } }, dismissButton = { TextButton(onClick = { regenerate = false }) { Text("取消") } })
-    if (disconnect) AlertDialog(onDismissRequest = { disconnect = false }, title = { Text("断开云同步？") }, text = { Text("将清除本机连接凭据，保留本地事项和云端加密资料。重新连接需要原恢复密钥。") },
-        confirmButton = { TextButton(onClick = { if (store.saveSettings(CloudSettings())) { disconnect = false; onBack() } }) { Text("断开", color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { disconnect = false }) { Text("取消") } })
-}
-
-@Composable private fun SecretField(label: String, value: String, enabled: Boolean = true, changed: (String) -> Unit) {
-    var visible by remember { mutableStateOf(false) }
-    OutlinedTextField(value, changed, enabled = enabled, modifier = Modifier.fillMaxWidth(), label = { Text(label) }, singleLine = true,
-        visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-        trailingIcon = { IconButton(onClick = { visible = !visible }) { Icon(if (visible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, if (visible) "隐藏$label" else "显示$label") } })
 }
 
 @OptIn(ExperimentalLayoutApi::class)

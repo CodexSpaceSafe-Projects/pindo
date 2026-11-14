@@ -81,7 +81,7 @@ class SyncConnectionTest {
 
     @Test fun routeChangesKeepLogicalIdentityAndLegacyMigrationKeepsHistory() {
         val settings = CloudSettings(enabled = true, bucket = "bucket-a", recoveryKey = "01".repeat(32))
-        val routed = settings.copy(endpoint = "https://another.bitiful.net", region = "cn-other-1")
+        val routed = settings.copy(endpoint = "https://legacy-route.example", region = "cn-other-1")
         assertEquals(SyncChannelIdentity.channelID(settings), SyncChannelIdentity.channelID(routed))
         val legacy = document().put("syncChannel", SyncChannelIdentity.legacyChannelID(settings))
             .put("syncSession", SyncSession(SyncChannelIdentity.legacyChannelID(settings)).json())

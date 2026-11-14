@@ -150,25 +150,10 @@ class AndroidUiTest {
     }
 
     @Test fun restoredEditorOwnsItsLeaseBeforeForegroundSynchronizationCanStart() {
-        val calls = java.util.concurrent.atomic.AtomicInteger()
-        val connection = CloudSettings(enabled = true, bucket = "test-bucket", accessKey = "test-access", secretKey = "test-secret",
-            recoveryKey = "01".repeat(32), createVault = true)
         compose.runOnUiThread {
-            store.transportFactory = { _, _ ->
-                calls.incrementAndGet()
-                object : com.pindo.app.sync.SyncTransport {
-                    override fun listHeads(): List<com.pindo.app.sync.SyncRemoteHead> = error("The UI restoration gate must prevent networking")
-                    override fun listObjects(): List<com.pindo.app.sync.SyncRemoteHead> = emptyList()
-                    override fun download(key: String, expectedETag: String?): ByteArray = error("unexpected download")
-                    override fun upload(data: ByteArray, key: String) = error("unexpected upload")
-                    override fun cancel() {}
-                }
-            }
             check(store.addTask("恢复编辑中的事项", "上次已保存的备注", LocalDate.now(), null, null))
             store.startForeground()
             assertTrue("onStart must not open the network gate", !store.networkUiReady())
-            assertTrue("Even connection probes wait for restored UI leases", !store.saveSettings(connection))
-            assertEquals(0, calls.get())
             store.dismissError()
         }
         val restoration = StateRestorationTester(compose)
@@ -191,8 +176,6 @@ class AndroidUiTest {
             compose.waitForIdle()
             compose.runOnIdle {
                 assertTrue("The restored editor lease survives the root SideEffect", !store.networkUiReady())
-                assertTrue(!store.saveSettings(connection))
-                assertEquals(0, calls.get())
                 assertEquals("上次已保存的备注", store.state.value.tasks.single().note)
                 val nested = store.beginEditing()
                 store.endEditing(nested)
@@ -201,7 +184,7 @@ class AndroidUiTest {
             compose.onNodeWithContentDescription("关闭编辑").performClick()
             compose.onNodeWithText("放弃修改").performClick()
             compose.onNodeWithTag("task-editor").assertDoesNotExist()
-            compose.runOnIdle { assertTrue(store.networkUiReady()); assertEquals(0, calls.get()) }
+            compose.runOnIdle { assertTrue(store.networkUiReady()) }
         } finally { compose.runOnUiThread { store.stopForeground() } }
     }
 

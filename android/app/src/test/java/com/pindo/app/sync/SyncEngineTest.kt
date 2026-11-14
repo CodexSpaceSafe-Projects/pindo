@@ -132,7 +132,7 @@ class SyncEngineTest {
     @Test fun markerIsAVerifiedV2CheckpointAndLateV1HeadsStillMerge() {
         val remote = MemoryTransport(crypto.vaultID)
         val legacy = SyncReplica.fresh(a).apply { capture(JSONArray().put(task()), JSONArray()) }
-        val legacyKey = BitifulClient.headKey(crypto.vaultID, a)
+        val legacyKey = "pindo/v1/${crypto.vaultID}/heads/$a.json"
         remote.heads[legacyKey] = crypto.seal(legacy.payload().toString().toByteArray())
         val engine = SyncEngine(crypto, channel, false, remote)
         var local = engine.prepare(document(null), engine.fetch(session(document(null))))

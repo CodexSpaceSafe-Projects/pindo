@@ -21,7 +21,8 @@ internal class DocumentStorage(context: Context) {
     fun write(document: JSONObject) = atomicWrite(file, document.toString().toByteArray())
 }
 
-data class CloudSettings(val enabled: Boolean = false, val endpoint: String = "https://s3.bitiful.net",
+// Retained solely to decode encrypted local recovery journals. Never used to connect.
+data class CloudSettings(val enabled: Boolean = false, val endpoint: String = "",
     val bucket: String = "", val region: String = "cn-east-1", val accessKey: String = "",
     val secretKey: String = "", val recoveryKey: String = "", val createVault: Boolean = false) {
     fun json(): JSONObject = JSONObject().put("enabled", enabled).put("endpoint", endpoint).put("bucket", bucket)

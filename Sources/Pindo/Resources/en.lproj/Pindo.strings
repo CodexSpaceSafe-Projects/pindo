@@ -262,8 +262,6 @@
 "同步资料格式无效" = "Invalid sync data format";
 "请先配置同步" = "Configure sync first";
 "同步状态不存在" = "Sync state is missing";
-"Use a valid Bitiful HTTPS endpoint, bucket and region." = "Use a valid Bitiful HTTPS endpoint, bucket and region.";
-"Enter valid Bitiful access and secret keys." = "Enter valid Bitiful access and secret keys.";
 "The recovery key must contain exactly 64 hexadecimal characters." = "The recovery key must contain exactly 64 hexadecimal characters.";
 "A secure recovery key could not be generated." = "A secure recovery key could not be generated.";
 "Encrypted sync data could not be verified. Check the recovery key." = "Encrypted sync data could not be verified. Check the recovery key.";
@@ -271,14 +269,7 @@
 "The sync listing is invalid. No remote data was applied." = "The sync listing is invalid. No remote data was applied.";
 "Sync data exceeds the 7 MiB plaintext or 10 MiB encrypted safety limit." = "Sync data exceeds the 7 MiB plaintext or 10 MiB encrypted safety limit.";
 "The vault contains more than 100 device heads." = "The vault contains more than 100 device heads.";
-"Bitiful denied access. Check the keys and bucket permissions." = "Bitiful denied access. Check the keys and bucket permissions.";
-"The Bitiful bucket or sync object was not found." = "The Bitiful bucket or sync object was not found.";
-"Bitiful is limiting requests. Sync will retry later." = "Bitiful is limiting requests. Sync will retry later.";
-"Bitiful is temporarily unavailable. Sync will retry later." = "Bitiful is temporarily unavailable. Sync will retry later.";
-"Bitiful redirected the request. Check the endpoint and region." = "Bitiful redirected the request. Check the endpoint and region.";
-"Could not connect to Bitiful. Local changes are preserved." = "Could not connect to Bitiful. Local changes are preserved.";
 "客户端端到端加密已启用" = "Client-side End-to-End Encryption Enabled";
-"使用你自己的缤纷云账号；云端只保存加密后的待办、分组和备注。" = "Use your own Bitiful account. Only encrypted tasks, groups, and notes are stored in the cloud.";
 "应用运行时每 30 秒检查变化，修改后自动尝试同步；离线时仍可使用，联网后重试。" = "Checks for changes every 30 seconds while the app is running and attempts to sync after edits. Tasks remain available offline, with retries when connected.";
 "断开云同步？" = "Disconnect Cloud Sync?";
 "断开同步" = "Disconnect";
@@ -290,8 +281,6 @@
 "等待首次同步" = "Waiting for First Sync";
 "立即同步" = "Sync Now";
 "更改配置" = "Change Configuration";
-"在缤纷云创建私有存储桶，并为同步创建仅可访问该存储桶的子用户凭据。" = "Create a private Bitiful bucket and sub-user credentials limited to that bucket for syncing.";
-"打开缤纷云控制台" = "Open Bitiful Console";
 "存储桶名称" = "Bucket Name";
 "服务区域" = "Region";
 "恢复密钥" = "Recovery Key";
@@ -343,3 +332,6 @@
 "首次连接新资料库会合并当前本机待办；返回已连接过的资料库会恢复该库的本机副本与离线历史。" = "The first connection to a new vault merges this device’s current tasks. Returning to a previously connected vault restores its local copy and offline history.";
 "正在验证同步连接…" = "Verifying Sync Connection…";
 "新版同步会暂停旧版设备的云同步，请先将所有设备升级到 0.3 或更新版本。" = "The new sync protocol pauses cloud sync on older clients. Update every device to version 0.3 or later first.";
+"Cloudflare 同步正在开发，当前仅保存在本机。" = "Cloudflare sync is in development. Data is currently saved on this device only.";
+"旧云服务已停用。本机资料、离线修改和恢复信息会继续保留。" = "The previous cloud service is retired. Local data, offline changes and recovery information are preserved.";
+"可在备份设置中导出待办、分组和备注。" = "Export tasks, groups and notes from Backup settings.";

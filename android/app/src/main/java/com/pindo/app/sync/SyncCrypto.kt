@@ -50,6 +50,27 @@ class SyncCrypto(recoveryKey: String) {
         return envelope
     }
 
+    fun sealV3(plaintext: ByteArray, context: SyncV3EnvelopeContext): ByteArray =
+        sealV3WithNonce(plaintext, context, ByteArray(12).also(random::nextBytes))
+
+    internal fun sealV3WithNonce(plaintext: ByteArray, context: SyncV3EnvelopeContext, nonce: ByteArray): ByteArray {
+        val limit = if (context.kind == "chunk") SyncV3.MAX_CHUNK_BYTES else SyncV3.MAX_BATCH_BYTES
+        require(plaintext.isNotEmpty() && plaintext.size <= limit - 28 && nonce.size == 12)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, nonce))
+        cipher.updateAAD(context.associatedData())
+        return nonce + cipher.doFinal(plaintext)
+    }
+
+    fun openV3(combined: ByteArray, context: SyncV3EnvelopeContext): ByteArray {
+        val limit = if (context.kind == "chunk") SyncV3.MAX_CHUNK_BYTES else SyncV3.MAX_BATCH_BYTES
+        require(combined.size in 29..limit)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, combined.copyOfRange(0,12)))
+        cipher.updateAAD(context.associatedData())
+        return cipher.doFinal(combined.copyOfRange(12,combined.size))
+    }
+
     fun open(envelope: ByteArray): ByteArray = open(envelope, 1)
 
     fun openV2(envelope: ByteArray): ByteArray = open(envelope, 2)

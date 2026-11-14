@@ -18,14 +18,6 @@ internal interface SyncTransport {
     fun cancel()
 }
 
-internal class BitifulSyncTransport(private val client: BitifulClient, private val vaultID: String) : SyncTransport {
-    override fun listHeads() = client.listHeads(vaultID)
-    override fun listObjects() = client.listObjects(vaultID)
-    override fun download(key: String, expectedETag: String?) = client.download(key, expectedETag)
-    override fun upload(data: ByteArray, key: String) = client.upload(data, key)
-    override fun cancel() = client.cancel()
-}
-
 internal data class PendingSyncObject(val key: String, val data: ByteArray, val payloadDigest: String) {
     fun json(): JSONObject = JSONObject().put("key", key).put("data", Base64.getEncoder().encodeToString(data)).put("payloadDigest", payloadDigest)
 }

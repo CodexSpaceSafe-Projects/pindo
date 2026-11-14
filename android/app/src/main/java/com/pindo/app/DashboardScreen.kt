@@ -54,7 +54,7 @@ import java.util.Locale
         verticalArrangement = Arrangement.spacedBy(11.dp)) {
         item {
             PindoPageHeader("我的清单", today.format(DateTimeFormatter.ofPattern("M月d日 EEEE", Locale.SIMPLIFIED_CHINESE))) {
-                PindoSyncChip(state) { if (state.syncEnabled && !state.syncing) store.requestSync(true) else onSyncSettings() }
+                PindoSyncChip(state, onSyncSettings)
             }
         }
         item { PindoErrorMessage(state.error, store::dismissError) }

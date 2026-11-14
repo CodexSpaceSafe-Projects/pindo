@@ -262,8 +262,6 @@
 "同步资料格式无效" = "同步资料格式无效";
 "请先配置同步" = "请先配置同步";
 "同步状态不存在" = "同步状态不存在";
-"Use a valid Bitiful HTTPS endpoint, bucket and region." = "请填写有效的缤纷云 HTTPS 地址、存储桶和区域。";
-"Enter valid Bitiful access and secret keys." = "请填写有效的缤纷云 Access Key 和 Secret Key。";
 "The recovery key must contain exactly 64 hexadecimal characters." = "恢复密钥必须为 64 位十六进制字符。";
 "A secure recovery key could not be generated." = "无法生成安全恢复密钥，请重试。";
 "Encrypted sync data could not be verified. Check the recovery key." = "无法验证加密同步数据，请检查恢复密钥。";
@@ -271,14 +269,7 @@
 "The sync listing is invalid. No remote data was applied." = "同步文件列表无效，未应用远端资料。";
 "Sync data exceeds the 7 MiB plaintext or 10 MiB encrypted safety limit." = "同步资料超过 7 MiB 明文或 10 MiB 密文上限。";
 "The vault contains more than 100 device heads." = "同步资料库超过 100 个设备文件的上限。";
-"Bitiful denied access. Check the keys and bucket permissions." = "缤纷云拒绝访问，请检查凭据和存储桶权限。";
-"The Bitiful bucket or sync object was not found." = "找不到缤纷云存储桶或同步文件。";
-"Bitiful is limiting requests. Sync will retry later." = "缤纷云正在限制请求，将稍后重试。";
-"Bitiful is temporarily unavailable. Sync will retry later." = "缤纷云暂时无法使用，将稍后重试。";
-"Bitiful redirected the request. Check the endpoint and region." = "缤纷云返回了重定向，请检查服务地址和区域。";
-"Could not connect to Bitiful. Local changes are preserved." = "无法连接缤纷云，本机修改已保留。";
 "客户端端到端加密已启用" = "客户端端到端加密已启用";
-"使用你自己的缤纷云账号；云端只保存加密后的待办、分组和备注。" = "使用你自己的缤纷云账号；云端只保存加密后的待办、分组和备注。";
 "应用运行时每 30 秒检查变化，修改后自动尝试同步；离线时仍可使用，联网后重试。" = "应用运行时每 30 秒检查变化，修改后自动尝试同步；离线时仍可使用，联网后重试。";
 "断开云同步？" = "断开云同步？";
 "断开同步" = "断开同步";
@@ -290,8 +281,6 @@
 "等待首次同步" = "等待首次同步";
 "立即同步" = "立即同步";
 "更改配置" = "更改配置";
-"在缤纷云创建私有存储桶，并为同步创建仅可访问该存储桶的子用户凭据。" = "在缤纷云创建私有存储桶，并为同步创建仅可访问该存储桶的子用户凭据。";
-"打开缤纷云控制台" = "打开缤纷云控制台";
 "存储桶名称" = "存储桶名称";
 "服务区域" = "服务区域";
 "恢复密钥" = "恢复密钥";
@@ -343,3 +332,6 @@
 "首次连接新资料库会合并当前本机待办；返回已连接过的资料库会恢复该库的本机副本与离线历史。" = "首次连接新资料库会合并当前本机待办；返回已连接过的资料库会恢复该库的本机副本与离线历史。";
 "正在验证同步连接…" = "正在验证同步连接…";
 "新版同步会暂停旧版设备的云同步，请先将所有设备升级到 0.3 或更新版本。" = "新版同步会暂停旧版设备的云同步，请先将所有设备升级到 0.3 或更新版本。";
+"Cloudflare 同步正在开发，当前仅保存在本机。" = "Cloudflare 同步正在开发，当前仅保存在本机。";
+"旧云服务已停用。本机资料、离线修改和恢复信息会继续保留。" = "旧云服务已停用。本机资料、离线修改和恢复信息会继续保留。";
+"可在备份设置中导出待办、分组和备注。" = "可在备份设置中导出待办、分组和备注。";
