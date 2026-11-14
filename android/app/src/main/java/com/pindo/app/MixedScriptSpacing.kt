@@ -5,7 +5,7 @@ import java.util.Locale
 
 /** UTF-16 grapheme ranges to advance at Han/Latin or Han/digit boundaries. */
 internal object MixedScriptSpacing {
-    const val em = 0.25f
+    const val em = 0.125f
 
     fun kerningRanges(text: String, verbatim: List<IntRange> = emptyList()): List<IntRange> {
         val iterator = BreakIterator.getCharacterInstance(Locale.ROOT).apply { setText(text) }

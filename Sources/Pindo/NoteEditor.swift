@@ -42,7 +42,7 @@ struct NoteEditor: NSViewRepresentable {
         private var notifications: [NSObjectProtocol] = []
         private var eventMonitor: Any?
         private var applyingTypography = false
-        private var typographyScheduled = false
+        private var typographyFont: PindoFontChoice?
         private var ended = false
         private var stopped = false
         private var returning = false
@@ -56,7 +56,7 @@ struct NoteEditor: NSViewRepresentable {
             source = parent.text
             host?.rootView = editor()
             textView?.setAccessibilityLabel(parent.accessibilityName ?? parent.localization("待办备注内容"))
-            scheduleTypography()
+            if typographyFont != parent.fontChoice { applyTypography() }
         }
 
         func editor() -> NativeTextViewWrapper {
@@ -113,7 +113,7 @@ struct NoteEditor: NSViewRepresentable {
                 }
                 return event
             }
-            scheduleTypography()
+            applyTypography()
         }
 
         static func findTextView(in root: NSView) -> NSTextView? {
@@ -145,8 +145,10 @@ struct NoteEditor: NSViewRepresentable {
                 linkMetadata = resolved.metadata
                 source = resolved.storage
             } else { source = value }
+            // The input method can finish composition after its last storage
+            // notification. Finish that paragraph synchronously on commit too.
+            if let view = textView { applyTypography(in: view.selectedRange()) }
             if parent.text != source { parent.text = source }
-            scheduleTypography()
         }
 
         private func storageChanged(_ storage: NSTextStorage) {
@@ -170,20 +172,12 @@ struct NoteEditor: NSViewRepresentable {
             }
             linkMetadata = WikiLinkService.makeStorageState(from: view.string, existingMetadata: linkMetadata,
                                                             textStorage: storage).metadata
-            scheduleTypography()
+            // didProcessEditing is still inside TextKit's editing transaction,
+            // before layout consumers see the Markdown engine's new attributes.
+            applyTypography(in: storage.editedRange)
         }
 
-        func scheduleTypography() {
-            guard !stopped, !applyingTypography, !typographyScheduled else { return }
-            typographyScheduled = true
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.typographyScheduled = false
-                self.applyTypography()
-            }
-        }
-
-        func applyTypography() {
+        func applyTypography(in editedRange: NSRange? = nil) {
             guard !stopped, !applyingTypography, let view = textView, !view.hasMarkedText(), let storage = view.textStorage else { return }
             applyingTypography = true
             defer { applyingTypography = false }
@@ -191,15 +185,21 @@ struct NoteEditor: NSViewRepresentable {
             if registering { undo?.disableUndoRegistration() }
             storage.beginEditing()
             let whole = NSRange(location: 0, length: storage.length)
-            NoteTypography.applyFallback(to: storage, range: whole, choice: parent.fontChoice)
-            MixedScriptTypography.apply(to: storage, range: whole)
-            storage.enumerateAttribute(.link, in: whole) { value, range, _ in
+            let scope: NSRange
+            if let editedRange, editedRange.location != NSNotFound {
+                let safe = NSIntersectionRange(whole, editedRange)
+                scope = (storage.string as NSString).paragraphRange(for: safe)
+            } else { scope = whole }
+            NoteTypography.applyFallback(to: storage, range: scope, choice: parent.fontChoice)
+            MixedScriptTypography.apply(to: storage, range: scope)
+            storage.enumerateAttribute(.link, in: scope) { value, range, _ in
                 if let url = value as? URL, !["http", "https"].contains(url.scheme?.lowercased() ?? "") {
                     storage.removeAttribute(.link, range: range)
                 }
             }
             storage.endEditing()
             if registering { undo?.enableUndoRegistration() }
+            if editedRange == nil { typographyFont = parent.fontChoice }
         }
 
         func isOutsideEditor(_ event: NSEvent, scroll: NSView) -> Bool {

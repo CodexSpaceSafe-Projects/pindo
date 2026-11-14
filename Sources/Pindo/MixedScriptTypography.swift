@@ -12,37 +12,55 @@ import PindoCore
 
     /// Run after Markdown styling so hidden delimiters do not interrupt visible
     /// script boundaries. Code retains its fixed character advances.
-    static func apply(to text: NSMutableAttributedString, range: NSRange) {
-        guard range.length > 0 else { return }
+    @discardableResult static func apply(to text: NSMutableAttributedString, range: NSRange) -> Bool {
+        guard range.length > 0 else { return false }
+        // Compose the final attributes off the live storage. Restoring old kerns
+        // and adding new ones must never expose an intermediate unspaced layout.
+        let original = text.attributedSubstring(from: range)
+        let styled = NSMutableAttributedString(attributedString: original)
+        let whole = NSRange(location: 0, length: styled.length)
         // Clear only spacing owned by Pindo. Engine markers can carry negative
         // kerning to hide syntax; preserve those advances across restyles.
-        text.enumerateAttribute(appliedKern, in: range) { value, run, _ in
+        styled.enumerateAttribute(appliedKern, in: whole) { value, run, _ in
             guard let applied = value as? NSNumber else { return }
-            if let current = text.attribute(.kern, at: run.location, effectiveRange: nil) as? NSNumber, current == applied {
-                if let original = text.attribute(originalKern, at: run.location, effectiveRange: nil) as? NSNumber {
-                    text.addAttribute(.kern, value: original, range: run)
-                } else { text.removeAttribute(.kern, range: run) }
+            if let current = styled.attribute(.kern, at: run.location, effectiveRange: nil) as? NSNumber, current == applied {
+                if let original = styled.attribute(originalKern, at: run.location, effectiveRange: nil) as? NSNumber {
+                    styled.addAttribute(.kern, value: original, range: run)
+                } else { styled.removeAttribute(.kern, range: run) }
             }
         }
-        text.removeAttribute(appliedKern, range: range)
-        text.removeAttribute(originalKern, range: range)
-        let fragment = text.attributedSubstring(from: range)
-        let whole = NSRange(location: 0, length: fragment.length)
+        styled.removeAttribute(appliedKern, range: whole)
+        styled.removeAttribute(originalKern, range: whole)
         var hidden: [NSRange] = [], verbatim: [NSRange] = []
-        fragment.enumerateAttribute(.font, in: whole) { value, range, _ in
+        styled.enumerateAttribute(.font, in: whole) { value, range, _ in
             if let font = value as? NSFont, font.pointSize < 1 { hidden.append(range) }
         }
-        fragment.enumerateAttribute(.backgroundColor, in: whole) { value, range, _ in
+        styled.enumerateAttribute(.backgroundColor, in: whole) { value, range, _ in
             if value != nil { verbatim.append(range) }
         }
-        for local in MixedScriptSpacing.kerningRanges(in: fragment.string, hidden: hidden, verbatim: verbatim) {
-            let target = NSRange(location: range.location + local.location, length: local.length)
-            let font = text.attribute(.font, at: target.location, effectiveRange: nil) as? NSFont ?? .systemFont(ofSize: 14)
-            let original = text.attribute(.kern, at: target.location, effectiveRange: nil)
-            let value = (original as? NSNumber)?.doubleValue ?? 0
+        for target in MixedScriptSpacing.kerningRanges(in: styled.string, hidden: hidden, verbatim: verbatim) {
+            let font = styled.attribute(.font, at: target.location, effectiveRange: nil) as? NSFont ?? .systemFont(ofSize: 14)
+            let base = styled.attribute(.kern, at: target.location, effectiveRange: nil)
+            let value = (base as? NSNumber)?.doubleValue ?? 0
             let spaced = value + Double(font.pointSize) * MixedScriptSpacing.em
-            text.addAttributes([.kern: spaced, appliedKern: spaced, originalKern: original ?? NSNull()], range: target)
+            styled.addAttributes([.kern: spaced, appliedKern: spaced, originalKern: base ?? NSNull()], range: target)
         }
+
+        // Write only runs whose final attributes differ. Reapplying spacing to
+        // unchanged text is a true no-op, including TextKit invalidation.
+        var offset = 0, changed = false
+        while offset < whole.length {
+            var oldRun = NSRange(), newRun = NSRange()
+            let before = original.attributes(at: offset, effectiveRange: &oldRun)
+            let after = styled.attributes(at: offset, effectiveRange: &newRun)
+            let end = min(NSMaxRange(oldRun), NSMaxRange(newRun))
+            if !NSDictionary(dictionary: before).isEqual(to: after) {
+                text.setAttributes(after, range: NSRange(location: range.location + offset, length: end - offset))
+                changed = true
+            }
+            offset = end
+        }
+        return changed
     }
 
     static func styleEditor(_ view: NSTextView) {
@@ -52,10 +70,15 @@ import PindoCore
         if registering { undo?.disableUndoRegistration() }
         storage.beginEditing()
         let whole = NSRange(location: 0, length: storage.length)
-        storage.removeAttribute(.kern, range: whole)
         apply(to: storage, range: whole)
         storage.endEditing()
-        view.typingAttributes.removeValue(forKey: .kern)
+        var typing = view.typingAttributes
+        if typing[.kern] != nil || typing[appliedKern] != nil || typing[originalKern] != nil {
+            typing.removeValue(forKey: .kern)
+            typing.removeValue(forKey: appliedKern)
+            typing.removeValue(forKey: originalKern)
+            view.typingAttributes = typing
+        }
         if registering { undo?.enableUndoRegistration() }
     }
 }

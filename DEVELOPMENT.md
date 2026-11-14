@@ -13,6 +13,7 @@
 - NoteEditor hosts a stable SwiftMarkdownEngine NativeTextViewWrapper. The engine owns TextKit 2, parsing, selection, undo and its text-view delegate. Pindo must not access layoutManager (which downgrades to TextKit 1) or replace the engine's delegate. Its adapter defers external text/font updates and typography while hasMarkedText() is true, and publishes only committed storage-form Markdown.
 - 保存状态变化不得重建备注编辑器。引擎按格式范围显示语法标记；Pindo 通过其独立通知总线发送格式动作，并使用 WikiLinkService 保留存储元数据。关闭窗口先结束组词、同步提交，再由 AppModel 保存，防止异步绑定晚到。原生测试必须挂载实际引擎，不用旧解析器代替。
 - 中西文间距只调整 Pindo 自己记录的 kerning，不覆盖引擎用来折叠标记的负间距；字体补字保留标题和代码字体。Pindo 不执行 HTML、不配置外部图片加载服务。旧 LiveMarkdown／NoteDecoration 自研渲染已由引擎替换。
+- 备注间距在 NSTextStorage.didProcessEditing 的同一事务中完成，只处理受影响段落；禁止异步补间距造成先无间距、再有间距的两次排版。先在脱离布局的副本计算最终属性，只写入有差异的范围；重复应用必须不产生 storage 编辑通知。同步调整间距不得改动字符、选区或撤销栈。
 - The task panel uses a native titled, resizable, nonactivating frame with full-size content, a 360 × 420 minimum and frame autosaving. WindowServer owns its rounded corners; do not add a second rounded mask around its hosting view.
 - Quick add also uses a native titled, full-size, nonactivating frame. Hosting surfaces have no additional rounded mask; settings content meets its title bar with square corners. Quick add persists its top-left anchor, clamps to visible displays and preserves the anchor when note height changes.
 - Status-item actions toggle from `isVisible`, without relying on asynchronous occlusion updates. Menu-bar clicks must be excluded from outside dismissal; group menus contain direct actions rather than nested Pickers.

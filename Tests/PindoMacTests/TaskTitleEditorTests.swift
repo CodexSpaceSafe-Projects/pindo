@@ -18,7 +18,7 @@ final class TaskTitleEditorTests: XCTestCase {
         XCTAssertEqual(stored, "你好abc再见")
         XCTAssertEqual(editor.string, stored)
         XCTAssertEqual(editor.selectedRange(), NSRange(location: 4, length: 0))
-        XCTAssertEqual((editor.textStorage?.attribute(.kern, at: 1, effectiveRange: nil) as? NSNumber)?.doubleValue, 5)
+        XCTAssertEqual((editor.textStorage?.attribute(.kern, at: 1, effectiveRange: nil) as? NSNumber)?.doubleValue, 2.5)
         editor.string = ""; field.stringValue = ""
         coordinator.publish(field)
         XCTAssertEqual(stored, "")
