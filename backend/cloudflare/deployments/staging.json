@@ -1,0 +1,16 @@
+{
+  "accountId": "611b48a8cb6b5808bec75576f96f0556",
+  "workerName": "pindo-sync-v3-staging",
+  "endpoint": "https://pindo-sync-v3-staging.zhchain.workers.dev",
+  "databaseName": "pindo-sync-v3-staging",
+  "databaseId": "5bb85b98-3ec9-46fd-8736-8ae585f7c172",
+  "databaseRegion": "WEUR",
+  "serviceID": "4aca4b5f-31da-45b3-9f79-c897ac1d63a7",
+  "compatibilityDate": "2026-11-14",
+  "observability": {
+    "enabled": true,
+    "redact_query_string": true,
+    "logs": { "enabled": true, "invocation_logs": true, "head_sampling_rate": 0.1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.1 }
+  }
+}

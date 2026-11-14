@@ -41,6 +41,25 @@ beforeEach(async () => {
   ]);
 });
 
+test('public health verifies all schema bindings without exposing a device credential', async () => {
+  const response = await mf.dispatchFetch('https://sync.test/health');
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  assert.deepEqual(await response.json(), {service:'pindo-sync',version:3,status:'ok',serviceID,
+    capabilities:['development-log-core'],clientSyncAvailable:false});
+  assert.equal((await mf.dispatchFetch('https://sync.test/')).status, 200);
+  assert.equal((await mf.dispatchFetch(url('info'))).status, 401);
+});
+
+test('health fails closed if a required database table is missing', async () => {
+  await db.prepare('ALTER TABLE receipts RENAME TO retained_receipts').run();
+  try {
+    const response = await mf.dispatchFetch('https://sync.test/health');
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).error.code, 'storage_unavailable');
+  } finally { await db.prepare('ALTER TABLE retained_receipts RENAME TO receipts').run(); }
+});
+
 test('push is idempotent, changed bytes conflict, and receipt is independent of pull cursor', async () => {
   const first = await request('push', body()); assert.equal(first.status, 200);
   assert.equal(first.body.receipt.revision, 1); assert.equal('nextCursor' in first.body, false);

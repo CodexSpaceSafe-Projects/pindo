@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "build:test": "esbuild src/index.ts --bundle --format=esm --platform=neutral --outfile=../../work/cloudflare-worker.mjs",
     "test": "npm run build:test && node --test test/*.test.mjs",
-    "types": "cf workers types --mode development --include-runtime=false"
+    "types": "cf workers types --mode development --include-runtime=false",
+    "build:staging": "node scripts/prepare-staging.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261114.1",
