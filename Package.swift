@@ -3,8 +3,15 @@ import PackageDescription
 
 var products: [Product] = [.library(name: "PindoCore", targets: ["PindoCore"])]
 var dependencies: [Package.Dependency] = []
+// macOS must link the SDK's universal libsqlite3, never a host-only Homebrew
+// library. Linux uses pkg-config to locate distribution development headers.
+#if os(macOS)
+let sqliteTarget: Target = .systemLibrary(name: "CSQLite")
+#else
+let sqliteTarget: Target = .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3", providers: [.apt(["libsqlite3-dev"])])
+#endif
 var targets: [Target] = [
-    .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3", providers: [.apt(["libsqlite3-dev"]), .brew(["sqlite3"])]),
+    sqliteTarget,
     .target(name: "PindoCore", dependencies: ["CSQLite"]),
     .testTarget(name: "PindoCoreTests", dependencies: ["PindoCore"])
 ]
