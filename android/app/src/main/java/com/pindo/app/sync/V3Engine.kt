@@ -104,7 +104,7 @@ internal class V3Engine(private val store:V3Store,private val transport:V3Transp
         for(i in 0 until commits.length()){
             val item=commits.getJSONObject(i);val id=item.getString("batchID");val sealed=Base64.getDecoder().decode(item.getString("ciphertext"));val refs=strings(item.getJSONArray("artifactIDs"))
             require(item.getLong("revision")==cursor+1&&digest(c,"batch",id,refs,sealed,epoch)==item.getString("digest"))
-            val batch=JSONObject(decode(c,epoch,"batch",id,sealed,refs,lease).toString(Charsets.UTF_8));require(refs.isNotEmpty()||batch.getJSONArray("operations").length()<=50)
+            val batch=JSONObject(decode(c,epoch,"batch",id,sealed,refs,lease).toString(Charsets.UTF_8));require(refs.isNotEmpty()||maxOf(batch.getJSONArray("operations").length(),batch.optJSONObject("payload")?.optJSONObject("records")?.length()?:0)<=50)
             cursor=item.getLong("revision");entries.add(V3Entry(cursor,id,batch))
         }
         require(r.getLong("nextCursor")==cursor&&r.getLong("head")>=cursor&&r.getBoolean("hasMore")== (cursor<r.getLong("head")))
@@ -157,7 +157,7 @@ internal class V3Engine(private val store:V3Store,private val transport:V3Transp
                 if(first!=null){
                     if(first.receipt!=null&&fetched==remote.getLong("head")){release(c);return V3SyncResult(c,false,true)}
                     if(first.wire==null){
-                        val batch=JSONObject(first.plain.toString(Charsets.UTF_8));val frame=encode(first.plain,c,"batch",first.id,batch.getJSONArray("operations").length()>50)
+                        val batch=JSONObject(first.plain.toString(Charsets.UTF_8));val frame=encode(first.plain,c,"batch",first.id,maxOf(batch.getJSONArray("operations").length(),batch.optJSONObject("payload")?.optJSONObject("records")?.length()?:0)>50)
                         val wire=body(JSONObject().put("version",3).put("epoch",c.epoch).put("batchID",first.id).put("ciphertext",Base64.getEncoder().encodeToString(frame.sealed)).put("artifactIDs",JSONArray(frame.refs)))
                         check();store.freeze(b,first.id,wire,digest(c,"batch",first.id,frame.refs,frame.sealed),frame.chunks)
                     }

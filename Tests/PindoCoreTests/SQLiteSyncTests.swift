@@ -114,4 +114,38 @@ final class SQLiteSyncTests: XCTestCase {
         }
     }
 
+    func testSwitchingLibrariesRetainsEachOutboxAndRejectsLateUploadCallback() throws {
+        let repository=try PindoRepository(directory:directory(),useSQLite:true), store=try XCTUnwrap(repository.sqlite), first=try binding()
+        try store.bind(first,importingLocal:true);try repository.reloadCurrentDocument()
+        try repository.update{$0.tasks.append(TodoItem(title:"First library"))}
+        let queued=try XCTUnwrap(store.queue(first).first)
+        try store.freeze(first,id:queued.id,wire:Data("first frozen".utf8),digest:String(repeating:"a",count:64),chunks:[])
+        let second=try SyncV3Binding(serviceID:first.serviceID,vaultID:UUID().uuidString.lowercased(),epoch:first.epoch)
+        try store.bind(second,importingLocal:false);try repository.reloadCurrentDocument()
+        XCTAssertTrue(repository.document.tasks.isEmpty)
+        XCTAssertThrowsError(try store.acknowledge(first,id:queued.id,digest:String(repeating:"a",count:64),revision:1))
+        try repository.update{$0.tasks.append(TodoItem(title:"Second library"))}
+        try store.bind(first,importingLocal:false);try repository.reloadCurrentDocument()
+        XCTAssertEqual(repository.document.tasks.map(\.title),["First library"])
+        XCTAssertEqual(try store.queue(first).first?.wire,Data("first frozen".utf8))
+        XCTAssertEqual(try store.queue(second).count,1)
+    }
+    func testHigherUnseenTitleClockCannotAcknowledgeAnOldConcurrentNote() throws {
+        let actorA=UUID().uuidString.lowercased(),actorB=UUID().uuidString.lowercased()
+        var original=PindoDocument();original.groups=[];original.tasks=[TodoItem(title:"Original",note:"Initial")]
+        let key="task:\(original.tasks[0].id.uuidString.lowercased())"
+        var empty=PindoDocument();empty.groups=[]
+        let created=try SyncV3Delta.capture(before:empty,after:original,actor:actorA,clock:1,known:[]){_ in []}
+        let base=try SyncPayload(version:2).applyingV3(created)
+        var title=original;title.tasks[0].title="Much higher title"
+        let titleDelta=try SyncV3Delta.capture(before:original,after:title,actor:actorA,clock:100,known:[key]){_ in base.records[key]!.notes}
+        let withTitle=try base.applyingV3(titleDelta)
+        var noteA=title;noteA.tasks[0].note="New local note"
+        let local=try SyncV3Delta.capture(before:title,after:noteA,actor:actorB,clock:101,known:[key]){_ in withTitle.records[key]!.notes}
+        var noteB=original;noteB.tasks[0].note="Unseen earlier note"
+        let unseen=try SyncV3Delta.capture(before:original,after:noteB,actor:actorA,clock:2,known:[key]){_ in base.records[key]!.notes}
+        let merged=try withTitle.applyingV3(local).applyingV3(unseen)
+        XCTAssertEqual(Set(merged.records[key]!.notes.map(\.value)),["New local note","Unseen earlier note"])
+    }
+
 }

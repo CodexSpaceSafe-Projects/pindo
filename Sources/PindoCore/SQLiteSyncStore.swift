@@ -174,7 +174,7 @@ public final class SQLiteSyncStore {
                 if try binding == nil { try put(original, key: "unbound_source") }
                 try database.execute("INSERT INTO v3_vaults(channel,epoch) VALUES(?,?)", [.text(b.channel), .text(b.epoch)])
                 if importingLocal {
-                    var legacy = try original.syncState?.upgraded() ?? SyncReplica(version: 2)
+                    var legacy = try binding == nil ? (original.syncState?.upgraded() ?? SyncReplica(version: 2)) : SyncReplica(version: 2)
                     // Reconcile visible offline edits once while retaining legacy provenance.
                     try legacy.rotateActor(); try legacy.capture(tasks: original.tasks, groups: original.groups)
                     if !legacy.payload.records.isEmpty {

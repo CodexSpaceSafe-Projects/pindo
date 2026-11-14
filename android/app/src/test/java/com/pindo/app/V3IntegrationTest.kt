@@ -30,7 +30,12 @@ class V3IntegrationTest {
         val bootstrap=JSONObject().put("version",3).put("vaultID",vault).put("epoch",epoch).put("deviceID",c.deviceID).put("deviceToken",c.token).put("keyCheck",JSONObject().put("id",probeID).put("epoch",epoch).put("ciphertext",Base64.getEncoder().encodeToString(probe)))
         try{http.request("POST","/v3/bootstrap",bootstrap.toString().toByteArray(),"integration-bootstrap")}
         catch(e:V3Failure){assertEquals("bootstrap_closed",e.code);http.request("POST","/v3/vaults/$vault/pairings/00000000-0000-4000-8000-000000000012/consume",JSONObject().put("epoch",epoch).put("deviceID",c.deviceID).put("deviceToken",c.token).put("code",token(10)).toString().toByteArray())}
-        store.bind(c.binding,false);val engine=V3Engine(store,http,crypto)
+        store.bind(c.binding,false)
+        val lossy=object:V3Transport {var lose=true;override suspend fun request(method:String,path:String,body:ByteArray?,token:String?):JSONObject {
+            val response=http.request(method,path,body,token)
+            if(path.endsWith("/push")&&lose){lose=false;throw V3Failure("storage_unavailable")};return response
+        }}
+        val engine=V3Engine(store,lossy,crypto)
         repeat(8){engine.synchronize(c)}
         val before=store.read()
         if(System.getenv("PINDO_INTEROP_PHASE")=="android"){

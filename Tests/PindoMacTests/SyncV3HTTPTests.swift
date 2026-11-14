@@ -18,7 +18,7 @@ final class SyncV3HTTPTests: XCTestCase {
         defer {try? FileManager.default.removeItem(at:dir)}
         let repo=try PindoRepository(directory:dir,useSQLite:true), store=try XCTUnwrap(repo.sqlite)
         let c=SyncV3Connection(endpoint:endpoint,serviceID:service,vaultID:vault,epoch:epoch,deviceID:device,token:token(7),recoveryKey:key)
-        let engine=SyncV3Engine(store:store,transport:http,cipher:cipher)
+        let engine=SyncV3Engine(store:store,transport:LostPushACK(base:http),cipher:cipher)
         if ProcessInfo.processInfo.environment["PINDO_INTEROP_PHASE"] == "verify" {
             try store.bind(c.binding,importingLocal:false)
             for _ in 0..<10 {if try await !engine.synchronize(c).hasMore {break}}
@@ -59,5 +59,16 @@ final class SyncV3HTTPTests: XCTestCase {
         _ = try await engine.synchronize(c)
         let androidPair:JSONValue = .object(["id":.string("00000000-0000-4000-8000-000000000012"),"code":.string(token(10)),"epoch":.string(epoch)])
         _ = try await http.request(method:"POST",path:"/v3/vaults/\(vault)/pairings",body:DocumentCodec.encode(androidPair),token:c.token)
+    }
+}
+
+private actor LostPushACK: SyncV3Transport {
+    let base: any SyncV3Transport
+    var lose=true
+    init(base:any SyncV3Transport){self.base=base}
+    func request(method:String,path:String,body:Data?,token:String?) async throws -> Data {
+        let response=try await base.request(method:method,path:path,body:body,token:token)
+        if path.hasSuffix("/push") && lose {lose=false;throw SyncV3Error.storageUnavailable}
+        return response
     }
 }
