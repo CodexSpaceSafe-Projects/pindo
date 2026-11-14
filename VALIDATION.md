@@ -145,3 +145,14 @@ Build and run with the README commands, then check:
 [Successful historical run](https://github.com/CodexSpaceSafe-Projects/pindo/actions/runs/42206508251) validated commit e31dc33 on macOS 15 / Xcode 16.4: compilation, tests, arm64/x86_64 universal packaging, ad hoc signing, five-second process launch and artifact upload.
 
 That run predates this panel/editor change and is not evidence that the current native code compiles or that the interaction issues are resolved on a Mac. Release artifacts use ad hoc signing without Developer ID signing or Apple notarization.
+
+## Cloudflare v3 完整同步实现（2026-11-14）
+
+- Linux 跨平台核心 122 项通过，包括 SQLite 迁移/重启、事务失败回滚、ACK 与拉取游标分离、patch 先于 create、旧 epoch 冻结队列保留、资料库切换后旧回调拒绝、记录级备注因果上下文。
+- 1,000 / 10,000 条资料的标题修改均生成 254 字节逻辑增量并修改 4 行；SQLite 触发器禁止任何备注列更新后仍通过。一次本机 debug 运行耗时分别 34 / 484 ms；这是本次环境的测量值，不是用户设备延迟保证。
+- Worker 类型检查和 20 项 workerd/D1 测试通过，包括配对尝试上限、令牌轮换/撤销、分块完整性、检查点 CAS 和重试计费、双检查点 GC、租约保护及维护/epoch 恢复。
+- 已通过 Cloudflare 插件执行 D1 migration 0002，SHA-256 `7dced551aa939999202ee1254a59e66cabf59a1410879bcdfb1bb9aef3109253`。部署后端源提交 `71c7883e476a73ef7fd1c9502f52c62553f4677a`，bundle SHA-256 `42c50f8b20627fe451d69138e75837dd4313b1ab29d9ece601ac44b8bf834caa`，版本 `599bf3f7-cb58-4143-8d8e-8b900df2d885`，100% 流量。
+- GitHub Actions 线上探测：health/root 200、未授权请求 401、`clientSyncAvailable=true`。[探测运行](https://github.com/CodexSpaceSafe-Projects/pindo/actions/runs/43605494099)。本环境直接访问 workers.dev 受出站策略限制，因此通过正常 CI 网络进行公开地址验证。
+- 原生 CI 运行完整 Swift/macOS 测试、CryptoKit 客户端连接真实 loopback Worker，再运行 Java AES-GCM Android 客户端读取同一份密文并写回，最后由 Swift 解密 Android 写入。独立 Android CI 同时运行全部 Robolectric/Compose 测试、lint 和 APK 构建。最终成功状态以交付的对应提交 CI 链接为准；未将旧提交的通过结果计入新提交。
+- 本地 Android Kotlin 编译通过；本地完整测试所需 Robolectric native runtime 下载被镜像网络策略拒绝，完整验证由 CI 执行。Robolectric/原生构建不等于用户手机、菜单栏和输入法实机验收。
+- 两把独立服务密钥仅安装为 Cloudflare secret bindings，私密初始化/恢复文件保存在忽略的本机交付目录，没有提交密钥。首次客户端仍需使用初始化密钥创建库，之后通过一次性配对加入其它设备。没有在真实用户资料库中写入测试数据。
