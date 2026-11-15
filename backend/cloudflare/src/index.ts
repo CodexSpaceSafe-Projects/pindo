@@ -103,7 +103,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (request.method === "GET" && ["/", "/health"].includes(url.pathname)) {
     const results = await env.DB.batch([
       env.DB.prepare("SELECT id FROM vaults LIMIT 0"),
-      env.DB.prepare("SELECT id FROM devices LIMIT 0"),
+      env.DB.prepare("SELECT id,name FROM devices LIMIT 0"),
       env.DB.prepare("SELECT vault_id FROM commits LIMIT 0"),
       env.DB.prepare("SELECT vault_id FROM receipts LIMIT 0"),
       env.DB.prepare("SELECT bootstrapped FROM service_state WHERE id=1"),env.DB.prepare("SELECT key_check,checkpoint_id,recovery_from_epoch,log_count,log_bytes FROM vaults LIMIT 0"),env.DB.prepare("SELECT digest FROM artifacts LIMIT 0"),env.DB.prepare("SELECT covered FROM checkpoints LIMIT 0"),env.DB.prepare("SELECT id FROM leases LIMIT 0"),env.DB.prepare("SELECT attempts FROM pairing LIMIT 0")
@@ -112,7 +112,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ service: "pindo-sync", version: 3, status: "ok", serviceID: env.SERVICE_ID,
       capabilities: ["v3-sync","pairing","artifacts","checkpoints","gc"], clientSyncAvailable: true });
   }
-  const match = /^\/v3\/vaults\/([^/]+)\/(info|push|pull|receipts\/([^/]+)|pairings|devices(?:\/[^/]+\/(?:rotate|revoke))?|artifacts\/[^/]+|checkpoints|leases\/[^/]+|gc)$/.exec(url.pathname);
+  const match = /^\/v3\/vaults\/([^/]+)\/(info|push|pull|receipts\/([^/]+)|pairings|devices(?:\/[^/]+\/(?:rotate|revoke|name))?|artifacts\/[^/]+|checkpoints|leases\/[^/]+|gc)$/.exec(url.pathname);
   if (!match) throw new ProtocolError("not_found", 404);
   const vaultID = uuid(match[1]);
   const auth = await authenticate(request, vaultID);

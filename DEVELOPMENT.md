@@ -26,7 +26,7 @@ macOS 面板使用非激活、可调整尺寸的原生窗口；置顶控制隐�
 
 入口为 [`src/index.ts`](backend/cloudflare/src/index.ts)；[`src/v3/devices.ts`](backend/cloudflare/src/v3/devices.ts) 负责建库、配对和设备管理，[`src/v3/history.ts`](backend/cloudflare/src/v3/history.ts) 负责分块、检查点、租约和 GC。HTTP API 包括 `/health`、`/v3/bootstrap`，以及 `/v3/vaults/<vaultID>/` 下的 `info`、`push`、`pull`、`receipts/<batchID>`、`pairings`、`devices`、`artifacts/<digest>`、`checkpoints`、`leases/<id>` 和 `gc`。
 
-每个服务仅允许首次创建一个资料库，适合个人部署后连接多台设备，尚无多用户注册。首次设备以 `BOOTSTRAP_SECRET` 建库；已有设备生成 10 分钟有效的一次性邀请供新设备加入。设备使用独立 Bearer token，D1 保存其 SHA-256 哈希，支持撤销与轮换。端到端数据加密密钥只在客户端持有。
+每个服务仅允许首次创建一个资料库，适合个人部署后连接多台设备，尚无多用户注册。首次设备以 `BOOTSTRAP_SECRET` 建库；已有设备生成 10 分钟有效的一次性邀请供新设备加入。设备使用独立 Bearer token，D1 保存其 SHA-256 哈希，支持撤销与轮换。端到端数据加密密钥只在客户端持有。设备列表返回可读名称并标记本机；注册可带 `deviceName`，`POST devices/<自己的ID>/name` 传 `{epoch,name}` 修改本机名称。名称是共享的设备管理元数据，不进入待办密文或本机导出；重试注册不会覆盖已更名设备。
 
 ## Cloudflare 部署
 
@@ -34,7 +34,7 @@ macOS 面板使用非激活、可调整尺寸的原生窗口；置顶控制隐�
 
 ### 首次部署
 
-1. 在 Cloudflare 控制台创建空 D1 数据库，进入该数据库的 Console，执行 [`migrations/0001_schema.sql`](backend/cloudflare/migrations/0001_schema.sql) 全文一次。它是完整初始化 schema，不是已有数据库的升级脚本。
+1. 在 Cloudflare 控制台创建空 D1 数据库，进入该数据库的 Console，依次执行 [0001_schema.sql](backend/cloudflare/migrations/0001_schema.sql) 和 [0002_device_names.sql](backend/cloudflare/migrations/0002_device_names.sql)，各一次。已有数据库只执行尚未应用的增量迁移，不重跑完整初始化 schema。
 2. 在 Workers & Pages 中创建 Worker，名称与下一步填写的 `workerName` 一致，先发布控制台的占位示例。在该 Worker 的 Settings → Variables and Secrets 中，将 `BOOTSTRAP_SECRET`、`RECOVERY_SECRET` 添加为 **Secret**，分别使用独立随机值。前者供首台设备初始化资料库；后者仅用于管理员维护与灾备，不是客户端的内容加密密钥。先建立 Worker 和 Secret，才能在后续上传时继承它们。
 3. 编辑 [`deployments/staging.json`](backend/cloudflare/deployments/staging.json)，填写自己的 `accountId`、`workerName`、`databaseId`、`databaseName`、`endpoint` 和 `serviceID`。`serviceID` 使用新生成的 UUID，一旦建库便保持稳定；若改变域名，也要更新 `endpoint`。`endpoint`、`databaseRegion` 是配置记录，不会自动创建域名或改变数据库区域。
 4. 使用 Node.js 22，在仓库根目录执行验证和打包：
@@ -74,6 +74,8 @@ macOS 面板使用非激活、可调整尺寸的原生窗口；置顶控制隐�
 [服务端 CI](.github/workflows/cloudflare.yml) 运行测试、生成并上传 `Pindo-Cloudflare-server` artifact，并对现有 staging 探活；**没有自动部署步骤**。GitHub 构建成功、客户端 Release 发布或 `/health` 正常，都不表示最新源码已经上线。每次发布后应在 Cloudflare 的部署记录确认当前生效版本，并核对发布提交；手动上传构建包时还可核对 annotation 中的源码提交与 bundle 摘要。文档不固定记录某次线上提交，以部署记录为准。
 
 管理员恢复须先进入维护模式，再轮换 epoch：`POST /v3/admin/maintenance` 传 `{vaultID, enabled:true}`，`POST /v3/admin/recover` 传 `{vaultID, epoch:新UUID}`，使用服务端 `RECOVERY_SECRET` 作为 Bearer。D1 时间点恢复同样需要轮换 epoch；客户端保留未确认操作，恢复后重新提交。
+
+已有数据库只需执行新增的 `0002_device_names.sql`（添加 `devices.name`），不可重跑完整 `0001_schema.sql`。现有设备在新版客户端打开设备管理时，仅对自己的空名称补上本机默认名；已有自定义名不会被覆盖。
 
 ## 验证
 

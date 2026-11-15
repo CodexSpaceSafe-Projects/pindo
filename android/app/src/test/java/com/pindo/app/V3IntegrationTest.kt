@@ -27,9 +27,15 @@ class V3IntegrationTest {
         val c=V3Connection(endpoint!!,service,vault,epoch,"00000000-0000-4000-8000-000000000006",token(11),"01".repeat(32))
         val http=V3HTTP(endpoint,true);val crypto=SyncCrypto(c.recoveryKey)
         val probeID="00000000-0000-4000-8000-000000000010";val probe=crypto.sealV3("PindoSync/v3/key-check".toByteArray(),SyncV3EnvelopeContext(SyncV3Identity(service,vault),epoch,"checkpoint",probeID))
-        val bootstrap=JSONObject().put("version",3).put("vaultID",vault).put("epoch",epoch).put("deviceID",c.deviceID).put("deviceToken",c.token).put("keyCheck",JSONObject().put("id",probeID).put("epoch",epoch).put("ciphertext",Base64.getEncoder().encodeToString(probe)))
+        val bootstrap=JSONObject().put("version",3).put("vaultID",vault).put("epoch",epoch).put("deviceID",c.deviceID).put("deviceToken",c.token).put("deviceName","Android 测试手机").put("keyCheck",JSONObject().put("id",probeID).put("epoch",epoch).put("ciphertext",Base64.getEncoder().encodeToString(probe)))
         try{http.request("POST","/v3/bootstrap",bootstrap.toString().toByteArray(),"integration-bootstrap")}
-        catch(e:V3Failure){assertEquals("bootstrap_closed",e.code);http.request("POST","/v3/vaults/$vault/pairings/00000000-0000-4000-8000-000000000012/consume",JSONObject().put("epoch",epoch).put("deviceID",c.deviceID).put("deviceToken",c.token).put("code",token(10)).toString().toByteArray())}
+        catch(e:V3Failure){assertEquals("bootstrap_closed",e.code);http.request("POST","/v3/vaults/$vault/pairings/00000000-0000-4000-8000-000000000012/consume",JSONObject().put("epoch",epoch).put("deviceID",c.deviceID).put("deviceToken",c.token).put("deviceName","Android 测试手机").put("code",token(10)).toString().toByteArray())}
+        val initialDevices=http.request("GET","/v3/vaults/$vault/devices",token=c.token).getJSONArray("devices").objects()
+        assertEquals("Android 测试手机",initialDevices.first{it.getString("id")==c.deviceID}.getString("name"))
+        if(System.getenv("PINDO_INTEROP_PHASE")=="android") assertTrue(initialDevices.any{it.getString("name")=="Swift 测试电脑"})
+        http.request("POST","/v3/vaults/$vault/devices/${c.deviceID}/name",JSONObject().put("epoch",epoch).put("name","我的安卓测试手机").toString().toByteArray(),c.token)
+        val renamed=http.request("GET","/v3/vaults/$vault/devices",token=c.token).getJSONArray("devices").objects()
+        assertEquals("我的安卓测试手机",renamed.first{it.getString("id")==c.deviceID}.getString("name"))
         store.bind(c.binding,false)
         val lossy=object:V3Transport {var lose=true;override suspend fun request(method:String,path:String,body:ByteArray?,token:String?):JSONObject {
             val response=http.request(method,path,body,token)

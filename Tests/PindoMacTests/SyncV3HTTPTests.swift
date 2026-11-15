@@ -25,11 +25,15 @@ final class SyncV3HTTPTests: XCTestCase {
             try repo.reloadCurrentDocument()
             XCTAssertTrue(repo.document.tasks.contains{$0.title=="Android → Swift"})
             XCTAssertTrue(repo.document.tasks.contains{$0.title=="Swift → Android" && $0.note.utf8.count==210_000})
+            let data = try await http.request(method:"GET",path:"/v3/vaults/\(vault)/devices",body:nil,token:c.token)
+            let listed = try DocumentCodec.decode(DeviceNamesResponse.self,from:data).devices
+            XCTAssertEqual(listed.first{$0.id==device}?.name,"Swift 测试电脑")
+            XCTAssertEqual(listed.first{$0.id=="00000000-0000-4000-8000-000000000006"}?.name,"我的安卓测试手机")
             return
         }
         let probeID="00000000-0000-4000-8000-000000000010"
         let probe=try cipher.sealV3(Data("PindoSync/v3/key-check".utf8),context:.init(identity:try .init(serviceID:service,vaultID:vault),epoch:epoch,kind:.checkpoint,objectID:probeID))
-        let bootstrap:JSONValue = .object(["version":.number(3),"vaultID":.string(vault),"epoch":.string(epoch),"deviceID":.string(device),"deviceToken":.string(token(7)),"keyCheck":.object(["id":.string(probeID),"epoch":.string(epoch),"ciphertext":.string(probe.base64EncodedString())])])
+        let bootstrap:JSONValue = .object(["version":.number(3),"vaultID":.string(vault),"epoch":.string(epoch),"deviceID":.string(device),"deviceToken":.string(token(7)),"deviceName":.string("Swift 测试电脑"),"keyCheck":.object(["id":.string(probeID),"epoch":.string(epoch),"ciphertext":.string(probe.base64EncodedString())])])
         _ = try await http.request(method:"POST",path:"/v3/bootstrap",body:DocumentCodec.encode(bootstrap),token:"integration-bootstrap")
         try repo.update{$0.tasks=[TodoItem(id:taskID,title:"Swift → Android",note:String(repeating:"长",count:70_000))]}
         try store.bind(c.binding,importingLocal:true)
@@ -41,8 +45,12 @@ final class SyncV3HTTPTests: XCTestCase {
         // A second independent SQLite installation reads the encrypted chunks.
         let other=try PindoRepository(directory:dir.appendingPathComponent("other")), otherStore=other.sqlite
         let c2=SyncV3Connection(endpoint:endpoint,serviceID:service,vaultID:vault,epoch:epoch,deviceID:"00000000-0000-4000-8000-000000000005",token:token(8),recoveryKey:key)
-        let consume:JSONValue = .object(["epoch":.string(epoch),"deviceID":.string(c2.deviceID),"deviceToken":.string(c2.token),"code":.string(token(9))])
+        let consume:JSONValue = .object(["epoch":.string(epoch),"deviceID":.string(c2.deviceID),"deviceToken":.string(c2.token),"deviceName":.string("另一台 Mac"),"code":.string(token(9))])
         _ = try await http.request(method:"POST",path:"/v3/vaults/\(vault)/pairings/00000000-0000-4000-8000-000000000011/consume",body:DocumentCodec.encode(consume),token:nil)
+        let devicesData=try await http.request(method:"GET",path:"/v3/vaults/\(vault)/devices",body:nil,token:c2.token)
+        let namedDevices=try DocumentCodec.decode(DeviceNamesResponse.self,from:devicesData).devices
+        XCTAssertEqual(namedDevices.first{$0.id==device}?.name,"Swift 测试电脑")
+        XCTAssertEqual(namedDevices.first{$0.id==c2.deviceID}?.name,"另一台 Mac")
         try otherStore.bind(c2.binding,importingLocal:false)
         let e2=SyncV3Engine(store:otherStore,transport:http,cipher:cipher)
         _ = try await e2.synchronize(c2);try other.reloadCurrentDocument()
@@ -95,4 +103,9 @@ private final class FailPromotionSecrets: V3SecretStorage {
     var bytes:Data?;var saves=0
     func load() throws -> Data? {bytes}
     func save(_ data:Data)throws {saves+=1;if saves==2 {throw SyncV3Error.storageUnavailable};bytes=data}
+}
+
+private struct DeviceNamesResponse: Decodable {
+    struct Device: Decodable { var id:String; var name:String }
+    var devices:[Device]
 }

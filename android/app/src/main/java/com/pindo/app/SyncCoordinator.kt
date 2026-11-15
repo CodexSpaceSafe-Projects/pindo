@@ -8,6 +8,25 @@ import org.json.JSONObject
 import java.util.Base64
 import java.util.UUID
 
+/** Device names are public metadata and share the server's Unicode limits. */
+internal fun normalizedDeviceName(value: String): String {
+    var index = 0
+    while (index < value.length) {
+        val character = value[index]
+        require(character.code !in 0..31 && character.code !in 127..159)
+        if (Character.isHighSurrogate(character)) {
+            require(index + 1 < value.length && Character.isLowSurrogate(value[index + 1]))
+            index += 2
+        } else {
+            require(!Character.isLowSurrogate(character))
+            index++
+        }
+    }
+    val name = value.trim { it.isWhitespace() || Character.isSpaceChar(it) || it == '\uFEFF' }
+    require(name.isNotEmpty() && name.codePointCount(0, name.length) <= 80 && name.toByteArray(Charsets.UTF_8).size <= 256)
+    return name
+}
+
 internal class SyncCoordinator(
     private val store: V3Store,
     private val secrets: V3JournalStorage,
@@ -15,7 +34,9 @@ internal class SyncCoordinator(
     private val ready: () -> Boolean,
     private val applied: () -> Unit,
     private val status: (Boolean, Boolean, String) -> Unit,
-    private val transportFactory: (String) -> V3Transport = { V3HTTP(it) }
+    private val transportFactory: (String) -> V3Transport = { V3HTTP(it) },
+    initialDeviceName: String = "Android",
+    private val persistDeviceName: (String) -> Unit = {}
 ) {
     private var journal = JSONObject().put("version", 3).put("enabled", false).put("archived", JSONObject())
     private var generation = UUID.randomUUID()
@@ -26,6 +47,8 @@ internal class SyncCoordinator(
     private var retryAt = 0L
     private var lastFailure: String? = null
 
+    var deviceName: String = runCatching { normalizedDeviceName(initialDeviceName) }.getOrDefault("Android")
+        private set
     var invitation: String? = null
         private set
     var devices: JSONArray = JSONArray()
@@ -206,13 +229,13 @@ internal class SyncCoordinator(
             when (p.getString("operation")) {
                 "create" -> http.request("POST", "/v3/bootstrap", JSONObject().put("version", 3)
                     .put("vaultID", c.vaultID).put("epoch", c.epoch).put("deviceID", c.deviceID)
-                    .put("deviceToken", c.token).put("keyCheck", p.getJSONObject("keyCheck"))
+                    .put("deviceToken", c.token).put("deviceName", deviceName).put("keyCheck", p.getJSONObject("keyCheck"))
                     .toString().toByteArray(), p.getString("bootstrapSecret"))
                 "join" -> {
                     val i = p.getJSONObject("invitation")
                     http.request("POST", "/v3/vaults/${c.vaultID}/pairings/${i.getString("pairingID")}/consume",
                         JSONObject().put("epoch", c.epoch).put("deviceID", c.deviceID)
-                            .put("deviceToken", c.token).put("code", i.getString("code")).toString().toByteArray())
+                            .put("deviceToken", c.token).put("deviceName", deviceName).put("code", i.getString("code")).toString().toByteArray())
                 }
                 "rotate" -> {
                     val old = active ?: error("authentication_required")
@@ -276,9 +299,72 @@ internal class SyncCoordinator(
         }
     }
 
-    fun listDevices() {
-        if (!enabled) return
-        launch { g -> val r = call(active!!, "devices"); check(g); devices = r.getJSONArray("devices"); status(true, false, "设备列表已更新") }
+    fun isCurrentDevice(id: String): Boolean = active?.deviceID == id
+
+    private fun rememberDeviceName(name: String) {
+        persistDeviceName(name)
+        deviceName = name
+    }
+
+    private suspend fun fetchDevices(c: V3Connection, g: UUID): JSONArray {
+        var list = call(c, "devices").getJSONArray("devices")
+        check(g)
+        val current = (0 until list.length()).map { list.getJSONObject(it) }
+            .firstOrNull { it.getString("id") == c.deviceID }
+        if (current != null && current.isNull("revoked_at")) {
+            val serverName = (current.opt("name") as? String).orEmpty()
+            if (serverName.isBlank()) {
+                // Existing devices acquire a readable name on first management
+                // refresh. Never replace a name already set on the server.
+                call(c, "devices/${c.deviceID}/name", "POST", JSONObject().put("epoch", c.epoch).put("name", deviceName))
+                check(g)
+                list = call(c, "devices").getJSONArray("devices")
+                check(g)
+            } else {
+                val normalized = normalizedDeviceName(serverName)
+                if (normalized != deviceName) rememberDeviceName(normalized)
+            }
+        }
+        return list
+    }
+
+    fun listDevices(): Boolean {
+        if (!enabled) return false
+        return launch { g ->
+            val c = active!!
+            devices = fetchDevices(c, g)
+            status(true, false, "设备列表已更新")
+        }
+    }
+
+    fun saveDeviceName(value: String): Boolean {
+        if (active != null && !enabled) {
+            lastFailure = "继续同步后可修改设备名称"
+            status(false, false, lastFailure!!)
+            return false
+        }
+        val name = try { normalizedDeviceName(value) }
+        catch (_: IllegalArgumentException) {
+            lastFailure = "设备名称无效：请填写 1–80 个字符，不能包含控制字符。"
+            status(enabled, false, lastFailure!!)
+            return false
+        }
+        if (!enabled) {
+            return try {
+                rememberDeviceName(name)
+                lastFailure = null
+                status(false, false, "本机设备名称已保存")
+                true
+            } catch (e: Exception) { failure(e); false }
+        }
+        return launch("正在保存设备名称…") { g ->
+            val c = active!!
+            call(c, "devices/${c.deviceID}/name", "POST", JSONObject().put("epoch", c.epoch).put("name", name))
+            check(g)
+            rememberDeviceName(name)
+            devices = fetchDevices(c, g)
+            status(true, false, "设备名称已更新")
+        }
     }
 
     fun revoke(id: String) {

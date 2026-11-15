@@ -22,12 +22,35 @@ struct V3Invitation: Codable {
     var version=3;var endpoint:String;var serviceID:String;var vaultID:String;var epoch:String;var pairingID:String;var code:String;var recoveryKey:String
 }
 private struct PendingV3Connection: Codable {
-    var connection:SyncV3Connection;var operation:String;var bootstrapSecret:String?;var keyCheck:SyncV3KeyCheck?;var invitation:V3Invitation?;var importLocal=true
+    var connection:SyncV3Connection;var operation:String;var bootstrapSecret:String?;var keyCheck:SyncV3KeyCheck?;var invitation:V3Invitation?;var importLocal=true;var deviceName:String?=nil
 }
 private struct V3SecretJournal: Codable {
     var version=3;var active:SyncV3Connection?;var pending:PendingV3Connection?;var enabled=false;var archived:[String:SyncV3Connection]=[:]
 }
-struct V3Device: Decodable, Identifiable { var id:String;var revoked_at:Int64? }
+enum MacDeviceName {
+    static let defaultsKey = "cloudSyncDeviceName"
+    static func validated(_ raw: String) throws -> String {
+        guard !raw.unicodeScalars.contains(where: { $0.value < 32 || (127...159).contains($0.value) }) else { throw SyncV3Error.invalidRequest }
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{FEFF}")))
+        guard (1...80).contains(name.unicodeScalars.count), name.utf8.count <= 256 else { throw SyncV3Error.invalidRequest }
+        return name
+    }
+    static var systemName: String {
+        (try? validated(Host.current().localizedName ?? ProcessInfo.processInfo.hostName)) ?? "Mac"
+    }
+}
+struct V3Device: Decodable, Identifiable {
+    var id: String
+    var name: String
+    var revoked_at: Int64?
+    private enum CodingKeys: String, CodingKey { case id, name, revoked_at }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        name = try values.decodeIfPresent(String.self, forKey: .name) ?? ""
+        revoked_at = try values.decodeIfPresent(Int64.self, forKey: .revoked_at)
+    }
+}
 
 @MainActor final class CloudSyncController: ObservableObject {
     @Published private(set) var isConfigured=false
@@ -36,11 +59,15 @@ struct V3Device: Decodable, Identifiable { var id:String;var revoked_at:Int64? }
     @Published private(set) var errorMessage:String?
     @Published private(set) var lastSyncDate:Date?
     @Published private(set) var deviceList:[V3Device]=[]
+    @Published private(set) var deviceName:String
     @Published private(set) var invitation:String?
     @Published private(set) var endpoint="https://example.com"
     @Published private(set) var hasPendingConnection=false
     private weak var model:AppModel?
     private let secrets:any V3SecretStorage
+    private let nameDefaults:UserDefaults
+    var currentDeviceID:String? { journal.active?.deviceID }
+    var canEditDeviceName:Bool {journal.active == nil || journal.enabled}
     private let factory:(String)throws->any SyncV3Transport
     private var journal=V3SecretJournal()
     private var generation=UUID()
@@ -49,7 +76,10 @@ struct V3Device: Decodable, Identifiable { var id:String;var revoked_at:Int64? }
     private var timer:Timer?
     private var failures=0
     private var retryAfter=Date.distantPast
-    init(model:AppModel,secrets:any V3SecretStorage=V3KeychainStorage(),transport:@escaping(String)throws->any SyncV3Transport={try SyncV3HTTP(endpoint:$0)}) {self.model=model;self.secrets=secrets;self.factory=transport}
+    init(model:AppModel,secrets:any V3SecretStorage=V3KeychainStorage(),defaults:UserDefaults = .standard,transport:@escaping(String)throws->any SyncV3Transport={try SyncV3HTTP(endpoint:$0)}) {
+        self.model=model;self.secrets=secrets;self.factory=transport;self.nameDefaults=defaults
+        deviceName = (defaults.string(forKey:MacDeviceName.defaultsKey).flatMap { try? MacDeviceName.validated($0) }) ?? MacDeviceName.systemName
+    }
     private func save() throws {try secrets.save(DocumentCodec.encode(journal));hasPendingConnection=journal.pending != nil}
     private func localize(_ text:String)->String {model?.localization(text) ?? text}
     private func failure(_ error:Error) {
@@ -109,7 +139,9 @@ struct V3Device: Decodable, Identifiable { var id:String;var revoked_at:Int64? }
             try stage(.init(connection:c,operation:"join",invitation:invitation));resumePending()
         }catch{failure(error)}
     }
-    private func stage(_ pending:PendingV3Connection)throws{
+    private func stage(_ proposed:PendingV3Connection)throws{
+        var pending=proposed
+        pending.deviceName = try MacDeviceName.validated(deviceName)
         guard !isSyncing || job != nil else{throw CancellationError()}
         if let old=journal.active {journal.archived[try old.binding.channel]=old}
         if let old=journal.pending?.connection {journal.archived[try old.binding.channel]=old}
@@ -128,12 +160,12 @@ struct V3Device: Decodable, Identifiable { var id:String;var revoked_at:Int64? }
         if (try? await engine.info(c)) == nil {
             switch pending.operation{
             case "create":
-                struct Bootstrap:Encodable{var version=3;var vaultID:String;var epoch:String;var deviceID:String;var deviceToken:String;var keyCheck:SyncV3KeyCheck?}
-                let body=Bootstrap(vaultID:c.vaultID,epoch:c.epoch,deviceID:c.deviceID,deviceToken:c.token,keyCheck:pending.keyCheck)
+                struct Bootstrap:Encodable{var version=3;var vaultID:String;var epoch:String;var deviceID:String;var deviceToken:String;var keyCheck:SyncV3KeyCheck?;var deviceName:String}
+                let body=Bootstrap(vaultID:c.vaultID,epoch:c.epoch,deviceID:c.deviceID,deviceToken:c.token,keyCheck:pending.keyCheck,deviceName:pending.deviceName ?? deviceName)
                 _ = try await transport.request(method:"POST",path:"/v3/bootstrap",body:DocumentCodec.encode(body),token:pending.bootstrapSecret)
             case "join":
                 guard let invitation=pending.invitation else{throw SyncV3Error.invalidRequest}
-                let body:JSONValue = .object(["epoch":.string(c.epoch),"deviceID":.string(c.deviceID),"deviceToken":.string(c.token),"code":.string(invitation.code)])
+                let body:JSONValue = .object(["epoch":.string(c.epoch),"deviceID":.string(c.deviceID),"deviceToken":.string(c.token),"code":.string(invitation.code),"deviceName":.string(pending.deviceName ?? deviceName)])
                 _ = try await transport.request(method:"POST",path:"/v3/vaults/\(c.vaultID)/pairings/\(invitation.pairingID)/consume",body:DocumentCodec.encode(body),token:nil)
             case "rotate":
                 guard let old=journal.active else{throw SyncV3Error.authenticationRequired}
@@ -148,7 +180,7 @@ struct V3Device: Decodable, Identifiable { var id:String;var revoked_at:Int64? }
         try store.bind(c.binding,importingLocal:pending.importLocal)
         if let installed=try store.binding{c.epoch=installed.epoch;c.transactionID=installed.transactionID}
         try refresh();journal.active=c;journal.pending=nil;journal.enabled=true;try save()
-        endpoint=c.endpoint;isConfigured=true;errorMessage=nil;status=localize("等待同步");failures=0;retryAfter = .distantPast
+        endpoint=c.endpoint;isConfigured=true;deviceList=[];invitation=nil;errorMessage=nil;status=localize("等待同步");failures=0;retryAfter = .distantPast
     }
     private func cancelRuntime(){generation=UUID();job?.cancel();job=nil;debounce?.cancel();debounce=nil;timer?.invalidate();timer=nil;isSyncing=false}
     func disconnect(){cancelRuntime();journal.enabled=false;do{try save();isConfigured=false;status=localize("仅保存在本机");errorMessage=nil}catch{failure(error)}}
@@ -181,8 +213,57 @@ struct V3Device: Decodable, Identifiable { var id:String;var revoked_at:Int64? }
             }catch{if generation==token{failure(error)}}
         }
     }
-    func loadDevices(){guard let c=journal.active,journal.enabled else{return};let token=generation
-        Task{do{struct Devices:Decodable{var devices:[V3Device]};let data=try await factory(c.endpoint).request(method:"GET",path:"/v3/vaults/\(c.vaultID)/devices",body:nil,token:c.token);try check(token);deviceList=try DocumentCodec.decode(Devices.self,from:data).devices}catch{if generation==token{failure(error)}}}
+    private func persistDeviceName(_ name:String) {
+        nameDefaults.set(name,forKey:MacDeviceName.defaultsKey)
+        deviceName=name
+    }
+    private func rename(_ name:String,connection c:SyncV3Connection,transport:any SyncV3Transport,token:UUID) async throws -> String {
+        let body:JSONValue = .object(["epoch":.string(c.epoch),"name":.string(name)])
+        let data=try await transport.request(method:"POST",path:"/v3/vaults/\(c.vaultID)/devices/\(c.deviceID)/name",body:DocumentCodec.encode(body),token:c.token)
+        try check(token)
+        struct Renamed:Decodable {var deviceID:String;var name:String}
+        let result=try DocumentCodec.decode(Renamed.self,from:data)
+        guard result.deviceID == c.deviceID else {throw SyncV3Error.corruptData}
+        return try MacDeviceName.validated(result.name)
+    }
+    func saveDeviceName(_ raw:String) {
+        guard canEditDeviceName else {errorMessage=localize("继续同步后可修改设备名称");return}
+        let name:String
+        do {name=try MacDeviceName.validated(raw)}
+        catch {errorMessage=localize("设备名称需要1–80个字符，最多256字节，且不能包含控制字符。");return}
+        guard !isSyncing else{return}
+        guard let c=journal.active,journal.enabled else {
+            persistDeviceName(name);errorMessage=nil;status=localize("设备名称已保存");return
+        }
+        let token=generation;isSyncing=true
+        job=Task{[weak self]in guard let self else{return};defer{if generation==token{isSyncing=false;job=nil}}
+            do {
+                let normalized=try await rename(name,connection:c,transport:factory(c.endpoint),token:token)
+                try check(token);persistDeviceName(normalized)
+                if let index=deviceList.firstIndex(where:{$0.id==c.deviceID}){deviceList[index].name=normalized}
+                errorMessage=nil;status=localize("设备名称已保存")
+            } catch {if generation==token{failure(error)}}
+        }
+    }
+    func loadDevices(){
+        guard !isSyncing,let c=journal.active,journal.enabled else{return}
+        let token=generation;isSyncing=true
+        job=Task{[weak self]in guard let self else{return};defer{if generation==token{isSyncing=false;job=nil}}
+            do {
+                struct Devices:Decodable{var devices:[V3Device]}
+                let transport=try factory(c.endpoint)
+                let data=try await transport.request(method:"GET",path:"/v3/vaults/\(c.vaultID)/devices",body:nil,token:c.token)
+                try check(token)
+                var devices=try DocumentCodec.decode(Devices.self,from:data).devices
+                if let index=devices.firstIndex(where:{$0.id==c.deviceID}) {
+                    if devices[index].name.isEmpty {
+                        devices[index].name=try await rename(deviceName,connection:c,transport:transport,token:token)
+                    }
+                    try check(token);persistDeviceName(try MacDeviceName.validated(devices[index].name))
+                }
+                deviceList=devices;errorMessage=nil
+            }catch{if generation==token{failure(error)}}
+        }
     }
     func revokeDevice(_ id:String){guard let c=journal.active else{return};let token=generation
         Task{do{let body=try DocumentCodec.encode(JSONValue.object(["epoch":.string(c.epoch)]));_ = try await factory(c.endpoint).request(method:"POST",path:"/v3/vaults/\(c.vaultID)/devices/\(id)/revoke",body:body,token:c.token);try check(token);if id==c.deviceID{disconnect()}else{loadDevices()}}catch{if generation==token{failure(error)}}}

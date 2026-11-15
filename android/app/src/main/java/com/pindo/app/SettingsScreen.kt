@@ -223,6 +223,14 @@ import java.time.LocalDate
     var invite by remember { mutableStateOf("") }
     val context=LocalContext.current
     val sync=store.sync
+    val nameEditable = !state.syncing && !state.readOnly && (sync.active == null || state.syncEnabled)
+    var deviceName by remember(sync) { mutableStateOf(sync.deviceName) }
+    var requestedDevices by remember(sync) { mutableStateOf(false) }
+    LaunchedEffect(sync.deviceName) { deviceName = sync.deviceName }
+    LaunchedEffect(state.syncEnabled, state.syncing) {
+        if (!state.syncEnabled) requestedDevices = false
+        else if (!state.syncing && !requestedDevices && sync.listDevices()) requestedDevices = true
+    }
     LaunchedEffect(state.syncEnabled) {
         if (state.syncEnabled) { invite=""; secret="" }
     }
@@ -232,6 +240,13 @@ import java.time.LocalDate
             Text(state.syncStatus, Modifier.testTag("sync-status"))
             if (state.syncing) LinearProgressIndicator(Modifier.fillMaxWidth())
             Text("离线修改会保存在本机。配对信息包含恢复密钥，请仅通过可信渠道传给自己的设备。", color=MaterialTheme.colorScheme.onSurfaceVariant)
+            OutlinedTextField(deviceName, { deviceName=it }, label={Text("本机设备名称")},
+                modifier=Modifier.fillMaxWidth().testTag("sync-device-name"), singleLine=true,
+                enabled=nameEditable)
+            if (sync.active != null && !state.syncEnabled) Text("继续同步后可修改设备名称", style=MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick={sync.saveDeviceName(deviceName)},
+                enabled=nameEditable && deviceName.isNotBlank(),
+                modifier=Modifier.testTag("sync-save-device-name")){Text("保存设备名称")}
             if (state.syncEnabled) {
                 Button(onClick={sync.sync()},enabled=!state.syncing){Text("立即同步")}
                 Button(onClick={sync.pair()},enabled=!state.syncing){Text("生成设备配对信息")}
@@ -243,7 +258,11 @@ import java.time.LocalDate
                 OutlinedButton(onClick={sync.listDevices()},enabled=!state.syncing){Text("刷新设备列表")}
                 val devices=sync.devices
                 for(i in 0 until devices.length()) { val device=devices.getJSONObject(i);val id=device.getString("id")
-                    Row(verticalAlignment=Alignment.CenterVertically){Text(id,Modifier.weight(1f),style=MaterialTheme.typography.bodySmall)
+                    Row(verticalAlignment=Alignment.CenterVertically){
+                        Column(Modifier.weight(1f)) {
+                            Text((device.opt("name") as? String)?.takeIf { it.isNotBlank() } ?: "未命名设备", modifier=Modifier.testTag("sync-device-$id"), style=MaterialTheme.typography.bodyMedium)
+                            if(sync.isCurrentDevice(id)) Text("此设备",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                         if(device.isNull("revoked_at")) TextButton(onClick={sync.revoke(id)},enabled=!state.syncing){Text("撤销授权")} else Text("已撤销")}
                 }
                 OutlinedButton(onClick={sync.rotate()},enabled=!state.syncing){Text("轮换此设备凭据")}

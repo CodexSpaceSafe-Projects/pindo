@@ -23,6 +23,7 @@ class AppStore(application: Application) : AndroidViewModel(application) {
     private val storage = DocumentStorage(application)
     private val noteDraftFiles = AtomicNoteDraftFiles(File(application.noBackupFilesDir, "editor-note-drafts"))
     private val preferenceStorage = PreferenceStorage(application)
+    private val deviceNamePreferences = DeviceNamePreferences(application)
     private var preferences = runCatching { preferenceStorage.read() }.getOrDefault(AppPreferences())
     private var document = emptyDocument()
     private val mutable = MutableStateFlow(AppState())
@@ -50,7 +51,7 @@ class AppStore(application: Application) : AndroidViewModel(application) {
 
     internal val sync by lazy { SyncCoordinator(storage.sqlite, injectedSyncSecrets ?: V3SecretStorage(getApplication()), viewModelScope,
         { networkUiReady() && !state.value.readOnly }, { document=storage.sqlite.read();publish() },
-        { enabled,busy,text -> mutable.value=state.value.copy(syncEnabled=enabled,syncing=busy,syncStatus=text) }, syncTransport) }
+        { enabled,busy,text -> mutable.value=state.value.copy(syncEnabled=enabled,syncing=busy,syncStatus=text) }, syncTransport, initialDeviceName = deviceNamePreferences.name, persistDeviceName = deviceNamePreferences::save) }
 
     fun dismissError() { if (!state.value.readOnly) mutable.value = state.value.copy(error = null) }
     internal fun noteDraftHandle(): NoteDraftHandle = NoteDraftHandle(noteDraftFiles)

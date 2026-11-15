@@ -291,3 +291,13 @@
 "等待依赖记录到达；离线修改已保留。" = "Waiting for dependent records. Offline changes are preserved.";
 "继续同步剩余变化…" = "Continuing with remaining changes…";
 "无法读取备份，原资料已保留。当前资料仍可保存，请先导出原备份后检查。" = "Backups could not be read. Existing data was preserved and current tasks can still be saved. Export the backup before investigating.";
+"本机设备名称" = "This Device Name";
+"设备名称" = "Device Name";
+"保存设备名称" = "Save Device Name";
+"名称会显示在其他已配对设备的设备列表中。" = "This name appears in the device lists on your other paired devices.";
+"未命名设备" = "Unnamed Device";
+"此设备" = "This Device";
+"设备名称已保存" = "Device Name Saved";
+"设备名称需要1–80个字符，最多256字节，且不能包含控制字符。" = "Use 1–80 characters, at most 256 UTF-8 bytes, without control characters.";
+"刷新设备列表" = "Refresh Device List";
+"继续同步后可修改设备名称" = "Resume syncing to change this device name.";

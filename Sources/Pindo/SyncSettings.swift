@@ -9,6 +9,7 @@ struct SyncSettings: View {
     @State private var confirmDisconnect=false
     @State private var showCreate=false
     @State private var showDevices=false
+    @State private var deviceNameDraft=""
     var body: some View {
         VStack(alignment:.leading,spacing:16){
             Label("Cloudflare",systemImage:"lock.icloud").font(.headline)
@@ -23,7 +24,7 @@ struct SyncSettings: View {
                         HStack{
                             Button(l10n("立即同步")){controller.syncNow()}.disabled(controller.isSyncing)
                             Button(l10n("配对另一台设备")){controller.createInvitation()}.disabled(controller.isSyncing)
-                            Button(l10n("管理设备")){showDevices.toggle();if showDevices{controller.loadDevices()}}
+                            Button(l10n("管理设备")){showDevices.toggle();if showDevices{controller.loadDevices()}}.disabled(controller.isSyncing)
                         }
                         Button(l10n("停用云同步")){confirmDisconnect=true}
                     }else{
@@ -32,6 +33,13 @@ struct SyncSettings: View {
                     }
                     if controller.hasPendingConnection{Button(l10n("继续未完成的连接")){controller.resumePending()}.disabled(controller.isSyncing)}
                 }.frame(maxWidth:.infinity,alignment:.leading).padding(6)
+            }
+            GroupBox(l10n("本机设备名称")){
+                VStack(alignment:.leading,spacing:10){
+                    TextField(l10n("设备名称"),text:$deviceNameDraft).disabled(!controller.canEditDeviceName || controller.isSyncing)
+                    Button(l10n("保存设备名称")){controller.saveDeviceName(deviceNameDraft)}.disabled(!controller.canEditDeviceName || controller.isSyncing)
+                    Text(l10n(controller.canEditDeviceName ? "名称会显示在其他已配对设备的设备列表中。" : "继续同步后可修改设备名称"))
+                }.padding(6)
             }
             if let invitation=controller.invitation{
                 GroupBox(l10n("配对信息")){
@@ -46,8 +54,14 @@ struct SyncSettings: View {
                 GroupBox(l10n("管理设备")){
                     VStack(alignment:.leading,spacing:10){
                         ForEach(controller.deviceList){device in
-                            HStack{Text(String(device.id.prefix(8))).monospaced();Spacer();if device.revoked_at != nil{Text(l10n("已撤销"))}else{Button(l10n("撤销访问")){controller.revokeDevice(device.id)}}}
+                            HStack{
+                                Text(device.name.isEmpty ? l10n("未命名设备") : device.name)
+                                if device.id == controller.currentDeviceID {Text(l10n("此设备")).foregroundStyle(.secondary)}
+                                Spacer()
+                                if device.revoked_at != nil{Text(l10n("已撤销"))}else{Button(l10n("撤销访问")){controller.revokeDevice(device.id)}.disabled(controller.isSyncing)}
+                            }
                         }
+                        Button(l10n("刷新设备列表")){controller.loadDevices()}.disabled(controller.isSyncing)
                         Button(l10n("轮换本机访问令牌")){controller.rotateToken()}.disabled(controller.isSyncing)
                         Text(l10n("撤销只阻止之后的云访问；已下载的资料和密钥无法远程收回。"))
                     }.padding(6)
@@ -70,6 +84,8 @@ struct SyncSettings: View {
             }
             if let error=controller.errorMessage{Text(error).foregroundStyle(.red).textSelection(.enabled)}
         }.font(.system(size:12))
+            .onAppear{if deviceNameDraft.isEmpty{deviceNameDraft=controller.deviceName}}
+            .onChange(of:controller.deviceName){old,new in if deviceNameDraft.isEmpty || deviceNameDraft==old{deviceNameDraft=new}}
             .alert(l10n("停用云同步？"),isPresented:$confirmDisconnect){
                 Button(l10n("取消"),role:.cancel){}
                 Button(l10n("停用云同步"),role:.destructive){controller.disconnect()}

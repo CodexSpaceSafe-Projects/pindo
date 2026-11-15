@@ -101,6 +101,31 @@ class AndroidSyncUiTest {
         }
     }
 
+    @Test fun connectedDevicesShowNamesAndSavingTheLocalNameRefreshesTheList() {
+        val secrets = UiJournal()
+        val remote = UiPairingServer()
+        val connection = remote.seedConnection("随身手机")
+        compose.runOnUiThread {
+            DocumentStorage(app).sqlite.bind(connection.binding, false)
+            secrets.value = JSONObject().put("version", 3).put("enabled", true)
+                .put("archived", JSONObject()).put("active", connection.json())
+            store = AppStore(app, secrets) { remote }
+            store.startForeground(); store.markUiReady()
+        }
+        compose.setContent {
+            val state by store.state.collectAsState()
+            PindoTheme("system") { Surface { CloudSettingsScreen(store, state) {} } }
+        }
+        compose.onNodeWithTag("sync-device-${connection.deviceID}").performScrollTo().assertTextEquals("随身手机")
+        compose.onNodeWithTag("sync-device-${remote.peerID}").assertTextEquals("工作 Mac")
+        compose.onNodeWithText("此设备").assertExists()
+        compose.onAllNodes(hasText(connection.deviceID, substring = true)).assertCountEquals(0)
+        compose.onNodeWithTag("sync-device-name").performScrollTo().performTextReplacement("我的新手机")
+        compose.onNodeWithTag("sync-save-device-name").performScrollTo().performClick()
+        compose.onNodeWithTag("sync-device-${connection.deviceID}").performScrollTo().assertTextEquals("我的新手机")
+        compose.runOnIdle { assertEquals("我的新手机", remote.deviceName) }
+    }
+
     private class UiJournal : V3JournalStorage {
         var value: JSONObject? = null
         override fun readJournal() = value?.let { copyV3(it) as JSONObject }
@@ -115,7 +140,17 @@ class AndroidSyncUiTest {
         private val epoch = "00000000-0000-4000-8000-000000000003"
         private val key = "01".repeat(32)
         private var registeredToken: String? = null
+        private var registeredID = ""
+        var deviceName = ""
+        val peerID = "00000000-0000-4000-8000-000000000077"
+        private var checkpoint: JSONObject? = null
         var consumeCalls = 0
+        fun seedConnection(name: String): V3Connection {
+            val c = V3Connection("https://sync.test", service, vault, epoch,
+                "00000000-0000-4000-8000-000000000006", "B".repeat(43), key)
+            registeredToken = c.token; registeredID = c.deviceID; deviceName = name
+            return c
+        }
         val invitation get() = JSONObject().put("version", 3).put("endpoint", "https://sync.test")
             .put("serviceID", service).put("vaultID", vault).put("epoch", epoch)
             .put("pairingID", "00000000-0000-4000-8000-000000000011").put("code", "A".repeat(43)).put("recoveryKey", key)
@@ -123,7 +158,10 @@ class AndroidSyncUiTest {
         override suspend fun request(method: String, path: String, body: ByteArray?, token: String?): JSONObject {
             if (path.endsWith("/consume")) {
                 consumeCalls++
-                registeredToken = JSONObject(String(body!!, Charsets.UTF_8)).getString("deviceToken")
+                val registration = JSONObject(String(body!!, Charsets.UTF_8))
+                registeredToken = registration.getString("deviceToken")
+                registeredID = registration.getString("deviceID")
+                deviceName = registration.optString("deviceName", "Android")
                 return JSONObject()
             }
             if (path.endsWith("/info")) {
@@ -132,10 +170,32 @@ class AndroidSyncUiTest {
                 val encrypted = SyncCrypto(key).sealV3("PindoSync/v3/key-check".toByteArray(),
                     SyncV3EnvelopeContext(SyncV3Identity(service, vault), epoch, "checkpoint", id))
                 return JSONObject().put("version", 3).put("serviceID", service).put("vaultID", vault).put("epoch", epoch)
-                    .put("head", 0).put("gcFloor", 0).put("checkpointID", JSONObject.NULL)
+                    .put("head", 0).put("gcFloor", 0).put("checkpointID", checkpoint?.getString("id") ?: JSONObject.NULL).put("checkpointCovered", 0)
                     .put("keyCheck", JSONObject().put("id", id).put("epoch", epoch)
                         .put("ciphertext", Base64.getEncoder().encodeToString(encrypted)))
             }
+            if (method == "GET" && path.endsWith("/devices")) return JSONObject().put("devices", org.json.JSONArray()
+                .put(JSONObject().put("id", registeredID).put("name", deviceName).put("revoked_at", JSONObject.NULL))
+                .put(JSONObject().put("id", peerID).put("name", "工作 Mac").put("revoked_at", JSONObject.NULL)))
+            if (method == "POST" && path.endsWith("/name")) {
+                assertEquals(registeredID, path.substringBeforeLast('/').substringAfterLast('/'))
+                deviceName = JSONObject(String(body!!, Charsets.UTF_8)).getString("name")
+                return JSONObject().put("deviceID", registeredID).put("name", deviceName)
+            }
+            if (path.substringBefore('?').endsWith("/checkpoints")) {
+                if (method == "POST") {
+                    val objectData = JSONObject(String(body!!, Charsets.UTF_8))
+                    val context = SyncV3EnvelopeContext(SyncV3Identity(service, vault), epoch, "checkpoint", objectData.getString("id"))
+                    val sealed = Base64.getDecoder().decode(objectData.getString("ciphertext"))
+                    checkpoint = (copyV3(objectData) as JSONObject).put("digest", v3Hash(context.associatedData() + byteArrayOf(0) + sealed))
+                    return JSONObject()
+                }
+                return JSONObject().put("serviceID", service).put("vaultID", vault).put("epoch", epoch)
+                    .put("sourceEpoch", epoch).put("leaseID", "00000000-0000-4000-8000-000000000099")
+                    .put("checkpoint", checkpoint ?: JSONObject.NULL)
+            }
+            if (path.endsWith("/gc")) return JSONObject().put("hasMore", false)
+            if (path.contains("/leases/")) return JSONObject().put("released", true)
             throw V3Failure("storage_unavailable")
         }
     }

@@ -271,3 +271,93 @@ test('revoked devices cannot publish checkpoints, allocate chunks or advance GC 
  for(const [path,value] of[['checkpoints',{epoch,id:id(240),covered:1,expectedID:null,ciphertext:body().ciphertext,artifactIDs:[]}],['gc',{epoch}]])assert.equal((await request(path,value)).status,401);
  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM checkpoints').first()).n,0);assert.equal((await db.prepare('SELECT gc_floor FROM vaults').first()).gc_floor,0);
 });
+
+test('device-name migration preserves an existing authorized device and its sync history', async () => {
+  await request('push', body());
+  await db.prepare('ALTER TABLE devices DROP COLUMN name').run();
+  try {
+    const unhealthy = await mf.dispatchFetch('https://sync.test/health');
+    assert.equal(unhealthy.status, 503);
+    const migration = await readFile(new URL('../migrations/0002_device_names.sql', import.meta.url), 'utf8');
+    await db.exec(migration.replace(/--[^\n]*/g, '').replace(/\n/g, ' '));
+    const row = await db.prepare('SELECT id,token_hash,name,revoked_at FROM devices').first();
+    assert.deepEqual(row, { id: deviceID, token_hash: tokenHash, name: '', revoked_at: null });
+    assert.equal((await request('info')).body.head, 1);
+    assert.equal((await request(`receipts/${id(0)}?epoch=${epoch}`)).body.receipt.revision, 1);
+    assert.equal((await request('devices')).body.devices[0].name, '');
+  } finally {
+    const columns = (await db.prepare('PRAGMA table_info(devices)').all()).results;
+    if (!columns.some(column => column.name === 'name')) {
+      await db.exec((await readFile(new URL('../migrations/0002_device_names.sql', import.meta.url), 'utf8')).replace(/--[^\n]*/g, '').replace(/\n/g, ' '));
+    }
+  }
+});
+
+test('bootstrap stores the client name; a lost-response retry cannot overwrite a later custom name', async () => {
+  await db.batch([db.prepare('DELETE FROM devices'), db.prepare('DELETE FROM vaults')]);
+  const created = { version: 3, vaultID, epoch, deviceID, deviceToken: token, deviceName: '  工作 MacBook 🚀  ',
+    keyCheck: { id: id(60), epoch, ciphertext: body(9).ciphertext } };
+  const initialize = async value => {
+    const response = await mf.dispatchFetch('https://sync.test/v3/bootstrap', { method: 'POST',
+      headers: { Authorization: 'Bearer test-bootstrap-secret', 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+    return { status: response.status, body: await response.json() };
+  };
+  const first = await initialize(created);
+  assert.equal(first.status, 200);
+  assert.deepEqual((await request('devices')).body.devices, [{ id: deviceID, name: '工作 MacBook 🚀', revoked_at: null }]);
+  const renamed = await request(`devices/${deviceID}/name`, { epoch, name: '  家里的 Mac  ' });
+  assert.equal(renamed.status, 200);
+  assert.equal(renamed.body.deviceID, deviceID);
+  assert.equal(renamed.body.name, '家里的 Mac');
+  assert.deepEqual(await initialize(created), first);
+  assert.equal((await initialize({ ...created, deviceName: '旧的注册名称' })).status, 200);
+  assert.equal((await request('devices')).body.devices[0].name, '家里的 Mac');
+});
+
+test('pairing records each client name and only its own device token can rename it', async () => {
+  const pairID = id(250), code = Buffer.alloc(32, 17).toString('base64url');
+  const newDevice = id(251), newToken = Buffer.alloc(32, 18).toString('base64url');
+  assert.equal((await request('pairings', { epoch, id: pairID, code })).status, 200);
+  const registration = { epoch, code, deviceID: newDevice, deviceToken: newToken, deviceName: 'Pixel 9' };
+  const first = await request(`pairings/${pairID}/consume`, registration);
+  assert.equal(first.status, 200);
+  const denied = await request(`devices/${newDevice}/name`, { epoch, name: 'Someone else' });
+  assert.equal(denied.status, 403);
+  assert.equal(denied.body.error.code, 'authentication_required');
+  assert.equal((await request(`devices/${newDevice}/name`, { epoch, name: '我的手机' }, newToken)).status, 200);
+  assert.deepEqual(await request(`pairings/${pairID}/consume`, registration), first);
+  assert.equal((await request('devices')).body.devices.find(device => device.id === newDevice).name, '我的手机');
+  const rotated = Buffer.alloc(32, 19).toString('base64url');
+  assert.equal((await request(`devices/${newDevice}/rotate`, { epoch, deviceToken: rotated }, newToken)).status, 200);
+  assert.equal((await request(`devices/${newDevice}/name`, { epoch, name: 'Old token' }, newToken)).status, 401);
+  assert.equal((await request('devices', undefined, rotated)).body.devices.find(device => device.id === newDevice).name, '我的手机');
+  assert.equal((await request(`devices/${newDevice}/revoke`, { epoch }, rotated)).status, 200);
+  assert.equal((await request(`devices/${newDevice}/name`, { epoch, name: 'Revoked' }, rotated)).status, 401);
+  assert.equal((await request('devices')).body.devices.find(device => device.id === newDevice).name, '我的手机');
+});
+
+test('device-name validation rejects invalid metadata before writes or pairing attempts', async () => {
+  const fixture = JSON.parse(await readFile(new URL('../../../sync-vectors/device-names.json', import.meta.url), 'utf8'));
+  const invalid = [undefined, null, 7, ...fixture.invalid, '\0test', '\ud800'];
+  for (const name of invalid) {
+    const result = await request(`devices/${deviceID}/name`, { epoch, name });
+    assert.equal(result.status, 400, `rename must reject ${JSON.stringify(name)}`);
+    assert.equal(result.body.error.code, 'invalid_request');
+  }
+  assert.equal((await request('devices')).body.devices[0].name, '');
+  for (const { input, name } of fixture.valid) {
+    const renamed = await request(`devices/${deviceID}/name`, { epoch, name: input });
+    assert.equal(renamed.status, 200);
+    assert.equal(renamed.body.name, name);
+  }
+  const pairID = id(260), code = Buffer.alloc(32, 20).toString('base64url');
+  await request('pairings', { epoch, id: pairID, code });
+  for (const deviceName of invalid.filter(value => value !== undefined)) {
+    assert.equal((await request(`pairings/${pairID}/consume`, { epoch, code, deviceID: id(261),
+      deviceToken: Buffer.alloc(32, 21).toString('base64url'), deviceName })).status, 400);
+  }
+  assert.equal((await db.prepare('SELECT attempts FROM pairing WHERE id=?').bind(pairID).first()).attempts, 0);
+  assert.equal((await request(`devices/${deviceID}/name`, { epoch: id(262), name: 'Wrong epoch' })).status, 409);
+  await db.prepare('UPDATE vaults SET maintenance=1').run();
+  assert.equal((await request(`devices/${deviceID}/name`, { epoch, name: 'Maintenance' })).status, 503);
+});
