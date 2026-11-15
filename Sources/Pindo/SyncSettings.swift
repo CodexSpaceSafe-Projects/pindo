@@ -3,7 +3,7 @@ import SwiftUI
 struct SyncSettings: View {
     @Environment(\.pindoLocalization) private var l10n
     @ObservedObject var controller: CloudSyncController
-    @State private var endpoint="https://example.com"
+    @State private var endpoint=""
     @State private var bootstrapSecret=""
     @State private var pairing=""
     @State private var confirmDisconnect=false

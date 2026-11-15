@@ -37,7 +37,7 @@ struct V3Device: Decodable, Identifiable { var id:String;var revoked_at:Int64? }
     @Published private(set) var lastSyncDate:Date?
     @Published private(set) var deviceList:[V3Device]=[]
     @Published private(set) var invitation:String?
-    @Published private(set) var endpoint="https://example.com"
+    @Published private(set) var endpoint=""
     @Published private(set) var hasPendingConnection=false
     private weak var model:AppModel?
     private let secrets:any V3SecretStorage

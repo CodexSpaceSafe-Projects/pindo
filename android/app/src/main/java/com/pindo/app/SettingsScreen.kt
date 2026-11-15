@@ -213,7 +213,7 @@ import java.time.LocalDate
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun CloudSettingsScreen(store: AppStore, state: AppState, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
-    var endpoint by rememberSaveable { mutableStateOf("https://example.com") }
+    var endpoint by rememberSaveable { mutableStateOf("") }
     var secret by remember { mutableStateOf("") }
     var invite by remember { mutableStateOf("") }
     val context=LocalContext.current

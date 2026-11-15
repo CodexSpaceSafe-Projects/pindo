@@ -6,8 +6,8 @@
 
 | 项目 | 值 |
 | --- | --- |
-| Worker | `example-sync` |
-| D1 | `example-sync`，WEUR，读复制关闭 |
+| Worker | `example-sync-database` |
+| D1 | `example-sync-database`，WEUR，读复制关闭 |
 | 数据库 ID | `00000000-0000-4000-8000-000000000002` |
 | 稳定 serviceID | `00000000-0000-4000-8000-000000000001` |
 | 部署兼容日期 | `2026-11-14` |

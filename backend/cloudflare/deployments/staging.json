@@ -1,8 +1,8 @@
 {
   "accountId": "YOUR_CLOUDFLARE_ACCOUNT_ID",
-  "workerName": "example-sync",
+  "workerName": "example-sync-database",
   "endpoint": "https://example.com",
-  "databaseName": "example-sync",
+  "databaseName": "example-sync-database",
   "databaseId": "00000000-0000-4000-8000-000000000002",
   "databaseRegion": "YOUR_DATABASE_REGION",
   "serviceID": "00000000-0000-4000-8000-000000000001",
