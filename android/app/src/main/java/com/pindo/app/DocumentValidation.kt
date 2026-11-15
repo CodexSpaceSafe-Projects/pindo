@@ -15,11 +15,19 @@ internal fun validateDocument(value: JSONObject) {
     require(groups.all { it.name.isNotBlank() && it.color.matches(Regex("#[0-9a-fA-F]{6}")) }) { "分组资料无效。" }
     require(groups.map { canonicalGroupName(it.name) }.toSet().size == groups.size) { "分组名称重复。" }
     val groupIDs = groups.map { it.id }.toSet()
+    val byID = tasks.associateBy { it.id }
+    val children = tasks.groupBy { it.parentID }
     for (task in tasks) {
         require(task.title.isNotBlank() && task.phase in listOf("pending", "inProgress", "completed")) { "待办资料无效。" }
         require(task.groupID == null || task.groupID in groupIDs) { "待办引用不存在的分组。" }
-        TodoRules.validateParent(tasks, task.id, task.parentID)
-        if (task.phase == "completed") require(tasks.filter { it.parentID == task.id }.all { it.phase == "completed" }) { "父项仍有未完成子项。" }
+        var parent = task.parentID
+        val visited = mutableSetOf(task.id)
+        while (parent != null) {
+            require(visited.add(parent) && visited.size <= 3) { "待办层级无效。" }
+            val ancestor = byID[parent] ?: error("找不到父事项。")
+            parent = ancestor.parentID
+        }
+        if (task.phase == "completed") require(children[task.id].orEmpty().all { it.phase == "completed" }) { "父项仍有未完成子项。" }
     }
 }
 

@@ -10,7 +10,7 @@ final class SQLiteAppModelTests: XCTestCase {
         defer {defaults.removePersistentDomain(forName:suite);try? FileManager.default.removeItem(at:directory)}
         let model=try AppModel(directory:directory,defaults:defaults)
         model.playFeedback={_ in}
-        XCTAssertNotNil(model.repository.sqlite)
+        XCTAssertTrue(try model.repository.sqlite.initialized)
         XCTAssertTrue(model.addTask(title:"Production SQLite",day:model.today,groupID:nil))
         XCTAssertTrue(model.flush())
         let loaded=try AppModel(directory:directory,defaults:defaults)

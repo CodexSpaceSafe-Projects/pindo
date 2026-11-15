@@ -228,7 +228,6 @@ struct BackupSettings: View {
                 }.padding(9)
             }
             if let warning = model.backupWarning { Text(warning).font(.system(size: 11)).foregroundStyle(.red) }
-            if model.repository.needsRecovery { Button(l10n("重试未完成的恢复")) { model.retryRecovery() } }
             LazyVStack(spacing: 0) {
                 ForEach(model.snapshotRecords) { record in
                     HStack {

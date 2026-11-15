@@ -1,6 +1,5 @@
-import { aad,boundedJSON,ciphertext,counter,ProtocolError,sha256,uuid } from '../protocol';
-import { Auth,authorize,check,ids,metadata,now,refsGuard,response,stateQuery,VaultState } from './common';
-export async function digestFor(env:Env,vault:string,epoch:string,kind:string,id:string,refs:string[],sealed:Uint8Array){const a=aad(env.SERVICE_ID,vault,epoch,kind,id,refs),bytes=new Uint8Array(a.length+1+sealed.length);bytes.set(a);bytes.set(sealed,a.length+1);return sha256(bytes);}
+import { boundedJSON,ciphertext,counter,ProtocolError,sha256,uuid } from '../protocol';
+import { Auth,authorize,check,digestFor,ids,metadata,now,refsGuard,response,stateQuery,VaultState } from './common';
 export async function artifact(request:Request,env:Env,a:Auth,path:string,url:URL){
  const digest=path.split('/')[1];if(!/^[a-f0-9]{64}$/.test(digest))throw new ProtocolError('invalid_request',400);
  if(request.method==='POST'){
@@ -26,15 +25,15 @@ export async function lease(request:Request,env:Env,a:Auth,id:string){
 }
 export async function checkpointRead(env:Env,a:Auth,url:URL){
  const epoch=uuid(url.searchParams.get('epoch')),id=crypto.randomUUID(),time=now();
- const v=await authorize(env.DB,a);const recovering=(v as VaultState&{recovery_from_epoch?:string}).recovery_from_epoch===epoch;
+ const v=await authorize(env.DB,a);const recovering=v.recovery_from_epoch===epoch;
  if(v.epoch!==epoch&&!recovering)throw new ProtocolError('epoch_mismatch',409);
  const r=await env.DB.batch([
  env.DB.prepare(`INSERT INTO leases(id,vault_id,epoch,device_id,floor,expires_at) SELECT ?,v.id,?,d.id,COALESCE((SELECT covered FROM checkpoints WHERE vault_id=v.id AND epoch=? ORDER BY covered DESC LIMIT 1),0),? FROM vaults v JOIN devices d ON d.vault_id=v.id AND d.token_hash=? AND d.revoked_at IS NULL WHERE v.id=? AND v.maintenance=0 AND (v.epoch=? OR v.recovery_from_epoch=?)`).bind(id,epoch,epoch,time+300000,a.tokenHash,a.vaultID,epoch,epoch),stateQuery(env.DB,a),
  env.DB.prepare('SELECT id,epoch,covered,ciphertext,artifact_ids,digest FROM checkpoints WHERE vault_id=? AND epoch=? ORDER BY covered DESC LIMIT 1').bind(a.vaultID,epoch)]);
- const current=check(r[1].results[0] as VaultState|undefined);if(current.epoch!==epoch&&(current as typeof current&{recovery_from_epoch?:string}).recovery_from_epoch!==epoch)throw new ProtocolError('epoch_mismatch',409);
+ const current=check(r[1].results[0] as VaultState|undefined);if(current.epoch!==epoch&&current.recovery_from_epoch!==epoch)throw new ProtocolError('epoch_mismatch',409);
  const cp=r[2].results[0] as {id:string;epoch:string;covered:number;ciphertext:string;artifact_ids:string;digest:string}|undefined;
  return response({...metadata(env,current),sourceEpoch:epoch,leaseID:id,checkpoint:cp?{id:cp.id,epoch:cp.epoch,covered:cp.covered,ciphertext:cp.ciphertext,artifactIDs:JSON.parse(cp.artifact_ids),digest:cp.digest}:null,
- recoveryHead:(current as typeof current&{recovery_head?:number}).recovery_head??null});
+ recoveryHead:current.recovery_head});
 }
 export async function checkpointPublish(request:Request,env:Env,a:Auth){
  const b=await boundedJSON(request),epoch=uuid(b.epoch),id=uuid(b.id),covered=counter(String(b.covered)),expected=b.expectedID===null?null:uuid(b.expectedID),refs=ids(b.artifactIDs),sealed=ciphertext(b.ciphertext),digest=await digestFor(env,a.vaultID,epoch,'checkpoint',id,refs,sealed),charge=(b.ciphertext as string).length+1024,time=now(),guard=refsGuard(refs);

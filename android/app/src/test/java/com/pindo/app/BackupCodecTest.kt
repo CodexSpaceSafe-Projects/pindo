@@ -5,11 +5,27 @@ import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 import java.time.LocalDate
+import java.io.File
 
 class BackupCodecTest {
     private val day = LocalDate.of(2026, 11, 12)
     private fun task(title: String, parent: String? = null): JSONObject = TodoRules.newTask(title, "完整备注", day, null, parent, 0)
     private fun document(): JSONObject = JSONObject().put("version", 1).put("tasks", JSONArray().put(task("任务"))).put("groups", JSONArray())
+
+    @Test fun currentPortableDocumentMatchesSwiftAndSurvivesExportImport() {
+        val file = generateSequence(File(System.getProperty("user.dir")).canonicalFile) { it.parentFile }
+            .map { File(it, "sync-vectors/portable-document.json") }.first { it.isFile }
+        val expected = JSONObject(file.readText())
+        val actual = BackupCodec.decode(BackupCodec.encode(BackupCodec.decode(expected.toString())))
+        fun semantic(value: Any?): Any? = when (value) {
+            null, JSONObject.NULL -> null
+            is Number -> value.toDouble()
+            is JSONObject -> value.keys().asSequence().filter { !value.isNull(it) }.associateWith { semantic(value.get(it)) }
+            is JSONArray -> (0 until value.length()).map { semantic(value.get(it)) }
+            else -> value
+        }
+        assertEquals(semantic(expected), semantic(actual))
+    }
 
     @Test fun exportedBackupExcludesReplicaChannelCredentialsAndPreferences() {
         val document = document().put("syncReplica", JSONObject().put("deviceID", "NOT-EXPORTED"))
@@ -30,8 +46,7 @@ class BackupCodecTest {
 
     @Test fun importsMacExportWithoutAdoptingPlatformPreferencesOrReplicaIdentity() {
         val source = document()
-        source.remove("version")
-        source.put("schemaVersion", 1).put("preferences", JSONObject().put("launchAtLogin", true))
+        source.put("preferences", JSONObject().put("launchAtLogin", true))
             .put("syncState", JSONObject().put("deviceID", "FOREIGN-DEVICE"))
         val imported = BackupCodec.decode(source.toString())
         assertEquals(1, imported.getInt("version"))

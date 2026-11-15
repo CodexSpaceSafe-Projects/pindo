@@ -8,21 +8,18 @@ final class SQLiteSyncTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }; return url
     }
     private func binding() throws -> SyncV3Binding { try .init(serviceID: "00000000-0000-4000-8000-000000000001", vaultID: "00000000-0000-4000-8000-000000000002", epoch: "00000000-0000-4000-8000-000000000003") }
-    func testJSONMigrationHasOneAuthorityAndSurvivesRestartWithoutReadingStaleJSON() throws {
-        let dir = try directory(), legacy = try PindoRepository(directory: dir)
-        try legacy.update { $0.tasks.append(TodoItem(title: "Legacy", note: "Keep", groupID: nil)) }
-        let expected = legacy.document
-        let migrated = try PindoRepository(directory: dir, useSQLite: true)
-        XCTAssertEqual(migrated.document, expected)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("data.pre-sqlite.json").path))
-        try FileStorage().write(Data("corrupt stale JSON".utf8), to: dir.appendingPathComponent("data.json"))
-        try migrated.update { $0.tasks[0].title = "SQLite owns this" }
-        XCTAssertEqual(try PindoRepository(directory: dir, useSQLite: true).document.tasks[0].title, "SQLite owns this")
+    func testSQLiteOwnsNewDocumentsAndPersistsAcrossRestart() throws {
+        let dir = try directory(), repository = try PindoRepository(directory: dir)
+        try repository.update { $0.tasks.append(TodoItem(title: "SQLite owns this", note: "Keep")) }
+        let reopened = try PindoRepository(directory: dir)
+        XCTAssertEqual(reopened.document, repository.document)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("pindo.sqlite").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("data.json").path))
     }
     func testTitleDeltaAndLocalWritesDoNotEncodeOrTransmitUnchangedMegabyteNote() throws {
-        let dir = try directory(), repository = try PindoRepository(directory: dir, useSQLite: true)
+        let dir = try directory(), repository = try PindoRepository(directory: dir)
         try repository.update { $0.tasks = [TodoItem(title: "Before", note: String(repeating: "长", count: 350_000))] }
-        let db = try XCTUnwrap(repository.sqlite), b = try binding()
+        let db = repository.sqlite, b = try binding()
         try db.bind(b, importingLocal: true)
         let initial = try XCTUnwrap(db.queue(b).first)
         var state = SyncPayload(version: 2)
@@ -37,11 +34,22 @@ final class SQLiteSyncTests: XCTestCase {
         let batch = try DocumentCodec.decode(SyncV3Batch.self, from: delta.plaintext)
         XCTAssertTrue(batch.operations[0].notes.isEmpty)
         XCTAssertEqual(Set(batch.operations[0].fields.keys), ["title"])
-        XCTAssertEqual(try PindoRepository(directory: dir, useSQLite: true).document.tasks[0].note.utf8.count, 1_050_000)
+        XCTAssertEqual(try PindoRepository(directory: dir).document.tasks[0].note.utf8.count, 1_050_000)
     }
+
+    func testInvalidStoredNoteCannotBecomeAnEmptyNoteOnReload() throws {
+        let repository = try PindoRepository(directory: directory())
+        try repository.update { $0.tasks.append(TodoItem(title: "Task", note: "Keep this note")) }
+        let current = repository.document
+        try repository.sqlite.database.execute("UPDATE app_entities SET note=? WHERE kind='task'", [.bytes(Data([0xff]))])
+        XCTAssertThrowsError(try repository.reloadCurrentDocument())
+        XCTAssertEqual(repository.document, current)
+        XCTAssertThrowsError(try PindoRepository(directory: repository.directory))
+    }
+
     func testCommitFailureRollsVisibleDataRegistersAndOutboxBackTogether() throws {
-        let dir = try directory(), repository = try PindoRepository(directory: dir, useSQLite: true)
-        let store = try XCTUnwrap(repository.sqlite), b = try binding()
+        let dir = try directory(), repository = try PindoRepository(directory: dir)
+        let store = repository.sqlite, b = try binding()
         try store.bind(b, importingLocal: true); try repository.reloadCurrentDocument()
         let old = repository.document, queued = try store.queue(b).count
         store.database.beforeCommit = { throw SyncV3Error.storageUnavailable }
@@ -52,8 +60,8 @@ final class SQLiteSyncTests: XCTestCase {
         XCTAssertEqual(try store.queue(b).count, queued)
     }
     func testUploadAckCannotConfirmNewerLocalEditsOrAdvanceDownloadCursor() throws {
-        let dir = try directory(), repository = try PindoRepository(directory: dir, useSQLite: true)
-        let store = try XCTUnwrap(repository.sqlite), b = try binding()
+        let dir = try directory(), repository = try PindoRepository(directory: dir)
+        let store = repository.sqlite, b = try binding()
         try store.bind(b, importingLocal: true); try repository.reloadCurrentDocument()
         let frozen = try XCTUnwrap(store.queue(b).first)
         try store.freeze(b, id: frozen.id, wire: Data("fixed bytes".utf8), digest: String(repeating: "a", count: 64), chunks: [])
@@ -66,8 +74,8 @@ final class SQLiteSyncTests: XCTestCase {
         XCTAssertEqual(try store.readDocument().tasks.last?.title, "New while uploading")
     }
     func testPatchBeforeCreateWaitsDurablyAndOnlyAdvancesContiguousAppliedPrefix() throws {
-        let dir = try directory(), repository = try PindoRepository(directory: dir, useSQLite: true), b = try binding()
-        let store = try XCTUnwrap(repository.sqlite); try store.bind(b, importingLocal: false)
+        let dir = try directory(), repository = try PindoRepository(directory: dir), b = try binding()
+        let store = repository.sqlite; try store.bind(b, importingLocal: false)
         var before = PindoDocument(); before.tasks = []; before.groups = []
         var created = before; let task = TodoItem(title: "Created"); created.tasks = [task]
         let actor = "00000000-0000-4000-8000-000000000010", key = "task:\(task.id.uuidString.lowercased())"
@@ -82,8 +90,8 @@ final class SQLiteSyncTests: XCTestCase {
         XCTAssertEqual(try store.readDocument().tasks.first?.title, "Patch arrived first")
     }
     func testEpochRebaseArchivesFrozenBytesAndKeepsOfflineProjection() throws {
-        let dir = try directory(), repository = try PindoRepository(directory: dir, useSQLite: true), b = try binding()
-        let store = try XCTUnwrap(repository.sqlite); try store.bind(b, importingLocal: true); try repository.reloadCurrentDocument()
+        let dir = try directory(), repository = try PindoRepository(directory: dir), b = try binding()
+        let store = repository.sqlite; try store.bind(b, importingLocal: true); try repository.reloadCurrentDocument()
         try repository.update { $0.tasks.append(TodoItem(title: "Offline")) }
         let old = try XCTUnwrap(store.queue(b).first)
         try store.freeze(b, id: old.id, wire: Data("old epoch wire".utf8), digest: String(repeating: "a", count: 64), chunks: [])
@@ -95,9 +103,9 @@ final class SQLiteSyncTests: XCTestCase {
     }
     func testThousandAndTenThousandTaskTitleEditsRemainFieldSized() throws {
         for count in [1_000, 10_000] {
-            let repository=try PindoRepository(directory:directory(),useSQLite:true)
+            let repository=try PindoRepository(directory:directory())
             try repository.update { doc in doc.tasks=(0..<count).map { TodoItem(title:"Task \($0)",note:String(repeating:"内容",count:32)) } }
-            let store=try XCTUnwrap(repository.sqlite), b=try binding()
+            let store=repository.sqlite, b=try binding()
             try store.bind(b,importingLocal:true)
             try repository.reloadCurrentDocument()
             try store.database.execute("CREATE TRIGGER forbid_note_rewrite BEFORE UPDATE OF note ON app_entities BEGIN SELECT RAISE(ABORT,'unchanged note rewrite'); END")
@@ -115,7 +123,7 @@ final class SQLiteSyncTests: XCTestCase {
     }
 
     func testSwitchingLibrariesRetainsEachOutboxAndRejectsLateUploadCallback() throws {
-        let repository=try PindoRepository(directory:directory(),useSQLite:true), store=try XCTUnwrap(repository.sqlite), first=try binding()
+        let repository=try PindoRepository(directory:directory()), store=repository.sqlite, first=try binding()
         try store.bind(first,importingLocal:true);try repository.reloadCurrentDocument()
         try repository.update{$0.tasks.append(TodoItem(title:"First library"))}
         let queued=try XCTUnwrap(store.queue(first).first)
@@ -148,8 +156,32 @@ final class SQLiteSyncTests: XCTestCase {
         XCTAssertEqual(Set(merged.records[key]!.notes.map(\.value)),["New local note","Unseen earlier note"])
     }
 
+    func testStagedEditsProduceOneDurableDeltaAndRetainDraftOnFailure() throws {
+        let repository = try PindoRepository(directory: directory()), store = repository.sqlite, b = try binding()
+        try store.bind(b, importingLocal: false); try repository.reloadCurrentDocument()
+        try repository.update { $0.tasks.append(TodoItem(title: "Before", note: "Original")) }
+        let id = repository.document.tasks[0].id, count = try store.queue(b).count
+        try repository.stageTitle(taskID: id, text: "After")
+        try repository.stageNote(taskID: id, text: "Changed note")
+        XCTAssertEqual(try store.queue(b).count, count)
+        store.database.beforeCommit = { throw SyncV3Error.storageUnavailable }
+        XCTAssertThrowsError(try repository.flush())
+        XCTAssertTrue(repository.hasUnsavedChanges)
+        XCTAssertEqual(repository.document.tasks[0].note, "Changed note")
+        XCTAssertEqual(try store.readDocument().tasks[0].note, "Original")
+        XCTAssertEqual(try store.queue(b).count, count)
+        store.database.beforeCommit = nil
+        try repository.flush()
+        XCTAssertFalse(repository.hasUnsavedChanges)
+        XCTAssertEqual(try store.queue(b).count, count + 1)
+        let batch = try DocumentCodec.decode(SyncV3Batch.self, from: XCTUnwrap(store.queue(b).last).plaintext)
+        XCTAssertEqual(batch.operations.first?.fields["title"]?.value, .string("After"))
+        XCTAssertEqual(batch.operations.first?.notes.first?.value, "Changed note")
+        XCTAssertEqual(try PindoRepository(directory: repository.directory).document.tasks[0].note, "Changed note")
+    }
+
     func testCheckpointConfirmsCoveredReceiptsAndRetainsUnacknowledgedOfflineWork() throws {
-        let repository=try PindoRepository(directory:directory(),useSQLite:true),store=try XCTUnwrap(repository.sqlite),b=try binding()
+        let repository=try PindoRepository(directory:directory()),store=repository.sqlite,b=try binding()
         try store.bind(b,importingLocal:false);try repository.reloadCurrentDocument()
         try repository.update{$0.tasks.append(TodoItem(title:"Covered"))}
         let first=try XCTUnwrap(store.queue(b).first),batch=try DocumentCodec.decode(SyncV3Batch.self,from:first.plaintext)

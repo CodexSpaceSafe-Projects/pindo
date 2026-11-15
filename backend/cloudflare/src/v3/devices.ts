@@ -12,9 +12,9 @@ export async function bootstrap(request:Request,env:Env){
  await secret(request,env.BOOTSTRAP_SECRET);
  const b=await boundedJSON(request);if(b.version!==3)throw new ProtocolError('unsupported_version',426);
  const vault=uuid(b.vaultID),epoch=uuid(b.epoch),device=uuid(b.deviceID),hash=await tokenHash(b.deviceToken);
- if(env.SYNC_ENABLED==='true'&&(!b.keyCheck||typeof b.keyCheck!=='object'))throw new ProtocolError('invalid_request',400);
- const keyCheck=b.keyCheck?JSON.stringify(b.keyCheck):null;
- if(keyCheck&&keyCheck.length>4096)throw new ProtocolError('invalid_request',400);
+ if(!b.keyCheck||typeof b.keyCheck!=='object'||Array.isArray(b.keyCheck))throw new ProtocolError('invalid_request',400);
+ const keyCheck=JSON.stringify(b.keyCheck);
+ if(keyCheck.length>4096)throw new ProtocolError('invalid_request',400);
  const r=await env.DB.batch([
  env.DB.prepare(`INSERT INTO vaults(id,epoch,byte_budget,batch_budget,key_check) SELECT ?,?,67108864,1000,? WHERE (SELECT bootstrapped FROM service_state WHERE id=1)=0 AND NOT EXISTS(SELECT 1 FROM vaults WHERE id=?)`).bind(vault,epoch,keyCheck,vault),
  env.DB.prepare(`INSERT INTO devices(id,vault_id,token_hash) SELECT ?,v.id,? FROM vaults v WHERE v.id=? AND v.epoch=? AND (SELECT bootstrapped FROM service_state WHERE id=1)=0 AND NOT EXISTS(SELECT 1 FROM devices WHERE id=?)`).bind(device,hash,vault,epoch,device),

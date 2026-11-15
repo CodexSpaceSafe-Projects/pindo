@@ -1,22 +1,21 @@
 import XCTest
 @testable import PindoCore
 
-final class MemoryStorage: StorageIO {
-    var files: [URL: Data] = [:]
-    var writes: [URL] = []
-    var failNextWriteTo: URL?
-    func createDirectory(_ url: URL) throws {}
-    func read(_ url: URL) throws -> Data? { files[url] }
-    func write(_ data: Data, to url: URL) throws {
-        if url == failNextWriteTo { failNextWriteTo = nil; throw CocoaError(.fileWriteNoPermission) }
-        files[url] = data; writes.append(url)
-    }
-    func remove(_ url: URL) throws { files.removeValue(forKey: url) }
-}
-
 final class PindoCoreTests: XCTestCase {
     let directory = URL(fileURLWithPath: "/tmp/pindo-test-\(UUID().uuidString)")
     let now = Date(timeIntervalSince1970: 1_793_491_200)
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    private func failNextCommit(_ repository: PindoRepository) {
+        let database = repository.sqlite.database
+        database.beforeCommit = { [weak database] in
+            database?.beforeCommit = nil
+            throw CocoaError(.fileWriteNoPermission)
+        }
+    }
 
     func task(_ title: String = "事项", day: DayKey? = nil) -> TodoItem { TodoItem(title: title, plannedDay: day ?? DayKey(now), now: now) }
     func document() -> PindoDocument { var d = PindoDocument(); d.tasks = [task()]; return d }
@@ -79,93 +78,88 @@ final class PindoCoreTests: XCTestCase {
         XCTAssertEqual(archive, before)
     }
 
-    func testPrimaryAutosaveNeverWritesArchiveAndIdleCaptureSkips() throws {
-        let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
+    func testAutosaveKeepsSnapshotHistorySeparateAndIdleCaptureSkips() throws {
+        let repo = try PindoRepository(directory: directory, now: now)
         let item = task(); try repo.update { $0.tasks.append(item) }
         _ = try repo.captureIfChanged(now: now)
-        let count = repo.archive.count, writes = io.writes.filter { $0 == repo.backupURL }.count
+        let count = repo.archive.count, snapshotBytes = try repo.exportSnapshots()
         for text in ["一", "一二", "一二三", "一二三四", "一二三四五"] { try repo.stageNote(taskID: item.id, text: text) }
         XCTAssertTrue(repo.hasUnsavedChanges)
-        XCTAssertEqual(io.writes.filter { $0 == repo.backupURL }.count, writes)
+        XCTAssertEqual(try repo.sqlite.readDocument().tasks[0].note, "")
         try repo.flush()
+        XCTAssertEqual(try repo.exportSnapshots(), snapshotBytes)
         XCTAssertEqual(repo.archive.count, count)
         XCTAssertTrue(try repo.captureIfChanged(now: now.addingTimeInterval(30)))
         XCTAssertEqual(repo.archive.count, count + 1)
         XCTAssertFalse(try repo.captureIfChanged(now: now.addingTimeInterval(60)))
-        let reopened = try PindoRepository(directory: directory, io: io, now: now)
+        let reopened = try PindoRepository(directory: directory, now: now)
         XCTAssertEqual(reopened.document.tasks[0].note, "一二三四五")
-        XCTAssertEqual(reopened.archive.count, repo.archive.count)
+        XCTAssertEqual(reopened.archive, repo.archive)
     }
 
-    func testTitleAndNoteEditsCoalesceAndSurviveWriteFailure() throws {
-        let io = MemoryStorage(), repo = try PindoRepository(directory: directory, io: io, now: now)
-        var item = task()
-        item.note = "原备注"; item.groupID = repo.document.groups.first?.id
+    func testTitleAndNoteEditsCoalesceAndSurviveCommitFailure() throws {
+        let repo = try PindoRepository(directory: directory, now: now)
+        var item = task(); item.note = "原备注"; item.groupID = repo.document.groups.first?.id
         try repo.update { $0.tasks.append(item) }
-        try repo.enableSync()
-        let writes = io.writes.count, snapshots = repo.archive.count
-        let editedAt = now.addingTimeInterval(10)
+        let snapshots = repo.archive.count, editedAt = now.addingTimeInterval(10)
         try repo.stageTitle(taskID: item.id, text: "修改", now: editedAt)
         try repo.stageTitle(taskID: item.id, text: "  修改后的事项 ✅  ", now: editedAt)
         try repo.stageNote(taskID: item.id, text: "修改后的备注", now: editedAt)
         var expected = item
         expected.title = "修改后的事项 ✅"; expected.note = "修改后的备注"; expected.updatedAt = editedAt
         XCTAssertEqual(repo.document.tasks.first, expected)
-        XCTAssertTrue(repo.hasUnsavedChanges)
-        XCTAssertEqual(io.writes.count, writes)
+        XCTAssertEqual(try repo.sqlite.readDocument().tasks.first, item)
         XCTAssertThrowsError(try repo.stageTitle(taskID: item.id, text: " \n "))
         XCTAssertThrowsError(try repo.stageTitle(taskID: UUID(), text: "不存在"))
-        XCTAssertEqual(repo.document.tasks.first, expected)
-
-        io.failNextWriteTo = repo.dataURL
+        failNextCommit(repo)
         XCTAssertThrowsError(try repo.flush())
         XCTAssertTrue(repo.hasUnsavedChanges)
         XCTAssertEqual(repo.document.tasks.first, expected)
+        XCTAssertEqual(try repo.sqlite.readDocument().tasks.first, item)
         try repo.flush()
         XCTAssertFalse(repo.hasUnsavedChanges)
-        XCTAssertEqual(io.writes.count, writes + 1)
         XCTAssertEqual(repo.archive.count, snapshots)
-        let reopened = try PindoRepository(directory: directory, io: io, now: now)
-        XCTAssertEqual(reopened.document.tasks.first, expected)
-        let key = "task:\(item.id.uuidString.lowercased())"
-        XCTAssertEqual(reopened.syncPayload?.records[key]?.fields["title"]?.value, .string(expected.title))
+        XCTAssertEqual(try PindoRepository(directory: directory).document.tasks.first, expected)
     }
 
-    func testFailedPrimaryWriteKeepsDocumentAndUnsavedNoteCanRetry() throws {
-        let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
+    func testFailedCommitKeepsDocumentAndUnsavedNoteCanRetry() throws {
+        let repo = try PindoRepository(directory: directory, now: now)
         let before = repo.document
-        io.failNextWriteTo = repo.dataURL
+        failNextCommit(repo)
         XCTAssertThrowsError(try repo.update { $0.tasks.append(self.task()) })
         XCTAssertEqual(repo.document, before)
+        XCTAssertEqual(try repo.sqlite.readDocument(), before)
         let item = task(); try repo.update { $0.tasks.append(item) }
         try repo.stageNote(taskID: item.id, text: "不能丢")
-        io.failNextWriteTo = repo.dataURL
+        failNextCommit(repo)
         XCTAssertThrowsError(try repo.flush())
         XCTAssertTrue(repo.hasUnsavedChanges)
         XCTAssertEqual(repo.document.tasks[0].note, "不能丢")
         try repo.flush(); XCTAssertFalse(repo.hasUnsavedChanges)
     }
 
-    func testCorruptPrimaryIsNeverOverwritten() throws {
-        let io = MemoryStorage(), url = directory.appendingPathComponent("data.json")
-        let corrupt = Data("not json".utf8); io.files[url] = corrupt
-        XCTAssertThrowsError(try PindoRepository(directory: directory, io: io))
-        XCTAssertEqual(io.files[url], corrupt)
-        XCTAssertTrue(io.writes.isEmpty)
+    func testCorruptDatabaseIsNeverReinitialized() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("pindo.sqlite"), corrupt = Data("not a SQLite database".utf8)
+        try corrupt.write(to: url)
+        XCTAssertThrowsError(try PindoRepository(directory: directory))
+        XCTAssertEqual(try Data(contentsOf: url), corrupt)
     }
 
-    func testCorruptBackupDoesNotBlockPrimarySaveOrGetOverwritten() throws {
-        let io = MemoryStorage(); let first = try PindoRepository(directory: directory, io: io, now: now)
-        let corrupt = Data("broken".utf8); io.files[first.backupURL] = corrupt
-        let repo = try PindoRepository(directory: directory, io: io, now: now)
+    func testCorruptSnapshotDoesNotBlockSavingOrGetOverwritten() throws {
+        let first = try PindoRepository(directory: directory, now: now), corrupt = Data("broken".utf8)
+        try first.sqlite.database.execute("UPDATE app_meta SET value=? WHERE key='archive'", [.bytes(corrupt)])
+        let repo = try PindoRepository(directory: directory, now: now)
         XCTAssertNotNil(repo.backupWarning)
+        XCTAssertFalse(repo.canRestore)
         try repo.update { $0.tasks.append(self.task()) }
         XCTAssertFalse(try repo.captureIfChanged(now: now))
-        XCTAssertEqual(io.files[repo.backupURL], corrupt)
+        XCTAssertEqual(try repo.exportSnapshots(), corrupt)
+        XCTAssertEqual(try repo.sqlite.readDocument().tasks.count, 1)
     }
 
     func testRestoreGuardsUnsnapshottedCurrentContentAndPreservesLaterVersions() throws {
-        let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
+        let repo = try PindoRepository(directory: directory, now: now)
         let item = task(); try repo.update { $0.tasks.append(item) }; _ = try repo.captureIfChanged(now: now)
         let selected = repo.archive.records.last!.id
         try repo.stageNote(taskID: item.id, text: "新想法"); try repo.flush()
@@ -174,19 +168,17 @@ final class PindoCoreTests: XCTestCase {
         let guardRecord = repo.archive.records.first { $0.label == "恢复前的保护快照" }!
         try repo.restore(snapshotID: guardRecord.id, now: now)
         XCTAssertEqual(repo.document.tasks[0].note, "新想法")
-        XCTAssertNil(io.files[repo.journalURL])
     }
 
     func testRestoreRejectsCompactionThatWouldDiscardCurrentContent() throws {
-        let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
+        let repo = try PindoRepository(directory: directory, now: now)
         var item = task(); item.note = String(repeating: "甲", count: 3_400_000)
         try repo.update { $0.tasks.append(item) }
         _ = try repo.captureIfChanged(now: now)
         let target = repo.archive.records.last!.id
         try repo.stageNote(taskID: item.id, text: String(repeating: "乙", count: 3_400_000), now: now)
         try repo.flush()
-        let documentBefore = repo.document, archiveBefore = repo.archive, filesBefore = io.files
-        let writesBefore = io.writes.count
+        let documentBefore = repo.document, archiveBefore = repo.archive, diskBefore = try repo.sqlite.readDocument()
 
         XCTAssertThrowsError(try repo.restore(snapshotID: target, now: now)) { error in
             guard case PindoError.protectionSnapshotTooLarge = error else { return XCTFail("Unexpected error: \(error)") }
@@ -194,14 +186,11 @@ final class PindoCoreTests: XCTestCase {
 
         XCTAssertTrue(repo.document == documentBefore, "Restore must preserve the current document when protection cannot fit")
         XCTAssertTrue(repo.archive == archiveBefore, "Restore must preserve the original archive")
-        XCTAssertEqual(io.files, filesBefore)
-        XCTAssertEqual(io.writes.count, writesBefore)
-        XCTAssertNil(io.files[repo.journalURL])
-        XCTAssertFalse(repo.needsRecovery)
+        XCTAssertEqual(try repo.sqlite.readDocument(), diskBefore)
     }
 
     func testRestoreAtRetentionLimitPreservesTheExistingCurrentSnapshot() throws {
-        let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
+        let repo = try PindoRepository(directory: directory, now: now)
         try repo.update { $0.tasks.append(self.task()) }
         for i in 0..<SnapshotArchive.maximumCount {
             try repo.update { $0.tasks[0].note = "版本\(i)" }
@@ -219,20 +208,23 @@ final class PindoCoreTests: XCTestCase {
         XCTAssertEqual(try repo.archive.validated(), repo.archive)
     }
 
-    func testInterruptedRestoreCompletesFromJournalOnReopen() throws {
-        let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
+    func testRestoreFailureRollsBackDataSnapshotsAndAllowsRetry() throws {
+        let repo = try PindoRepository(directory: directory, now: now)
         let item = task(); try repo.update { $0.tasks.append(item) }; _ = try repo.captureIfChanged(now: now)
         let target = repo.archive.records.last!.id
         try repo.update { $0.tasks[0].note = "稍后修改" }
-        io.failNextWriteTo = repo.dataURL
+        let current = repo.document, snapshots = try repo.exportSnapshots()
+        failNextCommit(repo)
         XCTAssertThrowsError(try repo.restore(snapshotID: target, now: now))
-        XCTAssertTrue(repo.needsRecovery)
-        XCTAssertNotNil(io.files[repo.journalURL])
-        XCTAssertThrowsError(try repo.update { $0.tasks.removeAll() })
-        let reopened = try PindoRepository(directory: directory, io: io, now: now)
-        XCTAssertEqual(reopened.document.tasks[0].note, "")
-        XCTAssertNil(io.files[repo.journalURL])
-        XCTAssertTrue(reopened.archive.records.contains { $0.label == "恢复前的保护快照" })
+        XCTAssertEqual(repo.document, current)
+        XCTAssertEqual(try repo.sqlite.readDocument(), current)
+        XCTAssertEqual(try repo.exportSnapshots(), snapshots)
+        let reopened = try PindoRepository(directory: directory, now: now)
+        XCTAssertEqual(reopened.document, current)
+        XCTAssertEqual(reopened.archive, repo.archive)
+        try repo.restore(snapshotID: target, now: now)
+        XCTAssertEqual(repo.document.tasks[0].note, "")
+        XCTAssertTrue(repo.archive.records.contains { $0.label == "恢复前的保护快照" })
     }
 
     func testProgressPersistsAcrossDaysAndRolloverOnlyTouchesPendingScope() throws {
@@ -245,9 +237,9 @@ final class PindoCoreTests: XCTestCase {
         XCTAssertEqual(d.tasks[0].plannedDay, yesterday)
         XCTAssertEqual(d.tasks[1].plannedDay, today)
         XCTAssertEqual(d.tasks[2].plannedDay, yesterday)
-        let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
+        let repo = try PindoRepository(directory: directory, now: now)
         try repo.update { $0 = d }
-        XCTAssertEqual(try PindoRepository(directory: directory, io: io).document.tasks[0].phase, .inProgress)
+        XCTAssertEqual(try PindoRepository(directory: directory).document.tasks[0].phase, .inProgress)
     }
 
     func testGregorianNavigationHandlesLeapDayAndDST() throws {
@@ -259,63 +251,45 @@ final class PindoCoreTests: XCTestCase {
     }
 
     func testImportValidatesBeforeReplacingAndAddsProtection() throws {
-        let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
+        let repo = try PindoRepository(directory: directory, now: now)
         let original = task(); try repo.update { $0.tasks.append(original) }
         let before = repo.document
         XCTAssertThrowsError(try repo.importDocument(Data("{}".utf8)))
         XCTAssertEqual(repo.document, before)
         var imported = PindoDocument(); imported.tasks = [task("导入的事项")]
-        try repo.importDocument(DocumentCodec.encode(imported))
+        try repo.importDocument(DocumentCodec.encode(PindoExport(document: imported)))
         XCTAssertEqual(repo.document.tasks[0].title, "导入的事项")
         XCTAssertTrue(repo.archive.records.contains { $0.label == "导入前的保护快照" })
     }
 
     func testImportRejectsCompactionThatWouldDiscardTheExistingCurrentSnapshot() throws {
-        let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
+        let repo = try PindoRepository(directory: directory, now: now)
         var item = task(); item.note = String(repeating: "甲", count: 3_400_000)
         try repo.update { $0.tasks.append(item) }
         _ = try repo.captureIfChanged(now: now)
         var imported = repo.document
         imported.tasks[0].note = String(repeating: "乙", count: 3_400_000)
-        let documentBefore = repo.document, archiveBefore = repo.archive, filesBefore = io.files
-        let writesBefore = io.writes.count
+        let documentBefore = repo.document, archiveBefore = repo.archive, diskBefore = try repo.sqlite.readDocument()
 
-        XCTAssertThrowsError(try repo.importDocument(DocumentCodec.encode(imported))) { error in
+        XCTAssertThrowsError(try repo.importDocument(DocumentCodec.encode(PindoExport(document: imported)))) { error in
             guard case PindoError.protectionSnapshotTooLarge = error else { return XCTFail("Unexpected error: \(error)") }
         }
 
         XCTAssertTrue(repo.document == documentBefore, "Import must preserve the current document when protection cannot fit")
         XCTAssertTrue(repo.archive == archiveBefore, "Import must preserve the original archive")
-        XCTAssertEqual(io.files, filesBefore)
-        XCTAssertEqual(io.writes.count, writesBefore)
-        XCTAssertNil(io.files[repo.journalURL])
-        XCTAssertFalse(repo.needsRecovery)
+        XCTAssertEqual(try repo.sqlite.readDocument(), diskBefore)
     }
 
-    func testRealFilesRoundTripWithSeparatePrimaryAndBackup() throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("PindoRealIO-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let repo = try PindoRepository(directory: folder, now: now)
-        let item = task(); try repo.update { $0.tasks.append(item) }
-        let backupBefore = try Data(contentsOf: repo.backupURL)
-        try repo.stageNote(taskID: item.id, text: "真实文件往返 ✅"); try repo.flush()
-        XCTAssertEqual(try Data(contentsOf: repo.backupURL), backupBefore)
-        XCTAssertTrue(try repo.captureIfChanged(now: now))
-        let reopened = try PindoRepository(directory: folder)
-        XCTAssertEqual(reopened.document.tasks[0].note, "真实文件往返 ✅")
-        XCTAssertEqual(reopened.archive.count, 2)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: repo.journalURL.path))
-    }
 
-    func testBackupWriteFailurePreservesOldArchiveAndSavedCurrentData() throws {
-        let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
+    func testSnapshotFailurePreservesArchiveAndSavedCurrentData() throws {
+        let repo = try PindoRepository(directory: directory, now: now)
         try repo.update { $0.tasks.append(self.task()) }
-        let before = io.files[repo.backupURL]
-        io.failNextWriteTo = repo.backupURL
+        let before = try repo.exportSnapshots()
+        failNextCommit(repo)
         XCTAssertThrowsError(try repo.captureIfChanged(now: now))
-        XCTAssertEqual(io.files[repo.backupURL], before)
+        XCTAssertEqual(try repo.exportSnapshots(), before)
         XCTAssertEqual(repo.archive.count, 1)
-        XCTAssertEqual(repo.document.tasks.count, 1)
+        XCTAssertEqual(try repo.sqlite.readDocument().tasks.count, 1)
         XCTAssertTrue(repo.canRestore)
         XCTAssertTrue(try repo.captureIfChanged(now: now))
     }
@@ -330,41 +304,21 @@ final class PindoCoreTests: XCTestCase {
     }
 
     func testDefaultGroupPersistsAndRestoresWithSnapshots() throws {
-        let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
+        let repo = try PindoRepository(directory: directory, now: now)
         let firstGroup = repo.document.groups[0].id, secondGroup = repo.document.groups[1].id
         try repo.update { $0.preferences.defaultGroupID = firstGroup }
         _ = try repo.captureIfChanged(now: now)
         let target = repo.archive.records.last!.id
         try repo.update { $0.preferences.defaultGroupID = secondGroup }
         _ = try repo.captureIfChanged(now: now.addingTimeInterval(30))
-        XCTAssertEqual(try PindoRepository(directory: directory, io: io).document.preferences.defaultGroupID, secondGroup)
+        XCTAssertEqual(try PindoRepository(directory: directory).document.preferences.defaultGroupID, secondGroup)
 
         try repo.restore(snapshotID: target, now: now)
 
         XCTAssertEqual(repo.document.preferences.defaultGroupID, firstGroup)
-        XCTAssertEqual(try PindoRepository(directory: directory, io: io).document.preferences.defaultGroupID, firstGroup)
+        XCTAssertEqual(try PindoRepository(directory: directory).document.preferences.defaultGroupID, firstGroup)
     }
 
-    func testLegacyDocumentAndSnapshotsWithoutDefaultGroupStillLoad() throws {
-        var original = document(); original.preferences.appearance = .dark
-        original.preferences.defaultGroupID = original.groups[0].id
-        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: DocumentCodec.encode(original)) as? [String: Any])
-        var preferences = try XCTUnwrap(json["preferences"] as? [String: Any])
-        preferences.removeValue(forKey: "defaultGroupID"); json["preferences"] = preferences
-        let legacyData = try JSONSerialization.data(withJSONObject: json)
-        let legacy = try DocumentCodec.decode(PindoDocument.self, from: legacyData).validated()
-        let io = MemoryStorage()
-        io.files[directory.appendingPathComponent("data.json")] = legacyData
-        io.files[directory.appendingPathComponent("Backups/snapshots.json")] = try DocumentCodec.encode(SnapshotArchive(document: legacy, now: now))
-
-        let repo = try PindoRepository(directory: directory, io: io, now: now)
-
-        XCTAssertNil(repo.document.preferences.defaultGroupID)
-        XCTAssertEqual(repo.document.preferences.appearance, .dark)
-        XCTAssertEqual(repo.document.tasks, original.tasks)
-        XCTAssertNil(repo.backupWarning)
-        XCTAssertEqual(try PindoDocument.fromSnapshot(repo.archive.state()), legacy)
-    }
 
     func testRemovingDefaultGroupClearsPreferenceAndPreservesTaskContent() throws {
         var doc = document(); let group = doc.groups[0].id
@@ -382,14 +336,64 @@ final class PindoCoreTests: XCTestCase {
         XCTAssertEqual(try doc.validated(), doc)
     }
 
-    func testImportRejectsMissingDefaultGroupWithoutReplacingData() throws {
-        let io = MemoryStorage(); let repo = try PindoRepository(directory: directory, io: io, now: now)
-        var imported = document(); imported.preferences.defaultGroupID = UUID()
-        let documentBefore = repo.document, filesBefore = io.files
-
+    func testPortableExportAndImportKeepDevicePreferencesLocal() throws {
+        let repo = try PindoRepository(directory: directory, now: now)
+        try repo.update {
+            $0.tasks.append(self.task())
+            $0.preferences.appearance = .dark
+            $0.preferences.defaultGroupID = $0.groups[0].id
+        }
+        let exported = try repo.exportDocument()
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: exported) as? [String: Any])
+        XCTAssertEqual(Set(object.keys), Set(["version", "tasks", "groups"]))
+        var imported = document(); imported.groups = []
+        try repo.importDocument(DocumentCodec.encode(PindoExport(document: imported)))
+        XCTAssertEqual(repo.document.preferences.appearance, .dark)
+        XCTAssertNil(repo.document.preferences.defaultGroupID)
+        XCTAssertEqual(repo.document.tasks, imported.tasks)
+        let before = repo.document
         XCTAssertThrowsError(try repo.importDocument(DocumentCodec.encode(imported)))
+        var future = PindoExport(document: imported); future.version = 2
+        XCTAssertThrowsError(try repo.importDocument(DocumentCodec.encode(future)))
+        XCTAssertEqual(repo.document, before)
+    }
 
-        XCTAssertEqual(repo.document, documentBefore)
-        XCTAssertEqual(io.files, filesBefore)
+    func testSharedPortableDocumentPreservesCrossPlatformValues() throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("sync-vectors/portable-document.json")
+        let source = try Data(contentsOf: url)
+        let repo = try PindoRepository(directory: directory, now: now)
+        try repo.update { $0.preferences.appearance = .dark }
+        try repo.importDocument(source)
+        XCTAssertEqual(repo.document.preferences.appearance, .dark)
+        XCTAssertEqual(repo.document.tasks[0].startedAt, Date(timeIntervalSinceReferenceDate: 37.5))
+        XCTAssertEqual(repo.document.tasks[1].createdAt, Date(timeIntervalSinceReferenceDate: 12.5))
+        XCTAssertEqual(repo.document.tasks[1].parentID, repo.document.tasks[0].id)
+        XCTAssertTrue(repo.document.tasks[0].isProgressExplicit)
+        XCTAssertFalse(repo.document.tasks[1].isProgressExplicit)
+        XCTAssertTrue(repo.document.tasks[0].note.contains("Mac 离线备注"))
+        XCTAssertTrue(repo.document.tasks[0].note.contains("Android 离线备注"))
+
+        // Optional UUID/date fields may be absent or JSON null. UUID casing is
+        // presentation-only; every other portable field must remain identical.
+        let optional = Set(["groupID", "parentID", "startedAt", "completedAt"])
+        func normalized(_ value: JSONValue, key: String = "") -> JSONValue {
+            switch value {
+            case .object(let fields):
+                return .object(fields.reduce(into: [:]) { result, entry in
+                    if optional.contains(entry.key), entry.value == .null { return }
+                    result[entry.key] = normalized(entry.value, key: entry.key)
+                })
+            case .array(let values): return .array(values.map { normalized($0) })
+            case .string(let text) where ["id", "groupID", "parentID"].contains(key):
+                return .string(text.lowercased())
+            default: return value
+            }
+        }
+        let exported = try repo.exportDocument()
+        XCTAssertEqual(normalized(try DocumentCodec.decode(JSONValue.self, from: exported)),
+                       normalized(try DocumentCodec.decode(JSONValue.self, from: source)))
+        let decoded = try DocumentCodec.decode(PindoExport.self, from: exported)
+        XCTAssertEqual(try decoded.document(preserving: repo.document.preferences), repo.document)
     }
 }

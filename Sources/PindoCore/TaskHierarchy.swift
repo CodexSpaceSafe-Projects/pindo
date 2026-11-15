@@ -126,7 +126,7 @@ public extension PindoDocument {
         var next = self
         next.tasks.append(task)
         if let parent = task.parentID {
-            next.reconcileParents(startingAt: [parent], previous: TaskTreeIndex(tasks), now: now)
+            next.reconcileParents(startingAt: [parent], now: now)
         }
         _ = try next.validated()
         self = next
@@ -177,7 +177,7 @@ public extension PindoDocument {
         if oldParent != parent { next.tasks[source].updatedAt = now }
         for (order, sibling) in siblings.enumerated() { if let index = tree.positions[sibling] { next.tasks[index].order = order } }
         if oldParent != parent {
-            next.reconcileParents(startingAt: Set([oldParent, parent].compactMap { $0 }), previous: tree, now: now)
+            next.reconcileParents(startingAt: Set([oldParent, parent].compactMap { $0 }), now: now)
         }
         _ = try next.validated()
         self = next
@@ -193,7 +193,7 @@ public extension PindoDocument {
             let removed = tree.subtree(ids)
             let parents = Set(tasks.filter { removed.contains($0.id) }.compactMap(\.parentID)).subtracting(removed)
             next.tasks.removeAll { removed.contains($0.id) }
-            next.reconcileParents(startingAt: parents, previous: tree, now: now)
+            next.reconcileParents(startingAt: parents, now: now)
         case .setGroup(let group):
             if let group, !groups.contains(where: { $0.id == group }) { throw PindoError.invalidData("事项引用了不存在的分组") }
             for index in next.tasks.indices where ids.contains(next.tasks[index].id) && next.tasks[index].groupID != group {
@@ -235,7 +235,7 @@ private extension PindoDocument {
                 guard dirtyParents.contains(id) else { continue }
                 reconcileParent(id, tree: tree, now: now)
             }
-            // Even an unchanged phase can sit below a stale ancestor from older data.
+            // Reconcile every affected ancestor, including unchanged selected tasks.
             if let parent = tasks[index].parentID { dirtyParents.insert(parent) }
         }
     }
@@ -244,7 +244,7 @@ private extension PindoDocument {
         let previous = tasks[index].phase
         tasks[index].phase = phase; tasks[index].updatedAt = now
         tasks[index].completedAt = phase == .completed ? now : nil
-        tasks[index].isProgressExplicit = phase == .inProgress ? explicit : nil
+        tasks[index].isProgressExplicit = phase == .inProgress && explicit
         if phase == .inProgress {
             tasks[index].startedAt = now
         } else if phase == .pending || previous != .inProgress {
@@ -253,14 +253,9 @@ private extension PindoDocument {
         }
     }
 
-    @discardableResult mutating func reconcileParent(_ id: UUID, tree: TaskTreeIndex, previous: TaskTreeIndex? = nil, now: Date) -> Bool {
+    @discardableResult mutating func reconcileParent(_ id: UUID, tree: TaskTreeIndex, now: Date) -> Bool {
         guard let index = tree.positions[id] else { return false }
         let children = tree.children[id] ?? []
-        if tasks[index].phase == .inProgress, tasks[index].isProgressExplicit == nil {
-            // 旧资料没有来源标记；原本没有子项进度时，保留父项自己的进行中。
-            let oldTree = previous ?? tree
-            tasks[index].isProgressExplicit = (oldTree.children[id] ?? []).allSatisfy { oldTree.tasks[$0].phase == .pending }
-        }
         let phase: TaskPhase
         if children.isEmpty {
             // 移走或删除最后一个子项，只撤销由子项带来的进行中。
@@ -274,13 +269,13 @@ private extension PindoDocument {
         return true
     }
 
-    mutating func reconcileParents(startingAt ids: Set<UUID>, previous: TaskTreeIndex, now: Date) {
+    mutating func reconcileParents(startingAt ids: Set<UUID>, now: Date) {
         guard !ids.isEmpty else { return }
         let tree = TaskTreeIndex(tasks)
         var affected = ids
         for id in ids { affected.formUnion(tree.ancestors(of: id)) }
         for id in affected.sorted(by: { tree.ancestors(of: $0).count > tree.ancestors(of: $1).count }) {
-            reconcileParent(id, tree: tree, previous: previous, now: now)
+            reconcileParent(id, tree: tree, now: now)
         }
     }
 }

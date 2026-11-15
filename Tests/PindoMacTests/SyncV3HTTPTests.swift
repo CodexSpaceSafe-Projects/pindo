@@ -16,7 +16,7 @@ final class SyncV3HTTPTests: XCTestCase {
         let http=try SyncV3HTTP(endpoint:endpoint,allowLoopbackHTTP:true), cipher=try SyncEncryption(recoveryKey:key)
         let dir=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer {try? FileManager.default.removeItem(at:dir)}
-        let repo=try PindoRepository(directory:dir,useSQLite:true), store=try XCTUnwrap(repo.sqlite)
+        let repo=try PindoRepository(directory:dir), store=repo.sqlite
         let c=SyncV3Connection(endpoint:endpoint,serviceID:service,vaultID:vault,epoch:epoch,deviceID:device,token:token(7),recoveryKey:key)
         let engine=SyncV3Engine(store:store,transport:LostPushACK(base:http),cipher:cipher)
         if ProcessInfo.processInfo.environment["PINDO_INTEROP_PHASE"] == "verify" {
@@ -39,7 +39,7 @@ final class SyncV3HTTPTests: XCTestCase {
         let pair:JSONValue = .object(["id":.string("00000000-0000-4000-8000-000000000011"),"code":.string(token(9)),"epoch":.string(epoch)])
         _ = try await http.request(method:"POST",path:"/v3/vaults/\(vault)/pairings",body:DocumentCodec.encode(pair),token:c.token)
         // A second independent SQLite installation reads the encrypted chunks.
-        let other=try PindoRepository(directory:dir.appendingPathComponent("other"),useSQLite:true), otherStore=try XCTUnwrap(other.sqlite)
+        let other=try PindoRepository(directory:dir.appendingPathComponent("other")), otherStore=other.sqlite
         let c2=SyncV3Connection(endpoint:endpoint,serviceID:service,vaultID:vault,epoch:epoch,deviceID:"00000000-0000-4000-8000-000000000005",token:token(8),recoveryKey:key)
         let consume:JSONValue = .object(["epoch":.string(epoch),"deviceID":.string(c2.deviceID),"deviceToken":.string(c2.token),"code":.string(token(9))])
         _ = try await http.request(method:"POST",path:"/v3/vaults/\(vault)/pairings/00000000-0000-4000-8000-000000000011/consume",body:DocumentCodec.encode(consume),token:nil)
@@ -68,7 +68,7 @@ final class SyncV3HTTPTests: XCTestCase {
         let controller=CloudSyncController(model:model,secrets:pendingSecrets,transport:{try SyncV3HTTP(endpoint:$0,allowLoopbackHTTP:true)})
         controller.join(invitation:String(decoding:try DocumentCodec.encode(invitation),as:UTF8.self))
         for _ in 0..<500 {if !controller.isSyncing {break};try await Task.sleep(nanoseconds:10_000_000)}
-        XCTAssertNotNil(try model.repository.sqlite?.binding)
+        XCTAssertNotNil(try model.repository.sqlite.binding)
         XCTAssertNotNil(controller.errorMessage)
         let recovered=CloudSyncController(model:model,secrets:pendingSecrets,transport:{try SyncV3HTTP(endpoint:$0,allowLoopbackHTTP:true)})
         recovered.start()

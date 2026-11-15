@@ -1,7 +1,6 @@
 import Foundation
 
-/// P0 wire primitives. v3 is deliberately separate from the legacy full-state
-/// payload: a receipt confirms upload only; a cursor confirms durable application.
+/// A receipt confirms upload; a cursor confirms durable local application.
 public enum SyncV3 {
     public static let maximumCounter: Int64 = 9_007_199_254_740_991
     public static let maximumBatchBytes = 128 * 1024
@@ -56,46 +55,5 @@ public struct SyncV3EnvelopeContext: Codable, Equatable, Sendable {
             throw SyncV3Error.invalidRequest
         }
         return Data(["PindoSync/v3", identity.serviceID, identity.vaultID, epoch, kind.rawValue, objectID, artifactIDs.joined(separator: ",")].joined(separator: "\n").utf8)
-    }
-}
-
-/// An observed note dot is scoped to that record's note register. Observing a
-/// newer title from an actor must never imply observing its earlier note.
-public struct SyncV3NoteDot: Codable, Hashable, Sendable {
-    public let actorID: String
-    public let counter: Int64
-    public init(actorID: String, counter: Int64) throws {
-        try SyncV3.validateID(actorID); try SyncV3.validateCounter(counter)
-        guard counter > 0 else { throw SyncV3Error.invalidRequest }
-        self.actorID = actorID; self.counter = counter
-    }
-}
-
-/// P0 reference register. Keep observed removals even when their writes have not
-/// arrived yet. No tombstone/context collection is permitted in the first version.
-public struct SyncV3NoteRegister: Equatable, Sendable {
-    public private(set) var writes: [SyncV3NoteDot: String] = [:]
-    private var contexts: [SyncV3NoteDot: Set<SyncV3NoteDot>] = [:]
-    public private(set) var removed: Set<SyncV3NoteDot> = []
-    public init() {}
-    public var visible: [SyncV3NoteDot: String] { writes.filter { !removed.contains($0.key) } }
-    public mutating func apply(dot: SyncV3NoteDot, value: String, observed: Set<SyncV3NoteDot>) throws {
-        // Revalidate decoded dots, including those constructed by Codable.
-        for item in observed.union([dot]) {
-            _ = try SyncV3NoteDot(actorID: item.actorID, counter: item.counter)
-        }
-        guard !observed.contains(dot), value.utf8.count <= SyncV3.maximumChunkBytes else { throw SyncV3Error.invalidRequest }
-        if let old = writes[dot], old != value || contexts[dot] != observed { throw SyncV3Error.corruptData }
-        writes[dot] = value; contexts[dot] = observed
-        removed.formUnion(observed)
-    }
-    public mutating func merge(_ other: Self) throws {
-        var next = self
-        for (dot, value) in other.writes {
-            if let old = next.writes[dot], old != value || next.contexts[dot] != other.contexts[dot] { throw SyncV3Error.corruptData }
-            next.writes[dot] = value; next.contexts[dot] = other.contexts[dot]
-        }
-        next.removed.formUnion(other.removed)
-        self = next
     }
 }

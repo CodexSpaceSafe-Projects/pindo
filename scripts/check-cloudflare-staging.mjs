@@ -5,7 +5,6 @@ import { readFile } from 'node:fs/promises';
 const deployment = JSON.parse(await readFile(new URL('../backend/cloudflare/deployments/staging.json', import.meta.url), 'utf8'));
 const endpoint = new URL(deployment.endpoint);
 assert.equal(endpoint.protocol, 'https:');
-assert.equal(endpoint.hostname, 'example.com');
 const get = async (path) => {
   const response = await fetch(new URL(path, endpoint), {redirect:'error',signal:AbortSignal.timeout(15000)});
   return {status:response.status,cache:response.headers.get('Cache-Control'),body:await response.json()};

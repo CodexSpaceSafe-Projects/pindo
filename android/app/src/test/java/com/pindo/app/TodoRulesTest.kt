@@ -58,23 +58,12 @@ class TodoRulesTest {
         assertTrue(reopened.objects().all { it.getString("phase") == "pending" && it.isNull("startedAt") && it.isNull("completedAt") })
     }
 
-    @Test fun legacyInProgressParentWithOnlyPendingChildrenKeepsItsOwnStart() {
-        val parent = task("parent").put("phase", "inProgress").put("startedAt", 1.0)
-        val child = task("child", parent.getString("id"))
-        assertNull(Todo.from(parent).isProgressExplicit)
-        val started = TodoRules.setPhase(JSONArray().put(parent).put(child), child.getString("id"), "inProgress")
-        val reopened = TodoRules.setPhase(started, child.getString("id"), "pending")
-        assertEquals("inProgress", reopened.getJSONObject(0).getString("phase"))
-        assertTrue(reopened.getJSONObject(0).getBoolean("isProgressExplicit"))
-        assertEquals(1.0, reopened.getJSONObject(0).getDouble("startedAt"), 0.0)
-    }
-
     @Test fun directCompletionDoesNotReuseAnOldRoundStartTimestamp() {
         val pending = task("pending").put("startedAt", 1.0)
         val complete = TodoRules.setPhase(JSONArray().put(pending), pending.getString("id"), "completed").getJSONObject(0)
         assertTrue(complete.isNull("startedAt"))
         assertFalse(complete.isNull("completedAt"))
-        assertTrue(complete.isNull("isProgressExplicit"))
+        assertFalse(complete.getBoolean("isProgressExplicit"))
     }
 
     @Test fun largeCrossPlatformOrderRemainsLongThroughModelAndStateChanges() {
@@ -102,7 +91,7 @@ class TodoRulesTest {
 
     @Test fun modelDoesNotCoerceStringProgressSourcesToBoolean() {
         assertThrows(IllegalArgumentException::class.java) { Todo.from(task("invalid").put("isProgressExplicit", "true")) }
-        assertNull(Todo.from(task("legacy").put("isProgressExplicit", JSONObject.NULL)).isProgressExplicit)
+        assertThrows(IllegalArgumentException::class.java) { Todo.from(task("invalid").put("isProgressExplicit", JSONObject.NULL)) }
     }
 
     @Test fun modelRejectsCoercedStringsAndFractionalOrOutOfRangeCalendarDates() {
@@ -116,8 +105,8 @@ class TodoRulesTest {
             invalid.getJSONObject("plannedDay").put(field, value)
             assertThrows(IllegalArgumentException::class.java) { Todo.from(invalid) }
         }
-        val withoutNote = task("legacy").also { it.remove("note") }
-        assertEquals("", Todo.from(withoutNote).note)
+        val withoutNote = task("invalid").also { it.remove("note") }
+        assertThrows(org.json.JSONException::class.java) { Todo.from(withoutNote) }
         assertThrows(IllegalArgumentException::class.java) { Todo.from(task("invalid").put("note", JSONObject.NULL)) }
         val group = JSONObject().put("id", "00000000-0000-0000-0000-000000000010").put("name", "group").put("colorHex", "#4477AA")
         for (field in listOf("id", "name", "colorHex")) {
@@ -178,7 +167,7 @@ class TodoRulesTest {
         val grandchild = task("孙项", child.getString("id"))
         val original = TodoRules.setPhase(JSONArray().put(parent).put(child).put(grandchild), grandchild.getString("id"), "inProgress")
         original.getJSONObject(0).put("phase", "pending").remove("startedAt")
-        original.getJSONObject(0).remove("isProgressExplicit")
+        original.getJSONObject(0).put("isProgressExplicit", false)
         val result = TodoRules.setPhase(original, grandchild.getString("id"), "inProgress")
         assertEquals("inProgress", result.getJSONObject(0).getString("phase"))
         assertEquals(original.getJSONObject(1).toMap(), result.getJSONObject(1).toMap())

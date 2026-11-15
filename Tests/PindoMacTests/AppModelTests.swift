@@ -7,7 +7,7 @@ import PindoCore
 final class AppModelTests: XCTestCase {
     @MainActor private func makeModel() throws -> AppModel {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("PindoMacTests-\(UUID().uuidString)")
-        let model = try AppModel(useSQLite: false, directory: path)
+        let model = try AppModel(directory: path)
         model.playFeedback = { _ in }
         return model
     }
@@ -133,7 +133,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertFalse(model.repository.hasUnsavedChanges)
     }
 
-    @MainActor func testFlushPublishesDocumentOnlyWhenSyncMetadataChanges() throws {
+    @MainActor func testFlushDoesNotRepublishAnUnchangedVisibleDocument() throws {
         let model = try makeModel()
         defer { try? FileManager.default.removeItem(at: model.repository.directory) }
         XCTAssertTrue(model.addTask(title: "备注", day: DayKey(), groupID: nil))
@@ -149,16 +149,17 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(model.flush())
         XCTAssertEqual(publications, 1)
 
-        try model.repository.enableSync()
+        let binding = try SyncV3Binding(serviceID: UUID().uuidString.lowercased(), vaultID: UUID().uuidString.lowercased(), epoch: UUID().uuidString.lowercased())
+        try model.repository.sqlite.bind(binding, importingLocal: true)
         model.refreshAfterCloudSync()
         publications = 0
         model.updateNote(id, text: "同步备注")
         XCTAssertEqual(publications, 1)
         XCTAssertTrue(model.flush())
-        XCTAssertEqual(publications, 2)
+        XCTAssertEqual(publications, 1)
         XCTAssertEqual(model.document, model.repository.document)
         XCTAssertTrue(model.flush())
-        XCTAssertEqual(publications, 2)
+        XCTAssertEqual(publications, 1)
     }
 
     @MainActor func testParallelTasksStayVisibleAcrossDatesAndRespectGroupFilter() async throws {
@@ -213,8 +214,8 @@ final class AppModelTests: XCTestCase {
 
         model.advancePhase(task)
         let before = model.document
-        try FileManager.default.removeItem(at: model.repository.dataURL)
-        try FileManager.default.createDirectory(at: model.repository.dataURL, withIntermediateDirectories: false)
+        model.repository.sqlite.database.beforeCommit = { throw PindoError.invalidData("Injected commit failure") }
+        defer { model.repository.sqlite.database.beforeCommit = nil }
         model.advancePhase(task)
         XCTAssertEqual(model.document, before)
         XCTAssertEqual(model.task(task.id)?.phase, .inProgress)
@@ -247,8 +248,8 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(try PindoRepository(directory: model.repository.directory).document, model.document)
 
         let before = model.document
-        try FileManager.default.removeItem(at: model.repository.dataURL)
-        try FileManager.default.createDirectory(at: model.repository.dataURL, withIntermediateDirectories: false)
+        model.repository.sqlite.database.beforeCommit = { throw PindoError.invalidData("Injected commit failure") }
+        defer { model.repository.sqlite.database.beforeCommit = nil }
         XCTAssertFalse(model.applyBatch(.setPhase(.completed), to: [sibling.id]))
         XCTAssertEqual(model.document, before)
         XCTAssertEqual(feedback, [.started, .completed])
@@ -401,11 +402,10 @@ final class AppModelTests: XCTestCase {
         let ids = Set(model.document.tasks.map(\.id))
         model.noteID = model.document.tasks[0].id; model.editingID = model.document.tasks[1].id
         let before = model.document
-        let originalBytes = try Data(contentsOf: model.repository.dataURL)
         var feedback: [TaskFeedback] = []
         model.playFeedback = { feedback.append($0) }
-        try FileManager.default.removeItem(at: model.repository.dataURL)
-        try FileManager.default.createDirectory(at: model.repository.dataURL, withIntermediateDirectories: false)
+        model.repository.sqlite.database.beforeCommit = { throw PindoError.invalidData("Injected commit failure") }
+        defer { model.repository.sqlite.database.beforeCommit = nil }
 
         XCTAssertFalse(model.applyBatch(.setPhase(.completed), to: ids))
         XCTAssertFalse(model.applyBatch(.delete, to: ids))
@@ -415,8 +415,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(feedback.isEmpty)
         XCTAssertEqual(model.saveState, .failed)
 
-        try FileManager.default.removeItem(at: model.repository.dataURL)
-        try originalBytes.write(to: model.repository.dataURL, options: .atomic)
+        model.repository.sqlite.database.beforeCommit = nil
         XCTAssertTrue(model.applyBatch(.setPhase(.completed), to: ids))
         XCTAssertTrue(model.document.tasks.allSatisfy { $0.phase == .completed })
         XCTAssertEqual(feedback, [.completed])
@@ -528,16 +527,14 @@ final class AppModelTests: XCTestCase {
         let root = model.document.tasks[0], target = model.document.tasks[1]
         XCTAssertTrue(model.addTask(title: "子项", day: day, groupID: nil, parentID: root.id))
         let child = model.document.tasks[2]
-        let bytes = try Data(contentsOf: model.repository.dataURL)
         model.updateNote(child.id, text: "尚未自动保存的备注")
         let before = model.document
-        try FileManager.default.removeItem(at: model.repository.dataURL)
-        try FileManager.default.createDirectory(at: model.repository.dataURL, withIntermediateDirectories: false)
+        model.repository.sqlite.database.beforeCommit = { throw PindoError.invalidData("Injected commit failure") }
+        defer { model.repository.sqlite.database.beforeCommit = nil }
         XCTAssertFalse(model.dropTask(child.id, onto: target.id, position: .inside))
         XCTAssertEqual(model.document, before)
         XCTAssertEqual(model.task(child.id)?.parentID, root.id)
-        try FileManager.default.removeItem(at: model.repository.dataURL)
-        try bytes.write(to: model.repository.dataURL, options: .atomic)
+        model.repository.sqlite.database.beforeCommit = nil
         XCTAssertTrue(model.dropTask(child.id, onto: target.id, position: .inside))
         XCTAssertEqual(model.task(child.id)?.parentID, target.id)
         XCTAssertEqual(model.task(child.id)?.note, "尚未自动保存的备注")
@@ -802,9 +799,8 @@ final class AppModelTests: XCTestCase {
         model.setPhase(task, .pending)
         XCTAssertEqual(feedback, [.added, .started, .completed])
         // A failed disk write must never sound like a successful action.
-        let originalBytes = try Data(contentsOf: model.repository.dataURL)
-        try FileManager.default.removeItem(at: model.repository.dataURL)
-        try FileManager.default.createDirectory(at: model.repository.dataURL, withIntermediateDirectories: false)
+        model.repository.sqlite.database.beforeCommit = { throw PindoError.invalidData("Injected commit failure") }
+        defer { model.repository.sqlite.database.beforeCommit = nil }
         XCTAssertFalse(model.addTask(title: "写入失败", day: DayKey(), groupID: nil))
         model.setPhase(task, .inProgress)
         model.setPhase(task, .completed)
@@ -812,8 +808,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(feedback, [.added, .started, .completed])
         XCTAssertEqual(model.task(task.id)?.phase, .pending)
 
-        try FileManager.default.removeItem(at: model.repository.dataURL)
-        try originalBytes.write(to: model.repository.dataURL, options: .atomic)
+        model.repository.sqlite.database.beforeCommit = nil
         model.delete(task)
         model.delete(task)
         XCTAssertEqual(feedback, [.added, .started, .completed, .deleted])
@@ -883,7 +878,7 @@ final class AppModelTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(suite, isDirectory: true)
         defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: folder) }
-        let model = try AppModel(useSQLite: false, directory: folder, defaults: defaults)
+        let model = try AppModel(directory: folder, defaults: defaults)
         model.playFeedback = { _ in }
         model.quickTitle = "待提交事项"; model.quickNote = "已输入的备注"
         let delegate = AppDelegate(model: model, quickPosition: QuickPanelPosition(defaults: defaults))

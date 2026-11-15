@@ -10,16 +10,16 @@ import java.util.UUID
 
 data class Todo(val id: String, val title: String, val note: String, val day: LocalDate,
                 val groupID: String?, val parentID: String?, val phase: String, val order: Long,
-                val json: JSONObject, val isProgressExplicit: Boolean? = null) {
+                val json: JSONObject, val isProgressExplicit: Boolean = false) {
     companion object {
         fun from(json: JSONObject): Todo {
             val day = json.getJSONObject("plannedDay")
-            if (!json.isNull("isProgressExplicit")) require(json.get("isProgressExplicit") is Boolean) { "事项进度来源无效。" }
+            require(json.opt("isProgressExplicit") is Boolean) { "事项进度来源无效。" }
             return Todo(json.requiredString("id").lowercase(), json.requiredString("title"),
-                if (json.has("note")) json.requiredString("note") else "", validatedTaskDay(day),
+                json.requiredString("note"), validatedTaskDay(day),
                 json.optionalID("groupID"), json.optionalID("parentID"), json.requiredString("phase"),
                 validatedTaskOrder(json.get("order")), json,
-                if (json.isNull("isProgressExplicit")) null else json.getBoolean("isProgressExplicit"))
+                json.getBoolean("isProgressExplicit"))
         }
     }
 }
@@ -80,7 +80,7 @@ object TodoRules {
         return JSONObject().put("id", UUID.randomUUID().toString()).put("title", title.trim()).put("note", note)
             .put("plannedDay", dayJSON(day)).put("groupID", groupID ?: JSONObject.NULL)
             .put("parentID", parentID ?: JSONObject.NULL).put("phase", "pending").put("order", order)
-            .put("createdAt", now).put("updatedAt", now)
+            .put("createdAt", now).put("updatedAt", now).put("isProgressExplicit", false)
     }
 
     fun dayJSON(day: LocalDate): JSONObject = JSONObject().put("year", day.year).put("month", day.monthValue).put("day", day.dayOfMonth)
@@ -115,8 +115,6 @@ object TodoRules {
     fun moveTask(tasks: JSONArray, id: String, parentID: String?): JSONArray {
         val items = tasks.objects().map { JSONObject(it.toString()) }
         val parsed = items.map(Todo::from)
-        val previousChildren = tasks.objects().filter { it.optionalID("parentID") != null }
-            .groupBy { it.optionalID("parentID")!! }
         val taskID = id.lowercase()
         val newParent = parentID?.lowercase()
         val item = items.find { it.getString("id").equals(taskID, true) } ?: error("找不到这条待办。")
@@ -143,7 +141,7 @@ object TodoRules {
             return count
         }
         affected.sortedWith(compareByDescending<String>(::depth).thenBy { it }).forEach { ancestor ->
-            byID[ancestor]?.let { reconcileNode(it, children[ancestor].orEmpty(), previousChildren[ancestor].orEmpty()) }
+            byID[ancestor]?.let { reconcileNode(it, children[ancestor].orEmpty()) }
         }
         return items.jsonArray()
     }
@@ -161,14 +159,12 @@ object TodoRules {
         when (action) {
             TodoBatchAction.Delete -> {
                 val removed = deletionIDs(parsed, selected)
-                return reconcile(items.filter { it.getString("id").lowercase() !in removed }.jsonArray(), tasks)
+                return reconcile(items.filter { it.getString("id").lowercase() !in removed }.jsonArray())
             }
             is TodoBatchAction.SetPhase -> {
                 require(action.phase in listOf("pending", "inProgress", "completed")) { "事项状态无效。" }
                 val byID = items.associateBy { it.getString("id").lowercase() }
                 val children = items.filter { it.optionalID("parentID") != null }.groupBy { it.optionalID("parentID")!! }
-                val previousChildren = tasks.objects().filter { it.optionalID("parentID") != null }
-                    .groupBy { it.optionalID("parentID")!! }
                 val selectedForPhase = if (action.phase == "inProgress") selected else deletionIDs(parsed, selected)
                 fun depth(item: Todo): Int {
                     var parent = item.parentID
@@ -190,7 +186,7 @@ object TodoRules {
                         }
                         setPhaseValue(item, action.phase, explicit = true)
                     } else if (task.id !in selectedForPhase && task.id in dirty) {
-                        reconcileNode(item, children[task.id].orEmpty(), previousChildren[task.id].orEmpty())
+                        reconcileNode(item, children[task.id].orEmpty())
                     }
                     // Reconcile the whole chain even if an intermediate phase is unchanged.
                     if (task.id in selectedForPhase || task.id in dirty) task.parentID?.let(dirty::add)
@@ -211,29 +207,23 @@ object TodoRules {
         return items.jsonArray()
     }
 
-    fun reconcile(tasks: JSONArray, previous: JSONArray? = null): JSONArray {
+    fun reconcile(tasks: JSONArray): JSONArray {
         val items = tasks.objects().map { JSONObject(it.toString()) }
         val byID = items.associateBy { it.getString("id").lowercase() }
-        val previousChildren = (previous ?: tasks).objects().filter { it.optionalID("parentID") != null }
-            .groupBy { it.optionalID("parentID")!! }
+        val childrenByParent = items.groupBy { it.optionalID("parentID") }
         fun visit(id: String, seen: MutableSet<String>) {
             require(seen.add(id)) { "待办层级存在循环。" }
-            val children = items.filter { it.optionalID("parentID") == id }
+            val children = childrenByParent[id].orEmpty()
             children.forEach { visit(it.getString("id").lowercase(), seen) }
-            reconcileNode(byID.getValue(id), children, previousChildren[id].orEmpty())
+            reconcileNode(byID.getValue(id), children)
             seen.remove(id)
         }
-        items.filter { it.optionalID("parentID") == null }.forEach { visit(it.getString("id").lowercase(), mutableSetOf()) }
+        childrenByParent[null].orEmpty().forEach { visit(it.getString("id").lowercase(), mutableSetOf()) }
         return items.jsonArray()
     }
 
-    private fun reconcileNode(item: JSONObject, children: List<JSONObject>, previousChildren: List<JSONObject> = children) {
-        if (item.getString("phase") == "inProgress" && item.isNull("isProgressExplicit")) {
-            // Legacy records have no source marker. Preserve a parent's own start
-            // if it had no child progress before this operation, as on macOS.
-            item.put("isProgressExplicit", previousChildren.all { it.getString("phase") == "pending" })
-        }
-        val explicit = item.optBoolean("isProgressExplicit", false)
+    private fun reconcileNode(item: JSONObject, children: List<JSONObject>) {
+        val explicit = item.getBoolean("isProgressExplicit")
         val phase = when {
             children.isEmpty() -> {
                 if (item.getString("phase") != "inProgress" || explicit) return
@@ -252,7 +242,7 @@ object TodoRules {
         if (previous == phase) return
         val now = swiftNow()
         item.put("phase", phase).put("updatedAt", now)
-        if (phase == "inProgress") item.put("isProgressExplicit", explicit) else item.remove("isProgressExplicit")
+        item.put("isProgressExplicit", phase == "inProgress" && explicit)
         if (phase == "completed") item.put("completedAt", now) else item.remove("completedAt")
         if (phase == "inProgress") item.put("startedAt", now)
         else if (phase == "pending" || previous != "inProgress") item.remove("startedAt")

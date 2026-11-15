@@ -1,30 +1,54 @@
-# Development notes
+# 开发说明
 
-- Swift tools 5.9+, macOS deployment target 14. Swift 6 is supported in Swift 5 language mode.
-- The app and native tests are declared conditionally in `Package.swift`; a Linux test run intentionally builds only the platform-independent core. Do not report that as a successful native build.
-- Run `swift test --jobs 4`, then `bash scripts/build-app.sh` on a Mac before releasing. Existing checkouts are isolated; no additional worktree is necessary.
-- PindoCore has no package dependencies. The macOS app pins SwiftMarkdownEngine 0.15.0; only its MarkdownEngine product is linked. Commit Package.resolved and bundle its Apache 2.0 license. Android uses the pinned Gradle wrapper and Android SDK 35 / JDK 17. Builds and automated tests need no real cloud account. The previous cloud provider is retired. Cloudflare v3 uses SQLite, durable pending credential journals, per-device pairing, immutable chunks and checkpoint/GC recovery. Run the real Worker HTTP client tests in CI before publishing sync changes. Never add credentials or session files to the repository.
-- Sync wire changes must be mirrored in Swift and Kotlin and verified with shared fixtures in `sync-vectors/`. Persist replica and visible document atomically. Notes use causal multi-value registers, other fields use Lamport registers; retain deletion tombstones. Preferences and platform-specific settings never enter the cloud payload. Use OS AES-GCM and secure random APIs; keep recovery keys and device tokens in Keychain/Keystore. Preserve legacy encrypted connection journals and frozen outboxes for local recovery; never send them as v3 batches.
-- Repository mutations are serialized by `AppModel` on MainActor. Note staging does not write disk. Primary file saves are debounced; snapshot diff/compaction runs only during the 30-second check or explicit import/recovery.
-- SQLite is the production document authority. JSON is imported once with a committed migration marker and retained as data.pre-sqlite.json. Entity headers, notes, field registers and outbox are separate rows. The legacy file repository remains available for archive recovery tests. Do not encode unchanged notes or archives for title edits.
-- Recovery and import write a durable redo journal before replacing both files. A pending journal blocks further updates until replay succeeds. Do not delete a pending journal as a workaround for an error.
-- Corrupt current data fails closed. Corrupt backup data is preserved and does not prevent saving the valid current document.
-- The list uses a nonactivating NSPanel, with explicit outside-click and app-switch dismissal. Both pinned and transient panels use floating level and orderFrontRegardless when shown; never downgrade an unpinned panel to normal level. Pin controls dismissal and Spaces behavior. Avoid reintroducing an attached NSPopover or activating the app just to show the list.
-- SyncEditingScope keeps its native window observer on a stable ZStack, outside readiness branches. Coalesced readiness publication follows the current mount after replacement, while a detached graph receives no publication; queued callbacks must never acquire or release an old mount's resource. Do not key a pending readiness notification only to the mount that first requested it, or a granted draft can stay behind the loading placeholder.
-- NoteEditor hosts a stable SwiftMarkdownEngine NativeTextViewWrapper. The engine owns TextKit 2, parsing, selection, undo and its text-view delegate. Pindo must not access layoutManager (which downgrades to TextKit 1) or replace the engine's delegate. Its adapter defers external text/font updates while hasMarkedText() is true, and publishes only committed storage-form Markdown. The engine restyles the paragraph during setMarkedText: synchronously restore typography using the last applied font choice. Attributed IMEs such as Squirrel can include converted Chinese in the marked range: repair only its font, preserving all IME clause/underline/color attributes and selection. Ignore the preedit when detecting script boundaries; it must not create extra kerning at the input method's insertion point.
-- 保存状态变化不得重建备注编辑器。引擎按格式范围显示语法标记；Pindo 通过其独立通知总线发送格式动作，并使用 WikiLinkService 保留存储元数据。关闭窗口先结束组词、同步提交，再由 AppModel 保存，防止异步绑定晚到。原生测试必须挂载实际引擎，不用旧解析器代替。
-- 中西文间距只调整 Pindo 自己记录的 kerning，不覆盖引擎用来折叠标记的负间距；字体补字保留标题和代码字体。Pindo 不执行 HTML、不配置外部图片加载服务。旧 LiveMarkdown／NoteDecoration 自研渲染已由引擎替换。
-- 备注间距在 NSTextStorage.didProcessEditing 的同一事务中完成，只处理受影响段落；禁止异步补间距造成先无间距、再有间距的两次排版。字体、间距和链接策略先在脱离布局的副本计算最终属性，只写入有差异的范围；markedRange 内仅允许更新 font，其他属性一律保留。字体恢复从设置中的主字体／备用字体重新解析字形，不能把已经被系统替换的中文字体当成主字体继续“补字”；保留引擎标题的字号／粗斜体以及代码等宽字体。输入法候选背景色不得误判为代码。重复应用必须不产生 storage 编辑通知；同步调整不得改动字符、选区或撤销栈。
-- SquirrelFontTests uses Lucida Grande plus the user's Source Han Serif SC. CI downloads the test-only font from a pinned upstream commit and verifies SHA-256; it is process-registered for XCTest and never bundled into Pindo. To reproduce locally, run `bash scripts/prepare-macos-font-test.sh /tmp/pindo-fonts/SourceHanSerifSC-Regular.otf`, then `PINDO_TEST_CJK_FONT_PATH=/tmp/pindo-fonts/SourceHanSerifSC-Regular.otf swift test --jobs 4 --filter SquirrelFontTests`. Tests cover attributed Chinese/pinyin preedit and inspect CoreText glyph fonts, not only the storage's base font name.
-- The task panel uses a native titled, resizable, nonactivating frame with full-size content, a 360 × 420 minimum and frame autosaving. WindowServer owns its rounded corners; do not add a second rounded mask around its hosting view.
-- Quick add also uses a native titled, full-size, nonactivating frame. Hosting surfaces have no additional rounded mask; settings content meets its title bar with square corners. Quick add persists its top-left anchor, clamps to visible displays and preserves the anchor when note height changes.
-- Status-item actions toggle from `isVisible`, without relying on asynchronous occlusion updates. Menu-bar clicks must be excluded from outside dismissal; group menus contain direct actions rather than nested Pickers.
-- Play feedback only after successful task creation or an actual transition to completed. Use the injected callback for tests; never play success feedback on failed writes.
-- 提示音随应用离线打包。每次播放从资源加载独立实例，并在播放结束后释放，避免连续操作复用同一实例。
-- 提示音统一为 PCM WAV。添加、删除、完成分别使用 SFXMint 的 [Gentle Interface Pop 57](https://sfxmint.com/sounds/ui-pop-57)、[Muted Interface Delete Swoosh 15](https://sfxmint.com/sounds/ui-delete-15)、[Success Chime Checkmark 03](https://sfxmint.com/sounds/checkmark-03)，均为 [CC0 1.0](https://sfxmint.com/license)。进行中使用 [Soundza 的 Button Tick](https://soundza.com/sound/button-tick)，与 [NenadSimic 在 Freesound 发布的 CC0 原声](https://freesound.org/people/NenadSimic/sounds/268108/) 核对一致。
-- 应用自有文案通过 `PindoLocalization` 选择语言。新增界面文案时同步更新 `Sources/Pindo/Resources/` 内的简体中文和英文资源，保留格式参数的类型。打包时将两套资源复制进应用包；语言选择保存在本机偏好中，不进入待办备份。
-- Source design and implementation are independent of the MIT reference projects. No source files or dependencies from those projects are bundled.
-- Task relationships use optional parentID fields, with at most three levels. TaskHierarchy validates references, cycles, subtree height and completed-parent invariants. Status changes, subtree moves and branch deletion must use these core operations; never mutate a parent link or remove a parent alone in UI code. Filtered management rows may include ancestor context, but only matching IDs participate in bulk selection. A parent deletion includes its descendants and the UI must confirm the complete count.
-- 待办列表使用原生 NSOutlineView 处理鼠标跟踪、展开控件、拖动会话和边缘滚动。被动文本交给列表处理，状态和选择按钮保留自身事件。拖放回调参考 [FSNotes 的侧栏](https://github.com/glushchenko/fsnotes/blob/master/FSNotes/View/SidebarOutlineView.swift) 和 [AppKit 拖动源 API](https://developer.apple.com/documentation/appkit/nsoutlineviewdatasource/outlineview(_:pasteboardwriterforitem:))，未引入参考项目源码。
-- 拖动时以原位的行计算落点。垂直位置决定插入边界，水平位移决定层级。同层拖动保留原父项，落点用缩进插入线和新父项高亮表示。目标使用稳定的同级 ID，松手时核对实际落点与标记是否一致并保存一次。退出或取消只清除标记。主清单和管理页都校验层级上限、循环引用和完成状态分区，已有混合状态的同级子项可以重新排序。
-- 子树移动只在提交后使用原生动画。更新方式参考 [OutlineView](https://github.com/Sameesunkaria/OutlineView/blob/main/Sources/OutlineView/OutlineViewUpdater.swift)。通过 TaskOutlineStructure 识别单棵子树的移动并保留行对象，复杂变更回退到重载。保留展开状态和滚动位置，并遵循系统的“减少动态效果”设置。
+## 结构与数据
+
+`Sources/PindoCore/` 负责模型、层级、快照、SQLite 和同步；`Sources/Pindo/` 负责 SwiftUI / AppKit 界面。Android 使用 Kotlin / Compose；`backend/cloudflare/` 提供 Workers / D1 服务。两端遵守同一当前协议，跨端样本位于 `sync-vectors/`。
+
+SQLite 是本机资料权威：可见内容、同步状态、发件箱和快照归档保存在同一数据库。标题编辑不重写未修改备注或整个归档。导入与恢复先保护当前资料，再将目标内容与归档一同事务提交，失败整体回滚。损坏资料不得自动清空；损坏归档保留并提示，但不阻止有效当前资料保存。普通导出格式为 `{version:1,tasks,groups}`，不含本机偏好、凭据或同步队列；导入保留本机偏好，快照恢复可还原快照中的偏好。
+
+事项最多三级。移动、删除、批量状态变更共用领域规则，校验循环、深度及完成状态；删除包含整棵子树。筛选结果中的父级上下文不参与批量全选。本机语言、字体、主题和窗口设置不进入云端。
+
+## 原生交互
+
+macOS 面板使用非激活、可调整尺寸的原生窗口；置顶控制隐藏与 Spaces 行为，清单通过原生 NSOutlineView 处理层级与拖动。状态栏、全局热键、焦点和多屏行为需要实机验收。
+
+备注集成固定版本 SwiftMarkdownEngine，由引擎管理 TextKit 2、选区、撤销和 text-view delegate。不要访问 `layoutManager` 或接管 delegate。保存状态变化不重建编辑器；关闭前结束组词并同步提交。输入法预编辑不保存，外部文字或字体更新等组词结束后应用；预编辑内只补字体，保留输入法属性、字符及选区。间距与字体在同一编辑事务内计算，只写差异，不改变原文、选区或撤销栈。
+
+应用文案同步维护中英文资源，第三方编辑器许可随包附带。音效离线打包，每次成功操作按需播放并释放。
+
+## 同步与部署
+
+客户端使用 AES-256-GCM 和系统安全随机数，密钥及设备凭据进入 Keychain / Keystore。服务端只保存密文和必要元数据。库身份由稳定的 `serviceID`、`vaultID` 确定，地址和令牌不作为库身份。字段使用逻辑时钟，生命周期原子更新，备注保留因果并发版本，删除保留墓碑。
+
+本地操作与持久发件箱一同提交；重试复用冻结的字节，回执不推进下载游标。下载先持久化再原子应用，分别维护 fetched / applied 游标。大操作通过不可变分块和认证清单整体应用。检查点只覆盖已应用连续前缀，发布前验证分块，保留两个检查点及所需尾日志；读取租约阻止过早回收。回执、墓碑和备注因果上下文不得按 TTL 删除。
+
+Cloudflare 资源标识与服务地址以 `backend/cloudflare/deployments/staging.json` 为准，部署配置为 `cloudflare.config.ts`。全新 D1 使用 `migrations/0001_schema.sql` 初始化，不能把该完整 schema 当增量套用到已有数据库。服务要求独立的 `BOOTSTRAP_SECRET` 和 `RECOVERY_SECRET` secret bindings；首次客户端使用初始化密钥创建库，其他设备通过 10 分钟一次性配对加入。生成包不含密钥，输出到忽略的 `work/cloudflare-staging/`，记录源码提交、未提交状态和 bundle 摘要。禁止提交凭据或将本地测试服务器部署到公网。
+
+管理员恢复须先进入维护模式，再轮换 epoch：`POST /v3/admin/maintenance` 传 `{vaultID, enabled:true}`，`POST /v3/admin/recover` 传 `{vaultID, epoch:新UUID}`，使用恢复密钥作为 Bearer。D1 时间点恢复同样需要轮换 epoch；客户端保留未确认操作，恢复后重新提交。公共 `/health` 只证明服务健康，不证明客户端同步正确。
+
+## 验证
+
+Swift 需要 5.9+；Linux 安装 SQLite 开发头文件，`swift test --jobs 4` 仅运行跨平台核心测试。macOS 同一命令还编译应用及运行原生测试；发布前运行 `PINDO_UNIVERSAL=1 bash scripts/build-app.sh`，检查通用包、资源、签名及启动。
+
+Android：在 `android/` 运行 `./gradlew testDebugUnitTest lintDebug assembleDebug`，需要 JDK 17 / SDK 35。
+
+服务端使用 Node.js 22，在 `backend/cloudflare/` 运行：
+
+```sh
+npm ci
+npm run types
+npm run typecheck
+npm test
+npm run build:staging
+```
+
+跨端 HTTP 测试使用真实本地 Worker / D1。仓库根目录运行 `npm --prefix backend/cloudflare run build:test`，再启动 `node backend/cloudflare/test/http-server.mjs`；客户端测试设置 `PINDO_SYNC_TEST_ENDPOINT=http://127.0.0.1:8787`。CI 在同一 Worker 上验证 Swift 写入、Android 读取并写回、Swift 读取；具体阶段以 `.github/workflows/macos.yml` 为准。
+
+中文字体回归按固定摘要下载测试字体，不能随应用打包：
+
+```sh
+bash scripts/prepare-macos-font-test.sh /tmp/pindo-fonts/SourceHanSerifSC-Regular.otf
+PINDO_TEST_CJK_FONT_PATH=/tmp/pindo-fonts/SourceHanSerifSC-Regular.otf swift test --jobs 4 --filter SquirrelFontTests
+```
+
+三份工作流分别验证 macOS、Android、Worker；`main` 构建成功后自动发布客户端。验证结果以当前提交的 CI 为准。模拟运行时、协议测试、进程启动均不能代替真实设备上的中文组词、多屏、焦点、拖动和云同步验收。

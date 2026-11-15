@@ -1,9 +1,9 @@
-import { ProtocolError, uuid, sha256 } from '../protocol';
-export type VaultState = {id:string;epoch:string;head:number;gc_floor:number;maintenance:number;charged_bytes:number;byte_budget:number;batch_budget:number;log_count:number;log_bytes:number;checkpoint_id:string|null;device_id:string|null};
+import { aad, ProtocolError, uuid, sha256 } from '../protocol';
+export type VaultState = {id:string;epoch:string;head:number;gc_floor:number;maintenance:number;charged_bytes:number;byte_budget:number;batch_budget:number;log_count:number;log_bytes:number;checkpoint_id:string|null;checkpoint_covered:number;recovery_from_epoch:string|null;recovery_head:number|null;recovery_floor:number|null;key_check:string|null;device_id:string|null};
 export type Auth = {vaultID:string;tokenHash:string};
 export const now = () => Date.now();
 export function response(body:unknown,status=200):Response{return Response.json(body,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});}
-export function stateQuery(db:D1Database,a:Auth):D1PreparedStatement{return db.prepare(`SELECT v.*,d.id AS device_id FROM vaults v LEFT JOIN devices d ON d.vault_id=v.id AND d.token_hash=? AND d.revoked_at IS NULL WHERE v.id=?`).bind(a.tokenHash,a.vaultID);}
+export function stateQuery(db:D1Database,a:Auth):D1PreparedStatement{return db.prepare(`SELECT v.*,COALESCE((SELECT covered FROM checkpoints WHERE vault_id=v.id AND epoch=v.epoch AND id=v.checkpoint_id),0) AS checkpoint_covered,d.id AS device_id FROM vaults v LEFT JOIN devices d ON d.vault_id=v.id AND d.token_hash=? AND d.revoked_at IS NULL WHERE v.id=?`).bind(a.tokenHash,a.vaultID);}
 export function check(v:VaultState|undefined,epoch?:string):VaultState{if(!v?.device_id)throw new ProtocolError('authentication_required',401);if(v.maintenance)throw new ProtocolError('maintenance',503);if(epoch!==undefined&&v.epoch!==epoch)throw new ProtocolError('epoch_mismatch',409);return v;}
 export function ids(value:unknown):string[]{if(value===undefined)return [];if(!Array.isArray(value)||value.length>512||value.some((x,i)=>typeof x!=='string'||!/^[a-f0-9]{64}$/.test(x)||(i>0&&value[i-1]>=x)))throw new ProtocolError('invalid_request',400);return value as string[];}
 export function token(value:unknown):string{if(typeof value!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(value))throw new ProtocolError('authentication_required',401);return value;}
@@ -13,3 +13,4 @@ export function metadata(env:Env,v:VaultState){return {version:3,serviceID:env.S
 export function refsGuard(refs:string[]):{sql:string;params:(string|number)[]}{return {sql:`(SELECT COUNT(*) FROM artifacts a WHERE a.vault_id=v.id AND a.epoch=v.epoch AND a.digest IN (SELECT value FROM json_each(?)))=?`,params:[JSON.stringify(refs),refs.length]};}
 export async function authorize(db:D1Database,a:Auth,epoch?:string){const r=await db.batch([stateQuery(db,a)]);return check(r[0].results[0] as VaultState|undefined,epoch);}
 export function usage(r:D1Result<unknown>[],route:string){console.log(JSON.stringify({event:'d1_usage',route,rows_read:r.reduce((s,x)=>s+x.meta.rows_read,0),rows_written:r.reduce((s,x)=>s+x.meta.rows_written,0)}));}
+export async function digestFor(env:Env,vault:string,epoch:string,kind:string,id:string,refs:string[],sealed:Uint8Array){const a=aad(env.SERVICE_ID,vault,epoch,kind,id,refs),bytes=new Uint8Array(a.length+1+sealed.length);bytes.set(a);bytes.set(sealed,a.length+1);return sha256(bytes);}

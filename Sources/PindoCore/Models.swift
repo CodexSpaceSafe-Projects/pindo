@@ -70,8 +70,8 @@ public struct TodoItem: Codable, Identifiable, Equatable, Sendable {
     public var updatedAt: Date
     public var startedAt: Date?
     public var completedAt: Date?
-    // 只记录显式设为进行中；旧资料没有此字段时仍可读取。
-    var isProgressExplicit: Bool?
+    // Distinguish a manually started task from progress derived from its children.
+    var isProgressExplicit = false
 
     public init(id: UUID = UUID(), title: String, note: String = "", plannedDay: DayKey = DayKey(), groupID: UUID? = nil, parentID: UUID? = nil, order: Int = 0, now: Date = Date()) {
         self.id = id; self.title = title; self.note = note; self.plannedDay = plannedDay
@@ -143,11 +143,6 @@ public struct PindoDocument: Codable, Equatable, Sendable {
     public var tasks: [TodoItem] = []
     public var groups: [TaskGroup] = [TaskGroup(name: "工作", colorHex: "#6D94C4"), TaskGroup(name: "生活", colorHex: "#C49A68")]
     public var preferences = Preferences()
-    /// Local replica metadata is saved atomically with tasks; never sent as a
-    /// document backup or used as another installation's identity.
-    public var syncState: SyncReplica? = nil
-    public var syncSession: SyncSessionState? = nil
-    public var syncChannels: [String: SyncChannelArchive]? = nil
     public init() {}
 
     public func validated() throws -> Self {
@@ -167,19 +162,6 @@ public struct PindoDocument: Codable, Equatable, Sendable {
         guard preferences.quickAddHotkey.isValid, preferences.listHotkey.isValid,
               !preferences.quickAddHotkey.matches(preferences.listHotkey) else { throw PindoError.invalidHotkey }
         try validateTaskHierarchy()
-        _ = try syncState?.validated()
-        if let session = syncSession {
-            guard syncState != nil else { throw PindoError.invalidData("同步会话缺少副本") }
-            _ = try session.validated()
-        }
-        if let channels = syncChannels {
-            guard channels.count + (syncSession == nil ? 0 : 1) <= SyncSessionState.maximumChannels,
-                  syncSession.map({ channels[$0.channelID] == nil }) ?? true else { throw PindoError.invalidData("同步资料库归档无效") }
-            for (channelID, archive) in channels {
-                guard archive.syncSession.channelID == channelID else { throw PindoError.invalidData("同步资料库归档身份无效") }
-                _ = try archive.validated()
-            }
-        }
         return self
     }
 
@@ -204,10 +186,35 @@ public struct PindoDocument: Codable, Equatable, Sendable {
     }
 }
 
+/// The one portable format shared by both clients. Device preferences and sync
+/// state stay local; snapshots use the full document instead.
+public struct PindoExport: Codable, Equatable, Sendable {
+    public var version = 1
+    public var tasks: [TodoItem]
+    public var groups: [TaskGroup]
+
+    public init(document: PindoDocument) {
+        tasks = document.tasks
+        groups = document.groups
+    }
+
+    public func document(preserving preferences: Preferences) throws -> PindoDocument {
+        guard version == 1 else { throw PindoError.unsupportedVersion }
+        var result = PindoDocument()
+        result.tasks = tasks
+        result.groups = groups
+        result.preferences = preferences
+        if let id = preferences.defaultGroupID, !groups.contains(where: { $0.id == id }) {
+            result.preferences.defaultGroupID = nil
+        }
+        return try result.validated()
+    }
+}
+
 public enum PindoError: LocalizedError {
     case invalidDay, emptyTitle, missingTask, invalidHotkey, unsupportedVersion
     case missingParent, hierarchyCycle, hierarchyDepth, incompleteChildren, dragCompletionBoundary
-    case invalidData(String), corruptFile(String), snapshotTooLarge, protectionSnapshotTooLarge, missingSnapshot, recoveryRequired
+    case invalidData(String), corruptFile(String), snapshotTooLarge, protectionSnapshotTooLarge, missingSnapshot
     public var errorDescription: String? {
         switch self {
         case .invalidDay: return "日期无效。"
@@ -225,7 +232,6 @@ public enum PindoError: LocalizedError {
         case .snapshotTooLarge: return "快照超过 30 MB 上限，当前资料仍会保存，旧备份已保留。"
         case .protectionSnapshotTooLarge: return "备份容量不足，无法保留操作前的保护快照。已取消替换，当前资料和原备份已保留。"
         case .missingSnapshot: return "这个快照已不存在，可能已达到上限被清理。"
-        case .recoveryRequired: return "上次恢复尚未完成，请重试恢复或重新打开 Pindo。"
         }
     }
 }

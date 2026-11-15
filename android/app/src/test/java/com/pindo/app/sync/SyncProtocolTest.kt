@@ -12,7 +12,7 @@ class SyncProtocolTest {
     private val secondID = "22222222-2222-2222-2222-222222222222"
 
     private fun task(id: String = taskID, title: String = "测试", note: String = "初始备注", parent: String? = null, phase: String = "pending"): JSONObject =
-        JSONObject().put("id", id).put("title", title).put("note", note).put("phase", phase).put("order", 0)
+        JSONObject().put("id", id).put("title", title).put("note", note).put("phase", phase).put("isProgressExplicit", phase == "inProgress").put("order", 0)
             .put("createdAt", 1.0).put("updatedAt", 1.0).put("groupID", JSONObject.NULL)
             .put("parentID", parent ?: JSONObject.NULL).put("startedAt", JSONObject.NULL).put("completedAt", JSONObject.NULL)
             .put("plannedDay", JSONObject().put("year", 2026).put("month", 11).put("day", 12))

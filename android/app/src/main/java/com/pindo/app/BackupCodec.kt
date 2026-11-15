@@ -21,7 +21,7 @@ object BackupCodec {
     fun decode(text: String): JSONObject {
         require(text.toByteArray(Charsets.UTF_8).size <= MAX_BYTES) { "导入文件超过 10 MiB 上限。" }
         val input = JSONObject(text)
-        val version = if (input.has("version")) input.get("version") else input.opt("schemaVersion")
+        val version = input.get("version")
         require(version is Number && version.toDouble() == 1.0) { "资料来自不支持的版本。" }
         return sanitized(input)
     }
@@ -32,11 +32,8 @@ object BackupCodec {
         for (source in document.getJSONArray("tasks").objects()) {
             val task = keep(source, taskFields)
             task.put("order", validatedTaskOrder(task.get("order")))
-            if (task.has("isProgressExplicit") && !task.isNull("isProgressExplicit")) {
-                require(task.get("isProgressExplicit") is Boolean) { "事项进度来源无效。" }
-            }
+            require(task.get("isProgressExplicit") is Boolean) { "事项进度来源无效。" }
             for (field in listOf("title", "note", "phase")) {
-                if (field == "note" && !task.has(field)) continue
                 require(task.get(field) is String) { "事项文字或状态无效。" }
             }
             val day = task.getJSONObject("plannedDay")
@@ -45,7 +42,6 @@ object BackupCodec {
             for (field in listOf("groupID", "parentID")) {
                 if (task.has(field) && !task.isNull(field)) task.put(field, canonicalID(task.getString(field)))
             }
-            if (!task.has("note")) task.put("note", "")
             for (date in listOf("createdAt", "updatedAt")) {
                 val value = task.get(date)
                 require(value is Number && value.toDouble().isFinite()) { "事项时间无效。" }

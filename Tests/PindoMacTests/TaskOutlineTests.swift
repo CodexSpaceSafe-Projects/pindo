@@ -25,7 +25,7 @@ private struct OutlineFixture: View {
 
 final class TaskOutlineTests: XCTestCase {
     @MainActor private func model(defaults: UserDefaults = .standard) throws -> AppModel {
-        let model = try AppModel(useSQLite: false, directory: FileManager.default.temporaryDirectory.appendingPathComponent("PindoOutline-\(UUID().uuidString)"),
+        let model = try AppModel(directory: FileManager.default.temporaryDirectory.appendingPathComponent("PindoOutline-\(UUID().uuidString)"),
                                  defaults: defaults)
         model.playFeedback = { _ in }
         return model
@@ -541,7 +541,7 @@ final class TaskOutlineTests: XCTestCase {
         for title in ["目标", "拖动事项"] { XCTAssertTrue(model.addTask(title: title, day: day, groupID: nil)) }
         let target = model.document.tasks[0], source = model.document.tasks[1]
         XCTAssertTrue(model.addTask(title: "隐藏的子项", day: day, groupID: nil, parentID: target.id))
-        let original = model.document, bytes = try Data(contentsOf: model.repository.dataURL)
+        let original = model.document
         let (window, outline, coordinator) = try await host(model)
         defer { window.orderOut(nil); window.contentView = nil }
         let targetNode = try XCTUnwrap(coordinator.taskNode(target.id))
@@ -562,7 +562,7 @@ final class TaskOutlineTests: XCTestCase {
         XCTAssertFalse(outline.isItemExpanded(targetNode))
         XCTAssertEqual(outline.row(forItem: sourceNode), row)
         XCTAssertEqual(model.document, original)
-        XCTAssertEqual(try Data(contentsOf: model.repository.dataURL), bytes)
+        XCTAssertEqual(try model.repository.sqlite.readDocument(), original)
         XCTAssertTrue(coordinator.acceptDrop(at: right))
         try await settle()
         XCTAssertTrue(outline.isItemExpanded(targetNode))
@@ -664,16 +664,15 @@ final class TaskOutlineTests: XCTestCase {
         XCTAssertNil(model.task(source.id)?.parentID)
         XCTAssertNil(model.draggedTaskID)
         XCTAssertTrue(model.flush())
-        let before = model.document, bytes = try Data(contentsOf: model.repository.dataURL)
+        let before = model.document
         XCTAssertTrue(model.beginTaskDrag(source.id))
         XCTAssertTrue(model.canAcceptTaskDrag(parent: target.id, before: nil, completed: false))
-        try FileManager.default.removeItem(at: model.repository.dataURL)
-        try FileManager.default.createDirectory(at: model.repository.dataURL, withIntermediateDirectories: false)
+        model.repository.sqlite.database.beforeCommit = { throw PindoError.invalidData("Injected commit failure") }
+        defer { model.repository.sqlite.database.beforeCommit = nil }
         XCTAssertFalse(model.acceptTaskDrag(parent: target.id, before: nil))
         XCTAssertEqual(model.document, before)
         XCTAssertNil(model.draggedTaskID)
-        try FileManager.default.removeItem(at: model.repository.dataURL)
-        try bytes.write(to: model.repository.dataURL, options: .atomic)
+        model.repository.sqlite.database.beforeCommit = nil
     }
 
     @MainActor func testNativeCompletedAndUnfinishedRegionsRejectCrossDropsAndAcceptRevalidates() async throws {
@@ -681,7 +680,7 @@ final class TaskOutlineTests: XCTestCase {
         for title in ["未完成", "进行中", "已完成 A", "已完成 B"] { XCTAssertTrue(model.addTask(title: title, day: day, groupID: nil)) }
         let pending = model.document.tasks[0], running = model.document.tasks[1], doneA = model.document.tasks[2], doneB = model.document.tasks[3]
         model.setPhase(running, .inProgress); model.setPhase(doneA, .completed); model.setPhase(doneB, .completed)
-        let original = model.document, bytes = try Data(contentsOf: model.repository.dataURL)
+        let original = model.document
         let (window, outline, coordinator) = try await host(model, sectioned: true)
         defer { window.orderOut(nil); window.contentView = nil }
         let pendingHeader = try XCTUnwrap(coordinator.roots.first { $0.completed == false })
@@ -701,7 +700,7 @@ final class TaskOutlineTests: XCTestCase {
         XCTAssertNil(coordinator.indicateDrop(at: onPending))
         XCTAssertFalse(coordinator.acceptDrop(at: onPending))
         XCTAssertEqual(model.document, original)
-        XCTAssertEqual(try Data(contentsOf: model.repository.dataURL), bytes)
+        XCTAssertEqual(try model.repository.sqlite.readDocument(), original)
         XCTAssertNil(coordinator.displayedDrop)
         coordinator.beginDrag(doneB.id, atX: 120)
         XCTAssertEqual(coordinator.indicateDrop(at: onDone)?.drop.parent, doneA.id)

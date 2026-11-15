@@ -76,7 +76,7 @@ public enum SyncV3Delta {
         func identifier(_ value: UUID?) -> JSONValue { value.map { .string($0.uuidString.lowercased()) } ?? .null }
         func date(_ value: Date?) -> JSONValue { value.map { .number($0.timeIntervalSinceReferenceDate) } ?? .null }
         let lifecycle: JSONValue = .object(["phase": .string(t.phase.rawValue), "startedAt": date(t.startedAt),
-            "completedAt": date(t.completedAt), "isProgressExplicit": .bool(t.isProgressExplicit ?? (t.phase == .inProgress))])
+            "completedAt": date(t.completedAt), "isProgressExplicit": .bool(t.isProgressExplicit)])
         return ["title": .string(t.title), "plannedDay": .object(["year": .number(Double(t.plannedDay.year)), "month": .number(Double(t.plannedDay.month)), "day": .number(Double(t.plannedDay.day))]),
             "groupID": identifier(t.groupID), "parentID": identifier(t.parentID), "phase": .string(t.phase.rawValue), "order": .number(Double(t.order)),
             "createdAt": date(t.createdAt), "updatedAt": date(t.updatedAt), "startedAt": date(t.startedAt), "completedAt": date(t.completedAt), "lifecycle": lifecycle]

@@ -51,7 +51,9 @@ public final class SQLiteDatabase {
             case .null: status = sqlite3_bind_null(statement, i)
             case .text(let text): status = text.withCString { sqlite3_bind_text(statement, i, $0, -1, transient) }
             case .integer(let n): status = sqlite3_bind_int64(statement, i, n)
-            case .bytes(let data): status = data.withUnsafeBytes { sqlite3_bind_blob(statement, i, $0.baseAddress, Int32($0.count), transient) }
+            case .bytes(let data):
+                if data.isEmpty { status = sqlite3_bind_zeroblob(statement, i, 0) }
+                else { status = data.withUnsafeBytes { sqlite3_bind_blob(statement, i, $0.baseAddress, Int32($0.count), transient) } }
             }
             guard status == SQLITE_OK else { throw failure() }
         }

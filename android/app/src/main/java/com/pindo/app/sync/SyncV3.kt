@@ -2,7 +2,7 @@ package com.pindo.app.sync
 
 import java.util.UUID
 
-/** P0 only. Never reinterpret a v2 encrypted checkpoint as a v3 batch. */
+/** The single supported encrypted sync protocol. */
 object SyncV3 {
     const val MAX_COUNTER = 9_007_199_254_740_991L
     const val MAX_BATCH_BYTES = 128 * 1024
@@ -33,25 +33,4 @@ enum class SyncV3Error(val wire: String) {
     MAINTENANCE("maintenance"), INVALID_REQUEST("invalid_request"), CURSOR_MISMATCH("cursor_mismatch"),
     NOT_FOUND("not_found"), UNSUPPORTED_FEATURE("unsupported_feature"),
     BOOTSTRAP_CLOSED("bootstrap_closed"), PAIRING_INVALID("pairing_invalid"), CHECKPOINT_CONFLICT("checkpoint_conflict"), ARTIFACT_MISSING("artifact_missing"), LEASE_EXPIRED("lease_expired")
-}
-
-data class SyncV3NoteDot(val actorID: String, val counter: Long) {
-    init { SyncV3.validateID(actorID); SyncV3.validateCounter(counter); require(counter > 0) }
-}
-
-/** A note's observed dots never come from the global title/field clock. */
-class SyncV3NoteRegister {
-    private val writes = mutableMapOf<SyncV3NoteDot, String>()
-    private val contexts = mutableMapOf<SyncV3NoteDot, Set<SyncV3NoteDot>>()
-    private val removed = mutableSetOf<SyncV3NoteDot>()
-    val visible: Map<SyncV3NoteDot, String> get() = writes.filterKeys { it !in removed }
-    fun apply(dot: SyncV3NoteDot, value: String, observed: Set<SyncV3NoteDot>) {
-        require(dot !in observed && value.toByteArray(Charsets.UTF_8).size <= SyncV3.MAX_CHUNK_BYTES)
-        require(writes[dot] == null || (writes[dot] == value && contexts[dot] == observed)) { SyncV3Error.CORRUPT_DATA.wire }
-        writes[dot] = value; contexts[dot] = observed.toSet(); removed.addAll(observed)
-    }
-    fun merge(other: SyncV3NoteRegister) {
-        require(other.writes.all { (dot, value) -> writes[dot] == null || (writes[dot] == value && contexts[dot] == other.contexts[dot]) }) { SyncV3Error.CORRUPT_DATA.wire }
-        writes.putAll(other.writes); contexts.putAll(other.contexts); removed.addAll(other.removed)
-    }
 }

@@ -3,7 +3,6 @@ package com.pindo.app
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.pindo.app.sync.SyncReplica
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONArray
@@ -32,7 +31,7 @@ class AppStore(application: Application) : AndroidViewModel(application) {
 
     init {
         try {
-            document = storage.read() ?: emptyDocument().also(storage::write)
+            document = storage.read()
             validateDocument(document)
             if (!state.value.readOnly) publish()
         } catch (_: Exception) {

@@ -41,7 +41,7 @@ enum SaveState { case saved, saving, failed }
         let pasteboard = NSPasteboard.general; pasteboard.clearContents()
         return pasteboard.setString(text, forType: .string)
     }
-    private(set) var repository: PindoRepository
+    let repository: PindoRepository
     private(set) lazy var cloudSync = CloudSyncController(model: self)
     private let defaults: UserDefaults
     private var textSave: Task<Void, Never>?
@@ -72,14 +72,13 @@ enum SaveState { case saved, saving, failed }
         }
     }
 
-    init(useSQLite: Bool = true, directory: URL, defaults: UserDefaults = .standard) throws {
+    init(directory: URL, defaults: UserDefaults = .standard) throws {
         self.defaults = defaults
         let language = InterfaceLanguage(defaults: defaults)
         interfaceLanguage = language
         fontPreferences = defaults.data(forKey: PindoFontPreferences.defaultsKey)
             .flatMap { try? JSONDecoder().decode(PindoFontPreferences.self, from: $0) } ?? PindoFontPreferences()
-        repository = try PindoRepository(directory: directory, useSQLite: useSQLite, initialDocument: PindoLocalization(language).initialDocument)
-        try repository.beginSyncSession()
+        repository = try PindoRepository(directory: directory, initialDocument: PindoLocalization(language).initialDocument)
         document = repository.document
         listEntryGroupID = repository.document.preferences.defaultGroupID
         quickTitle = defaults.string(forKey: "quickTitle") ?? ""
@@ -456,24 +455,12 @@ enum SaveState { case saved, saving, failed }
             if oldLogin != document.preferences.launchAtLogin { do { try configureLogin?(document.preferences.launchAtLogin) } catch { notice = .failure(error, context: "资料已恢复，但登录启动未更新：%@") } }
         } catch { notice = .failure(error); refreshSnapshots() }
     }
-    func retryRecovery() {
-        endTaskDrag()
-        do {
-            repository = try PindoRepository(directory: repository.directory, initialDocument: localization.initialDocument)
-            snapshotFailure = nil
-            let oldLogin = document.preferences.launchAtLogin
-            document = repository.document; noteID = nil; editingID = nil; groupFilter = .all; saveState = .saved
-            preferencesChanged(document.preferences); refreshSnapshots(); notice = nil
-            cloudSync.documentDidChange()
-            if oldLogin != document.preferences.launchAtLogin { try configureLogin?(document.preferences.launchAtLogin) }
-        } catch { notice = .failure(error) }
-    }
     func export(backup: Bool) {
         guard flush() else { return }
         let panel = NSSavePanel(); panel.nameFieldStringValue = backup ? "Pindo-snapshots.json" : "Pindo-data.json"
         panel.allowedContentTypes = [.json]
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { let bytes = try backup ? repository.exportSnapshots() : repository.exportDocument(); try bytes.write(to: url, options: .atomic) }
+        do { let bytes = try backup ? repository.exportSnapshots() : repository.exportDocument(); try FileStorage().write(bytes, to: url) }
         catch { notice = .failure(error) }
     }
     func importData() {
@@ -488,11 +475,9 @@ enum SaveState { case saved, saving, failed }
         alert.addButton(withTitle: l10n("取消"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
-            let oldLogin = document.preferences.launchAtLogin
             try repository.importDocument(Data(contentsOf: url)); document = repository.document; noteID = nil; editingID = nil; groupFilter = .all
             preferencesChanged(document.preferences); refreshSnapshots()
             cloudSync.documentDidChange()
-            if oldLogin != document.preferences.launchAtLogin { try configureLogin?(document.preferences.launchAtLogin) }
         } catch { notice = .failure(error) }
     }
 }

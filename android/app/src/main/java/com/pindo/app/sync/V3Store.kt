@@ -99,11 +99,20 @@ internal class V3Store(context:Context) {
     private fun meta(key:String)=rows("SELECT value FROM app_meta WHERE key=?",key).firstOrNull()?.get("value") as? ByteArray
     private fun put(key:String,value:Any?){if(value==null)exec("DELETE FROM app_meta WHERE key=?",key)else exec("INSERT OR REPLACE INTO app_meta VALUES(?,?)",key,bytes(value))}
     fun initialized()=meta("document")!=null
-    @Synchronized fun initialize(document:JSONObject){validateDocument(document);transaction{if(!initialized()){entities(document,null);put("migration",JSONObject().put("state","committed"))}};check(equalV3(read(),document))}
+    @Synchronized fun initialize(document:JSONObject){
+        validateDocument(document)
+        transaction{
+            if(!initialized()){
+                require(rows("SELECT 1 FROM app_entities LIMIT 1").isEmpty() && rows("SELECT 1 FROM v3_vaults LIMIT 1").isEmpty()){"本机资料元数据缺失，原数据库已保留。"}
+                entities(document,null)
+            }
+        }
+        check(equalV3(read(),document))
+    }
     @Synchronized fun binding():V3Binding?=meta("active_v3")?.let{V3Binding.from(JSONObject(it.toString(Charsets.UTF_8)))}
     @Synchronized fun read():JSONObject {
         cached?.let{return copyV3(it) as JSONObject}
-        val doc=JSONObject((meta("document")?:error("本机资料尚未迁移。")).toString(Charsets.UTF_8))
+        val doc=JSONObject((meta("document")?:error("本机资料尚未初始化。")).toString(Charsets.UTF_8))
         for((kind,array) in listOf("task" to "tasks","group" to "groups")){
             val items=JSONArray();for(r in rows("SELECT data,note FROM app_entities WHERE kind=? ORDER BY position,id",kind)){
                 val j=JSONObject((r["data"] as ByteArray).toString(Charsets.UTF_8));if(kind=="task")j.put("note",(r["note"] as? ByteArray)?.toString(Charsets.UTF_8)?:"");items.put(j)
@@ -180,7 +189,7 @@ internal class V3Store(context:Context) {
     private fun project(b:V3Binding,confirmed:JSONObject,oldOptimistic:JSONObject,before:JSONObject){
         var optimistic=confirmed;for(q in queue(b))optimistic=SyncReplica.applyingV3(optimistic,JSONObject(q.plain.toString(Charsets.UTF_8)))
         saveState(b,"optimistic",optimistic,oldOptimistic)
-        val visible=SyncReplica.fresh(version=2).apply{merge(optimistic)}.projected()
+        val visible=SyncReplica.fresh().apply{merge(optimistic)}.projected()
         val next=(copyV3(before) as JSONObject).put("tasks",visible.first).put("groups",visible.second)
         entities(next,before);cached=next
     }
@@ -191,14 +200,14 @@ internal class V3Store(context:Context) {
             if(binding()==null&&meta("unbound_source")==null)put("unbound_source",original)
             exec("INSERT INTO v3_vaults(channel,epoch) VALUES(?,?)",b.channel,b.epoch)
             if(importLocal){
-                val legacy=if(binding()==null&&original.optJSONObject("syncReplica")!=null)SyncReplica.fromJson(original.getJSONObject("syncReplica")).upgraded() else SyncReplica.fresh(version=2)
-                legacy.rotateActor();legacy.capture(original.getJSONArray("tasks"),original.getJSONArray("groups"))
-                if(legacy.payload.getJSONObject("records").length()>0){enqueue(b,V3Delta.baseline(legacy.payload));saveState(b,"optimistic",legacy.payload,V3Delta.empty())}
+                val replica=SyncReplica.fresh()
+                replica.capture(original.getJSONArray("tasks"),original.getJSONArray("groups"))
+                if(replica.payload.getJSONObject("records").length()>0){enqueue(b,V3Delta.baseline(replica.payload));saveState(b,"optimistic",replica.payload,V3Delta.empty())}
             }
         }
         val installed=if(row!=null)b.copy(epoch=row["epoch"].toString())else b
         put("active_v3",installed.json())
-        val state=state(installed,"optimistic");val visible=SyncReplica.fresh(version=2).apply{merge(state)}.projected()
+        val state=state(installed,"optimistic");val visible=SyncReplica.fresh().apply{merge(state)}.projected()
         val next=(copyV3(original) as JSONObject).put("tasks",visible.first).put("groups",visible.second);entities(next,original);cached=next;installed
     }
     @Synchronized fun cursors(b:V3Binding):Pair<Long,Long>{val r=rows("SELECT fetch_cursor,apply_cursor FROM v3_vaults WHERE channel=? AND epoch=?",b.channel,b.epoch).firstOrNull()?:error("epoch_mismatch");return (r["fetch_cursor"] as Number).toLong() to (r["apply_cursor"] as Number).toLong()}

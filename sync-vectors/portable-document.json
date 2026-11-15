@@ -1,13 +1,16 @@
 {
-  "groups": [{
-    "name": "工作 Work",
-    "id": "20000000-0000-4000-8000-000000000001",
-    "colorHex": "#228833"
-  }],
+  "version": 1,
+  "groups": [
+    {
+      "name": "工作 Work",
+      "id": "20000000-0000-4000-8000-000000000001",
+      "colorHex": "#228833"
+    }
+  ],
   "tasks": [
     {
       "phase": "inProgress",
-      "note": "Android 离线备注\n另一个版本 ✅\n\n[Sync conflict]\n\nMac 离线备注\n保留中文 👩\u200d💻",
+      "note": "Android 离线备注\n另一个版本 ✅\n\n[Sync conflict]\n\nMac 离线备注\n保留中文 👩‍💻",
       "completedAt": null,
       "groupID": "20000000-0000-4000-8000-000000000001",
       "startedAt": 37.5,

@@ -71,7 +71,7 @@ struct V3Device: Decodable, Identifiable { var id:String;var revoked_at:Int64? }
     func start() {
         do {
             if let bytes=try secrets.load(){journal=try DocumentCodec.decode(V3SecretJournal.self,from:bytes);guard journal.version==3 else{throw SyncV3Error.unsupportedVersion}}
-            if let pending=journal.pending,try model?.repository.sqlite?.binding?.transactionID == pending.connection.transactionID {
+            if let pending=journal.pending,try model?.repository.sqlite.binding?.transactionID == pending.connection.transactionID {
                 journal.active=pending.connection;journal.pending=nil;journal.enabled=true;try save()
             }
             isConfigured=journal.enabled && journal.active != nil;endpoint=journal.active?.endpoint ?? endpoint;hasPendingConnection=journal.pending != nil
@@ -83,7 +83,7 @@ struct V3Device: Decodable, Identifiable { var id:String;var revoked_at:Int64? }
     func documentDidChange(){guard isConfigured else{return};debounce?.cancel();debounce=Task{[weak self]in try? await Task.sleep(nanoseconds:1_000_000_000);guard !Task.isCancelled else{return};self?.syncNow(manual:false)}}
     func editingDidBegin(){generation=UUID();job?.cancel();job=nil;isSyncing=false}
     func editingDidEnd(){if isConfigured{syncNow(manual:false)}}
-    private func check(_ token:UUID)throws{guard generation==token,let model,!model.isSyncEditing,!model.repository.needsRecovery else{throw CancellationError()};guard model.flush() else{throw SyncV3Error.storageUnavailable}}
+    private func check(_ token:UUID)throws{guard generation==token,let model,!model.isSyncEditing else{throw CancellationError()};guard model.flush() else{throw SyncV3Error.storageUnavailable}}
     private func refresh()throws{guard let model else{throw CancellationError()};try model.repository.reloadCurrentDocument();model.refreshAfterCloudSync()}
     func create(endpoint:String,bootstrapSecret:String,recoveryKey:String="") {
         guard !isSyncing else{return};cancelRuntime()
@@ -121,7 +121,8 @@ struct V3Device: Decodable, Identifiable { var id:String;var revoked_at:Int64? }
         job=Task{[weak self]in guard let self else{return};do{try await commitPending(token)}catch{if generation==token{failure(error)}};if generation==token{isSyncing=false;job=nil;if isConfigured{installTimer();documentDidChange()}}}
     }
     private func commitPending(_ token:UUID)async throws{
-        guard let pending=journal.pending,let model,let store=model.repository.sqlite else{throw SyncV3Error.storageUnavailable}
+        guard let pending=journal.pending,let model else{throw SyncV3Error.storageUnavailable}
+        let store=model.repository.sqlite
         var c=pending.connection;let transport=try factory(c.endpoint),cipher=try SyncEncryption(recoveryKey:c.recoveryKey)
         let engine=SyncV3Engine(store:store,transport:transport,cipher:cipher,check:{try self.check(token)})
         if (try? await engine.info(c)) == nil {
@@ -153,7 +154,8 @@ struct V3Device: Decodable, Identifiable { var id:String;var revoked_at:Int64? }
     func disconnect(){cancelRuntime();journal.enabled=false;do{try save();isConfigured=false;status=localize("仅保存在本机");errorMessage=nil}catch{failure(error)}}
     func reconnect(){guard journal.active != nil else{return};journal.enabled=true;do{try save();isConfigured=true;installTimer();syncNow()}catch{failure(error)}}
     func syncNow(manual:Bool=true){
-        guard isConfigured,!isSyncing,journal.pending==nil,let model,!model.isSyncEditing,let store=model.repository.sqlite,var c=journal.active else{return}
+        guard isConfigured,!isSyncing,journal.pending==nil,let model,!model.isSyncEditing,var c=journal.active else{return}
+        let store=model.repository.sqlite
         if !manual,Date()<retryAfter{return};let token=generation;isSyncing=true;status=localize("正在同步…")
         job=Task{[weak self]in guard let self else{return};defer{if generation==token{isSyncing=false;job=nil}}
             do{

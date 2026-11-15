@@ -111,14 +111,6 @@ class TodoBatchTest {
         }
     }
 
-    @Test fun movingLastLegacyDerivedChildUsesThePreviousTreeToInferTheProgressSource() {
-        val parent = task("parent").put("phase", "inProgress").put("startedAt", 1.0)
-        val child = task("child", parent.getString("id")).put("phase", "inProgress").put("startedAt", 1.0)
-        val moved = TodoRules.moveTask(JSONArray().put(parent).put(child), child.getString("id"), null)
-        assertEquals("pending", moved.getJSONObject(0).getString("phase"))
-        assertTrue(moved.getJSONObject(0).isNull("startedAt"))
-    }
-
     @Test fun groupAndDateChangesOnlyAffectSelectedTasksAndPreserveHierarchyAndNotes() {
         val parent = task("父项")
         val child = task("子项", parent.getString("id"))

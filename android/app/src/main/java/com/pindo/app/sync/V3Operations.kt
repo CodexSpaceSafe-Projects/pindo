@@ -41,7 +41,7 @@ internal object V3Delta {
                         val result=JSONObject()
                         for(name in listOf("title","plannedDay","groupID","parentID","phase","order","createdAt","updatedAt","startedAt","completedAt"))result.put(name,copyV3(v.opt(name)))
                         result.put("lifecycle",JSONObject().put("phase",v.getString("phase")).put("startedAt",copyV3(v.opt("startedAt"))).put("completedAt",copyV3(v.opt("completedAt")))
-                            .put("isProgressExplicit",v.optBoolean("isProgressExplicit",v.getString("phase")=="inProgress")))
+                            .put("isProgressExplicit",v.getBoolean("isProgressExplicit")))
                         return result
                     }
                     val all=values(value);val prev=previous?.let(::values)?:JSONObject()

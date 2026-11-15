@@ -7,7 +7,7 @@ import org.junit.Test
 import java.util.Random
 import java.util.UUID
 
-class SyncProtocolV2Test {
+class SyncLifecycleTest {
     private val a = "00000000-0000-4000-8000-000000000001"
     private val b = "00000000-0000-4000-8000-000000000002"
     private val c = "00000000-0000-4000-8000-000000000003"
@@ -25,88 +25,41 @@ class SyncProtocolV2Test {
         .put("startedAt", if (value == "inProgress") at else JSONObject.NULL)
         .put("completedAt", if (value == "completed") at else JSONObject.NULL)
     private fun fields(payload: JSONObject, taskID: String = id) = payload.getJSONObject("records").getJSONObject("task:$taskID").getJSONObject("fields")
-    private fun editLegacy(payload: JSONObject, name: String, value: Any, counter: Long, actor: String = b): JSONObject {
-        fields(payload).put(name, JSONObject().put("value", value).put("stamp", JSONObject().put("counter", counter).put("deviceID", actor)))
-        payload.getJSONObject("seen").put(actor, counter)
-        return payload
-    }
-    private fun merge(vararg heads: JSONObject): SyncReplica = SyncReplica.fresh(c, version = 2).apply { heads.forEach { merge(it) } }
+    private fun merge(vararg heads: JSONObject): SyncReplica = SyncReplica.fresh(c).apply { heads.forEach { merge(it) } }
 
-    @Test fun upgradePreservesRawRegistersAndCommutesWithLegacyMerge() {
-        val legacy = SyncReplica.fresh(a).apply { capture(tasks(task()), JSONArray()) }
-        val first = editLegacy(legacy.payload, "phase", "completed", 2)
-        editLegacy(first, "completedAt", 2.0, 2)
-        val second = editLegacy(legacy.payload, "phase", "pending", 3)
-        editLegacy(second, "completedAt", JSONObject.NULL, 3)
-        val metadata = editLegacy(first, "completedAt", 4.0, 4)
-        val oldMerged = SyncReplica.fresh(c).apply { merge(second); merge(metadata) }
-        val upgradedMerged = oldMerged.upgraded()
-        val separate = merge(SyncReplica.upgradedPayload(second), SyncReplica.upgradedPayload(metadata))
-        assertEquals(upgradedMerged.payload.toMap(), separate.payload.toMap())
-        assertEquals("pending", separate.projected().first.getJSONObject(0).getString("phase"))
-        assertTrue(separate.projected().first.getJSONObject(0).isNull("completedAt"))
-        val oldFields = fields(oldMerged.payload)
-        val newFields = fields(upgradedMerged.payload)
-        oldFields.keys().forEach { name -> assertEquals(oldFields.getJSONObject(name).toMap(), newFields.getJSONObject(name).toMap()) }
-        assertTrue(newFields.getJSONObject("lifecycle").isNull("value"))
-        assertEquals(1, oldMerged.payload.getInt("version"))
-    }
-
-    @Test fun realLifecycleSurvivesHigherLegacyTimeAndNullBottomStamps() {
-        val legacy = SyncReplica.fresh(a).apply { capture(tasks(task()), JSONArray()) }
-        val upgraded = legacy.upgraded()
-        upgraded.rotateActor(c)
-        upgraded.capture(tasks(phase(task(), "inProgress", 20.0)), JSONArray())
-        val real = upgraded.payload
-        val lateTime = editLegacy(legacy.payload, "completedAt", 900.0, 99)
-        val combined = merge(real, lateTime)
-        val visible = combined.projected().first.getJSONObject(0)
-        assertEquals("inProgress", visible.getString("phase"))
-        assertEquals(20.0, visible.getDouble("startedAt"), 0.0)
-        assertTrue(visible.isNull("completedAt"))
-        assertTrue(visible.getBoolean("isProgressExplicit"))
-        val highBottom = SyncReplica.upgradedPayload(legacy.payload)
-        fields(highBottom).getJSONObject("lifecycle").getJSONObject("stamp").put("counter", 100).put("deviceID", b)
-        highBottom.getJSONObject("seen").put(b, 100)
-        combined.merge(highBottom)
-        assertEquals(visible.toMap(), combined.projected().first.getJSONObject(0).toMap())
-        assertFalse(fields(combined.payload).getJSONObject("lifecycle").isNull("value"))
-    }
-
-    @Test fun newerLegacyPhaseWinsThenARealLifecycleMirrorsItWithoutTimeBasedResurrection() {
-        val legacy = SyncReplica.fresh(a).apply { capture(tasks(task()), JSONArray()) }
-        val upgraded = legacy.upgraded()
-        upgraded.rotateActor(c)
-        upgraded.capture(tasks(phase(task(), "inProgress", 2.0)), JSONArray())
-        val oldReal = upgraded.payload
-        val reopened = editLegacy(legacy.payload, "phase", "pending", 5)
-        editLegacy(reopened, "startedAt", JSONObject.NULL, 5)
-        val merged = merge(oldReal, reopened)
-        assertEquals("pending", merged.projected().first.getJSONObject(0).getString("phase"))
-        merged.merge(legacy.payload)
-        assertEquals("pending", merged.projected().first.getJSONObject(0).getString("phase"))
-        merged.rotateActor(c)
-        merged.capture(tasks(phase(task(), "completed", 6.0)), JSONArray())
-        val current = merged.payload
-        val statusFields = fields(current)
-        val lifecycleStamp = statusFields.getJSONObject("lifecycle").getJSONObject("stamp").toMap()
-        for (name in listOf("phase", "startedAt", "completedAt")) assertEquals(lifecycleStamp, statusFields.getJSONObject(name).getJSONObject("stamp").toMap())
-        val onlyTime = JSONObject(current.toString()).put("version", 1)
-        fields(onlyTime).remove("lifecycle")
-        editLegacy(onlyTime, "startedAt", 90.0, 90)
-        merged.merge(onlyTime)
-        val completed = merged.projected().first.getJSONObject(0)
-        assertEquals("completed", completed.getString("phase"))
-        assertEquals(6.0, completed.getDouble("completedAt"), 0.0)
-        assertTrue(completed.isNull("startedAt"))
+    @Test fun derivedCompletionTimeSurvivesLaterParentAndChildTextEdits() {
+        val otherID = "10000000-0000-4000-8000-000000000003"
+        val seed = SyncReplica.fresh(a).apply {
+            capture(tasks(task(), task(childID, id), task(otherID, id)), JSONArray())
+        }
+        val first = SyncReplica.fresh(a).apply { merge(seed.payload) }
+        val second = SyncReplica.fresh(b).apply { merge(seed.payload) }
+        val firstTasks = first.projected().first
+        phase(firstTasks.getJSONObject(1), "completed", 20.0)
+        first.capture(firstTasks, JSONArray())
+        val secondTasks = second.projected().first
+        phase(secondTasks.getJSONObject(2), "completed", 30.0)
+        second.capture(secondTasks, JSONArray())
+        first.merge(second.payload)
+        assertEquals(30.0, first.projected().first.getJSONObject(0).getDouble("completedAt"), 0.0)
+        val editor = SyncReplica.fresh(c).apply { merge(first.payload) }
+        val edits = editor.projected().first
+        edits.getJSONObject(0).put("title", "新父项标题").put("updatedAt", 900.0)
+        edits.getJSONObject(1).put("note", "稍后编辑子项备注").put("updatedAt", 1000.0)
+        editor.capture(edits, JSONArray())
+        first.merge(editor.payload)
+        val parent = first.projected().first.getJSONObject(0)
+        assertEquals("completed", parent.getString("phase"))
+        assertEquals(30.0, parent.getDouble("completedAt"), 0.0)
+        assertEquals(1000.0, parent.getDouble("updatedAt"), 0.0)
     }
 
     @Test fun explicitParentProgressSurvivesRemoteChildReopenAndDerivedProgressClears() {
-        val base = SyncReplica.fresh(a, version = 2).apply {
+        val base = SyncReplica.fresh(a).apply {
             capture(tasks(task(), phase(task(childID, id), "inProgress", 2.0)), JSONArray())
         }
-        val first = SyncReplica.fresh(b, version = 2).apply { merge(base.payload) }
-        val second = SyncReplica.fresh(c, version = 2).apply { merge(base.payload) }
+        val first = SyncReplica.fresh(b).apply { merge(base.payload) }
+        val second = SyncReplica.fresh(c).apply { merge(base.payload) }
         val firstProjection = first.projected().first
         firstProjection.getJSONObject(0).put("isProgressExplicit", true)
         first.capture(firstProjection, JSONArray())
@@ -116,7 +69,7 @@ class SyncProtocolV2Test {
         first.merge(second.payload)
         assertEquals("inProgress", first.projected().first.getJSONObject(0).getString("phase"))
         assertTrue(first.projected().first.getJSONObject(0).getBoolean("isProgressExplicit"))
-        val derived = SyncReplica.fresh(b, version = 2).apply { merge(base.payload) }
+        val derived = SyncReplica.fresh(b).apply { merge(base.payload) }
         val projection = derived.projected().first
         phase(projection.getJSONObject(1), "pending", 3.0)
         derived.capture(projection, JSONArray())
@@ -124,13 +77,13 @@ class SyncProtocolV2Test {
         assertEquals("pending", parent.getString("phase"))
         assertFalse(parent.getBoolean("isProgressExplicit"))
         assertTrue(parent.isNull("startedAt"))
-        val removed = SyncReplica.fresh(c, version = 2).apply { merge(base.payload) }
+        val removed = SyncReplica.fresh(c).apply { merge(base.payload) }
         removed.capture(tasks(removed.projected().first.getJSONObject(0)), JSONArray())
         assertEquals("pending", removed.projected().first.getJSONObject(0).getString("phase"))
     }
 
     @Test fun actorRotationRetainsHistoryButSeparatesFutureCloneOperations() {
-        val original = SyncReplica.fresh(a, version = 2).apply { capture(tasks(task()), JSONArray()) }
+        val original = SyncReplica.fresh(a).apply { capture(tasks(task()), JSONArray()) }
         val first = SyncReplica.fromJson(original.toJson()).apply { rotateActor(b) }
         val second = SyncReplica.fromJson(original.toJson()).apply { rotateActor(c) }
         first.capture(tasks(task().put("title", "电脑标题")), JSONArray())
@@ -146,7 +99,7 @@ class SyncProtocolV2Test {
     }
 
     @Test fun invalidLifecycleAndContradictoryRealOperationsFailWithoutMutation() {
-        val replica = SyncReplica.fresh(a, version = 2).apply { capture(tasks(task()), JSONArray()) }
+        val replica = SyncReplica.fresh(a).apply { capture(tasks(task()), JSONArray()) }
         val before = replica.toJson().toMap()
         for (invalid in listOf(
             JSONObject().put("phase", "pending").put("startedAt", 2.0).put("completedAt", JSONObject.NULL).put("isProgressExplicit", false),
@@ -165,7 +118,7 @@ class SyncProtocolV2Test {
     }
 
     @Test fun wireNumberDateAndCollectionLimitsMatchSwift() {
-        val replica = SyncReplica.fresh(a, version = 2)
+        val replica = SyncReplica.fresh(a)
         replica.capture(tasks(task().put("order", 4_294_967_296L)), JSONArray())
         assertEquals(4_294_967_296L, replica.projected().first.getJSONObject(0).getLong("order"))
         for (invalid in listOf(9_007_199_254_740_992L, -9_007_199_254_740_992L,
@@ -185,8 +138,8 @@ class SyncProtocolV2Test {
 
     @Test fun seededThreeDevicePartitionsReorderingDuplicatesAndRestoresConverge() {
         val random = Random(0x50494e444fL)
-        val initial = SyncReplica.fresh(a, version = 2).apply { capture(tasks(task()), JSONArray()) }
-        val replicas = listOf(a, b, c).map { actor -> SyncReplica.fresh(actor, version = 2).apply { merge(initial.payload) } }
+        val initial = SyncReplica.fresh(a).apply { capture(tasks(task()), JSONArray()) }
+        val replicas = listOf(a, b, c).map { actor -> SyncReplica.fresh(actor).apply { merge(initial.payload) } }
         val snapshots = mutableListOf(initial.payload)
         val deleted = mutableListOf<JSONObject>()
         repeat(240) { step ->

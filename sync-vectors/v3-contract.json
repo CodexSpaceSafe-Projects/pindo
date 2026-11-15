@@ -13,58 +13,5 @@
   "plaintext": "{\"version\":3,\"operations\":[]}",
   "ciphertext": "AAECAwQFBgcICQoLPCCgfreWq3TjY624ncsXHeak5kCZFDEPGl2+2GCW0QJnL7+6mzegpgQcFkm0",
   "digest": "cad4a389d027d553b17d5fbaf2268e540771efa1f2acd82da2bb8215d261b350",
-  "maximumCounter": 9007199254740991,
-  "noteWrites": [
-    {
-      "actorID": "00000000-0000-4000-8000-000000000101",
-      "counter": 1,
-      "value": "旧备注",
-      "observed": []
-    },
-    {
-      "actorID": "00000000-0000-4000-8000-000000000102",
-      "counter": 1,
-      "value": "并发备注",
-      "observed": []
-    },
-    {
-      "actorID": "00000000-0000-4000-8000-000000000101",
-      "counter": 2,
-      "value": "后续备注",
-      "observed": [
-        {
-          "actorID": "00000000-0000-4000-8000-000000000101",
-          "counter": 1
-        }
-      ]
-    }
-  ],
-  "noteOrders": [
-    [
-      0,
-      1,
-      2
-    ],
-    [
-      2,
-      0,
-      1
-    ],
-    [
-      1,
-      2,
-      0
-    ],
-    [
-      2,
-      1,
-      0,
-      2,
-      1
-    ]
-  ],
-  "visibleNotes": [
-    "后续备注",
-    "并发备注"
-  ]
+  "maximumCounter": 9007199254740991
 }

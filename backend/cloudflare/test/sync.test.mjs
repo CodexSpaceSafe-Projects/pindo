@@ -1,8 +1,8 @@
 import { after, before, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile,readdir } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { createHash, createCipheriv } from 'node:crypto';
-import { Miniflare, Log, LogLevel } from 'miniflare';
+import { createTestWorker } from './runtime.mjs';
 import { appendBatch } from '../../../work/cloudflare-worker.mjs';
 
 const serviceID = '00000000-0000-4000-8000-000000000001';
@@ -23,15 +23,10 @@ async function request(path, data, auth = token) {
   return { status: response.status, body: await response.json() };
 }
 before(async () => {
-  mf = new Miniflare({ modules: true, modulesRoot: new URL('../../../work/', import.meta.url).pathname, scriptPath: new URL('../../../work/cloudflare-worker.mjs', import.meta.url).pathname,
-    // Pinned local runtime supports this date; deployment target is separately versioned.
-    compatibilityDate: '2026-07-30', d1Databases: ['DB'],
-    bindings: { SERVICE_ID: serviceID, LOG_CORE_ENABLED: 'development-only',BOOTSTRAP_SECRET:'test-bootstrap-secret',RECOVERY_SECRET:'test-recovery-secret' }, log: new Log(LogLevel.ERROR) });
-  db = await mf.getD1Database('DB');
-  for(const file of (await readdir(new URL('../migrations/',import.meta.url))).filter(x=>x.endsWith('.sql')).sort()) {
-    const schema=await readFile(new URL('../migrations/'+file,import.meta.url),'utf8');
-    await db.exec(schema.replace(/--[^\n]*/g,'').replace(/\n/g,' '));
-  }
+  ({ mf, db } = await createTestWorker({
+    SERVICE_ID: serviceID, SYNC_ENABLED: 'true',
+    BOOTSTRAP_SECRET: 'test-bootstrap-secret', RECOVERY_SECRET: 'test-recovery-secret'
+  }));
 });
 after(async () => { await mf?.dispose(); });
 beforeEach(async () => {
@@ -50,19 +45,21 @@ test('public health verifies all schema bindings without exposing a device crede
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('Cache-Control'), 'no-store');
   assert.deepEqual(await response.json(), {service:'pindo-sync',version:3,status:'ok',serviceID,
-    capabilities:['development-log-core'],clientSyncAvailable:false});
+    capabilities:['v3-sync','pairing','artifacts','checkpoints','gc'],clientSyncAvailable:true});
   assert.equal((await mf.dispatchFetch('https://sync.test/')).status, 200);
   assert.equal((await mf.dispatchFetch(url('info'))).status, 401);
 });
 
-test('health fails closed if a required database table is missing', async () => {
-  await db.prepare('ALTER TABLE receipts RENAME TO retained_receipts').run();
-  try {
-    const response = await mf.dispatchFetch('https://sync.test/health');
-    assert.equal(response.status, 503);
-    assert.equal((await response.json()).error.code, 'storage_unavailable');
-  } finally { await db.prepare('ALTER TABLE retained_receipts RENAME TO receipts').run(); }
-});
+for (const table of ['receipts', 'artifacts']) {
+  test(`health fails closed if ${table} is missing`, async () => {
+    await db.prepare(`ALTER TABLE ${table} RENAME TO unavailable_table`).run();
+    try {
+      const response = await mf.dispatchFetch('https://sync.test/health');
+      assert.equal(response.status, 503);
+      assert.equal((await response.json()).error.code, 'storage_unavailable');
+    } finally { await db.prepare(`ALTER TABLE unavailable_table RENAME TO ${table}`).run(); }
+  });
+}
 
 test('push is idempotent, changed bytes conflict, and receipt is independent of pull cursor', async () => {
   const first = await request('push', body()); assert.equal(first.status, 200);
@@ -162,7 +159,9 @@ test('shared AAD and encryption vector is bound to service, vault, epoch and bat
 
 test('bootstrap closes after one vault and pairing consumes once atomically with retry proof', async () => {
   await db.batch([db.prepare('DELETE FROM devices'),db.prepare('DELETE FROM vaults')]);
-  const created={version:3,vaultID,epoch,deviceID,deviceToken:token};
+  const created={version:3,vaultID,epoch,deviceID,deviceToken:token,keyCheck:{id:id(60),epoch,ciphertext:body(9).ciphertext}};
+  const missingKey=await mf.dispatchFetch('https://sync.test/v3/bootstrap',{method:'POST',headers:{Authorization:'Bearer test-bootstrap-secret','Content-Type':'application/json'},body:JSON.stringify({...created,keyCheck:undefined})});
+  assert.equal(missingKey.status,400);assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM vaults').first()).n,0);
   const init=await mf.dispatchFetch('https://sync.test/v3/bootstrap',{method:'POST',headers:{Authorization:'Bearer test-bootstrap-secret','Content-Type':'application/json'},body:JSON.stringify(created)});
   assert.equal(init.status,200);assert.equal((await init.json()).vaultID,vaultID);
   const second=await mf.dispatchFetch('https://sync.test/v3/bootstrap',{method:'POST',headers:{Authorization:'Bearer test-bootstrap-secret','Content-Type':'application/json'},body:JSON.stringify({...created,vaultID:id(90),deviceID:id(91)})});

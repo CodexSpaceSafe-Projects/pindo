@@ -1,115 +1,43 @@
 # Pindo
 
-[![macOS build](https://github.com/CodexSpaceSafe-Projects/pindo/actions/workflows/macos.yml/badge.svg)](https://github.com/CodexSpaceSafe-Projects/pindo/actions/workflows/macos.yml)
+轻量待办应用，提供 macOS 菜单栏客户端、Android 客户端和 Cloudflare 端到端加密同步服务。
 
-轻量的 macOS 菜单栏待办，支持分组、日期、备注、本地快照；Cloudflare 端到端加密同步正在开发。清单可随时唤出，也可 pin 在前台持续查看。仓库同时提供 Android 客户端。
+- 待办支持日期、分组、备注、三种状态、三级子项、父子完成联动及批量管理。
+- macOS 支持置顶清单、全局快捷键、快速记录、原生 Markdown 编辑器、字体设置和中英文界面。
+- Android 提供清单、日历、管理和设置，支持离线编辑、Markdown 预览及保护备份。
+- 两端使用 SQLite 保存资料；同步支持设备配对、暂停、离线队列、并发备注与设备撤销。
 
-原生实现使用 **SwiftUI + AppKit**，最低 macOS 14；备注集成版本固定的 [SwiftMarkdownEngine](https://github.com/nodes-app/swift-markdown-engine) 原生编辑器，无需额外安装运行环境。
+## 下载与运行
 
-## 构建与运行
+[macOS 下载](https://github.com/CodexSpaceSafe-Projects/pindo/releases/latest) · [Android 下载](https://github.com/CodexSpaceSafe-Projects/pindo/releases?q=android-build-&expanded=true)
 
-在 Mac 上安装 Xcode 15+ 或其 Command Line Tools，然后在仓库根目录运行：
+macOS 最低 14，支持 Apple Silicon 和 Intel。解压后将 `Pindo.app` 移到 `/Applications`；应用出现在菜单栏，可在设置中开启登录启动。当前使用临时签名，尚未配置 Developer ID 与公证。Android 最低 8.0（API 26），下载附件 `Pindo-Android-debug.apk`；当前安装包使用调试签名。
 
-```bash
+## 本地构建
+
+macOS 安装 Xcode 15+ 或 Command Line Tools：
+
+```sh
 swift test --jobs 4
 bash scripts/build-app.sh
 open dist/Pindo.app
 ```
 
-应用出现在菜单栏，不显示 Dock 图标。需要登录启动时，先把 `dist/Pindo.app` 移到 `/Applications`，从该位置启动，再到设置开启。该构建使用本机临时签名，尚未提供公证过的发布版本。
+Android 安装 JDK 17 和 Android SDK 35：
 
-开发时也可以运行 `swift run Pindo`；先退出已经运行的 Pindo，避免同时启动开发版与打包版。每个云任务已隔离，直接使用现有检出即可，不需要另建 Git worktree。
-
-## GitHub 自动构建与下载
-
-Android 在 [Build Android app](https://github.com/CodexSpaceSafe-Projects/pindo/actions/workflows/android.yml) 运行单元测试、lint 和构建。`main` 构建成功后，在 [Android 下载列表](https://github.com/CodexSpaceSafe-Projects/pindo/releases?q=android-build-&expanded=true) 自动发布 `Pindo Android (build 构建号)`，点击附件 `Pindo-Android-debug.apk` 即可直接下载，不需要 GitHub 登录或解压。Android 使用独立的 `android-build-构建号` 标签，不影响 macOS 的 Latest。安装包使用调试签名，尚未作为应用商店正式版本发布；最低 Android 8.0（API 26）。Actions 的 Artifacts 仍保留 14 天作为备用，需要 GitHub 登录。本地安装 JDK 17 和 Android SDK 35 后，在 `android/` 运行 `./gradlew testDebugUnitTest lintDebug assembleDebug`。
-
-Android 0.3 提供「清单／日历／管理／设置」四个页面，包括今日进度、月历计数、批量操作、Markdown 预览、主题切换、分组编辑与保护备份。[安卓使用说明](android/README.md)
-
-每次推送 `main` 或在 `main` 上手动运行 [Actions](https://github.com/CodexSpaceSafe-Projects/pindo/actions/workflows/macos.yml)，通过测试、编译和打包后，都会自动创建 [GitHub Release](https://github.com/CodexSpaceSafe-Projects/pindo/releases/latest)。无需手动打标签：自动发布的标签为 `build-构建编号`，标题为 `Pindo 版本号 (build 构建编号)`，并附上对应提交和构建记录。
-
-在 Release 中下载 `Pindo-版本号-macOS-universal.zip`，解压得到 `Pindo.app`；同时提供 `SHA256SUMS` 校验文件。应用兼容 Apple Silicon 和 Intel。每次成功构建保留独立 Release，最新构建会更新 Releases 的 Latest 下载入口。
-
-其他分支和 Pull Request 同样执行构建，但不自动发布 Release。所有成功构建也会提供保留 14 天的 **Artifacts → Pindo-macOS-版本号** 下载。重跑同一次工作流会更新该次 Release 的附件。
-
-发布正式版本时，推送版本标签，例如：
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
+```sh
+cd android
+./gradlew testDebugUnitTest lintDebug assembleDebug
 ```
 
-标签构建成功后会自动创建对应版本的 [GitHub Release](https://github.com/CodexSpaceSafe-Projects/pindo/releases)，附上应用压缩包和校验文件。`v0.2.0-beta.1` 会标记为预发布，并保留已有 Latest 指向。应用版本取自标签，构建编号取自 Actions 运行编号。普通提交的版本号取自 `Resources/Info.plist`。
+APK 输出到 `android/app/build/outputs/apk/debug/app-debug.apk`。服务端构建和跨端验证见 [开发说明](DEVELOPMENT.md)。推送到 `main` 后，GitHub Actions 运行测试与构建，成功后发布应用下载。
 
-也可以在 Mac 上运行 `PINDO_UNIVERSAL=1 bash scripts/build-app.sh` 构建通用版。当前使用临时签名，尚未配置 Apple Developer ID 签名与公证；自动构建不会绕过 macOS 的安全检查。
+## 保存与同步
 
-## 使用
+macOS 资料位于 `~/Library/Application Support/Pindo/pindo.sqlite`；文字停止输入约 600ms 后保存，关闭编辑器时补存。快照保存在同一数据库，每 30 秒检查变化，保留最多 100 份、30 MB，可在设置中恢复或导出。Android 在应用私有目录保存资料，导入前建立保护备份。
 
-- **云同步调整**：已移除缤纷云连接与网络支持，当前两端仅在本机保存。旧资料、因果历史、冻结发件箱和安全存储中的恢复信息继续保留；普通导出仍只包含待办、分组和备注。Cloudflare v3 已开始实现协议与 D1 日志核心，尚未接入客户端或部署，进度见[同步说明](docs/SYNC.md)。
+导出为明文 JSON，只包含待办、分组和备注，需自行妥善保存。导入保留本机设置；导入或恢复会替换当前内容，并作为本地修改参与已连接资料库的同步。
 
-- **自适应清单**：拖动窗口边框调整大小，重新打开时保留尺寸。顶部保留 pin 和设置，待办占据主要区域；日期切换、日历和带下拉箭头的分组筛选位于底部。添加栏一直显示，点击文字区或上下留白均可聚焦输入；右侧可独立选择分组，Return 提交。
-- **日期概览**：点击底部日期展开月历，每天以橙色显示未完成数量、绿色显示已完成数量，按计划日期统计并跟随分组筛选；可以切换月份或回到今天。
-- **pin 置顶**：清单唤出时始终显示在普通窗口前方，再次点击状态栏图标收起清单。固定后切换应用仍保留；取消固定后，点击其他窗口或切换应用会收起清单。面板独立于菜单栏弹出层，唤出时不激活应用菜单栏。
-- **菜单栏快捷菜单**：右键单击、触摸板双指点按或 Control 点按 Pindo 图标，由系统状态栏弹出原生菜单，直接显示「添加事项」「设置」「退出」三个选项。设置与退出显示系统快捷键；添加事项打开快速记录，左键用于打开或收起清单。
-- **界面语言**：默认跟随 macOS 首选语言，中文显示简体中文，其他未支持的语言使用英文。在「设置 → 通用 → 语言」可切换，立即生效；待办内容和已有分组名称不变。
-- **字体**：在「设置 → 字体」分别选择事项和备注的主字体、备用字体与字号，预览中英文混排效果。字体提供中文家族名时，菜单优先显示中文名。主字体缺字时优先使用备用字体，两者都缺字时由 macOS 补字。两组可独立恢复默认，偏好保存在本机。
-- **备注与 Markdown**：使用 SwiftMarkdownEngine 0.15.0 的 TextKit 2 原生编辑器，支持实时标题、加粗、斜体、删除线、引用、列表、可交互任务勾选框、表格、行内代码和代码块。选中文字后可以从右键的「Markdown 格式」插入格式，也可按 Command+B 加粗、Command+I 斜体。编辑格式内容时显示对应语法标记，资料仍保存为 Markdown 原文，保留中文输入、撤销、字体设置和中西文间距。未配置外部图片服务，不自动下载备注中的图片。点击编辑区外或按 Esc 返回清单，关闭前提交最后的编辑。第三方许可随应用包附带。
-- **事项状态**：主清单和管理页的左侧圆圈依次切换「未完成 → 进行中 → 已完成 → 未完成」。时钟圆圈表示进行中，进行中的事项与其他未完成事项混合排序，跨日期仍保留可见。分组标题整行可点击展开，之前未完成的事项可批量移到今天。
-- **事项元数据**：在「修改待办 → 事项元数据」查看添加、开始执行、完成时间、稳定 ID、分组和父项。重开时清除本轮的开始与完成时间，再次进入相应状态时重新记录。右键「复制事项元数据」可取得 JSON，时间用带毫秒的 UTC 时间表示，未发生的时间留空。
-- **中西文间距**：事项标题与备注在中文和西文字母、数字相邻时自动增加八分之一字宽的轻微留白，例如 `你好abc再见` 的 `abc` 两侧会稍微分开。间距与 Markdown 在同一轮排版中完成，输入和移动光标时保持稳定；已有空格和中文标点不叠加间距，代码内部保持等宽。复制、编辑、保存及同步始终使用原文，不写入额外空格。
-- **拖动与三级子项**：按住事项文字或行内留白拖动，上下拖动调整同一层级的顺序，向右缩进成为子项，向左退回上一级。拖动期间列表保持原位，插入线标出落点的缩进，移入新父项时会高亮该父项。松手按标记移动并保存，拖动父项会带上整棵子树。按 Esc 或拖出列表即可取消。点击事项左侧的三角箭头展开／收起子项，刷新列表保留当前折叠状态。最多为「主待办 → 子待办 → 孙待办」三级，不能循环嵌套。右键可添加子项或把子项移为主待办；新子项默认沿用父项日期和分组，移动已有事项保留各自日期、分组和备注。
-- **父子完成联动**：父项从未完成切到进行中时，只开始父项；从进行中切到已完成时，同时完成全部下级；重开父项时，整棵分支恢复未完成。只要有子项进行中或已完成、且还有未完成子项，上级就逐级自动进入进行中；全部子项完成后，上级逐级自动完成。重开、移动或删除子项后按剩余子项重新计算；全部子项恢复待办时，自动产生的进行中也恢复待办，手动开始的父项仍保持进行中。分支计数展示已完成的下级数量。管理页批量标记同样包含折叠或被筛选隐藏的下级。主清单在主待办完成后把整棵树移到「已完成」。管理页搜索以淡色显示不匹配的父级上下文，这些父项不参与批量全选。
-- **拖动状态隔离**：未完成（包含进行中）与已完成的拖动区域互相隔离，不能通过跨区拖动完成事项或重新打开已完成事项；主清单、管理页、空分区及最终落点都执行同一校验。已有父子树中不同状态的子项仍可在原父项下调整顺序。松手后的子树移动使用原生动画，遵循系统的“减少动态效果”设置。
-- **管理待办**：在「设置 → 管理待办」查看所有日期的待办，支持按标题或备注搜索、状态和分组筛选，以及完成、编辑、删除和打开备注。点击「批量操作」可勾选或全选当前结果，批量删除、标记完成、标记未完成（恢复为空心圆待办）或修改分组（含未分组）。切换搜索或筛选会清空选择；批量删除会确认数量，每次操作统一保存，失败时保留选择以便重试。
-- **事项右键菜单**提供「修改待办」「打开备注」「添加子项」，子项还可「移为主待办」；分隔线后为「上移」「下移」「删除待办」。事项末尾不再显示编辑按钮。删除父项会连同全部子项及备注删除，确认框显示完整数量。
-- **分支卡片**在主清单和管理页把父项和下级待办放在同一张卡片里。父项显示备注首行，分支标记显示已完成的下级数量和总数。分组名和备注标志在事项右侧共用一列，长标题自动换行。清单上方按当前日期和分组显示完成进度。
-- **分组颜色**在「设置 → 分组」从七种预设色中选择，或选择列表最后的「自定义颜色…」打开 macOS 颜色面板。预设取自 [Paul Tol 的 Bright 分类色板](https://sronpersonalpages.nl/~pault/data/colourschemes.pdf)（图 1），菜单和当前选择同时显示色块与名称。删除分组保留事项及备注。
-- **新待办默认分组**在「设置 → 通用」中选择，初始为未分组。快速记录与“全部分组”清单中新建的事项使用该分组；指定分组或“未分组”清单中新建时沿用当前筛选。删除默认分组会重置为未分组。
-- **全局快捷键**默认 `Control + Option + Space` 快速记录，`Control + Option + P` 唤出清单；两者可分别录制、停用。注册冲突时保留原可用热键并提示。
-- **快速记录**打开后可直接输入标题，下方可以选择计划日期、分组和展开备注。日期默认今天，分组使用设置中的默认值。拖动后记住上次位置，重启后继续使用；断开显示器时自动移回可见区域。Esc 保留草稿，标题中 Return 添加，备注中 `Command + Return` 添加。
-- **提示音**：成功添加、删除、开始进行或完成待办时播放各自的短音效。每次批量操作或分支操作只播放一声，连续操作仍可立即播放。保存失败、状态未变或恢复待办时保持安静。
+在同步设置中填写服务地址和初始化密钥创建资料库，再通过已连接设备生成一次性配对信息加入其他设备。配对信息包含恢复密钥，只应在自己的设备之间传递。暂停同步仍允许离线编辑；恢复连接后继续上传。检查点用于同步恢复，本机快照用于找回误改的内容。
 
-- **在备注页修改事项**：点击事项后，可直接编辑顶部的事项内容，也可编辑下方备注；两者停止输入约 600ms 后自动保存，返回时补存。点击事项内容不会退出备注页，标题清空后离开输入框会恢复上次有效内容。
-
-## 保存、快照与恢复
-
-资料位于 `~/Library/Application Support/Pindo/`：
-
-| 文件 | 内容 |
-| --- | --- |
-| `data.json` | 当前待办、备注、分组和偏好 |
-| `Backups/snapshots.json` | 基线加增量组成的快照包，最多 100 份、30,000,000 字节 |
-| `recovery.json` | 恢复／导入期间使用的恢复日志，成功后移除 |
-
-文字停止输入约 **600ms** 后保存；返回、关闭面板、应用退出时补存。**30 秒**定时检查相对上一份快照是否有变化，有变化才生成一份快照。同一周期内的多次编辑合并，普通浏览和未提交草稿不产生快照。
-
-达到数量或容量上限时，把最旧增量合并进基线后清理，不破坏剩余版本。备份过大或损坏不会覆盖原备份，当前资料仍可保存。普通文本编辑继续使用系统的撤销；主界面没有应用级撤销按钮。
-
-在「设置 → 备份与恢复」中按需选择版本。恢复或导入前保护当前资料，事务日志保证中断后可继续恢复；恢复失败时阻止继续修改，提供重试。可以导出当前资料、原备份包，或确认后导入结构化资料。不会在读取失败时用空数据覆盖旧文件。
-
-如果容量不足以同时保留操作前的保护版本和替换后的版本，会取消恢复或导入，保留当前资料与原备份，并提示原因。
-
-未提交的快速记录和清单输入草稿保存在本机 UserDefaults，不进入快照。当前数据格式与历史网页原型的浏览器存储不同，尚未提供浏览器原型数据导入器。
-
-## 项目结构
-
-```text
-Sources/PindoCore/       数据模型、日期语义、文本差异、快照保留、原子保存和恢复日志
-Sources/Pindo/           原生菜单栏、自适应置顶面板、实时 Markdown 编辑器、月历、设置与全局热键
-android/                Kotlin Android 客户端、离线存储及相同的加密同步协议
-backend/cloudflare/     Workers / D1 加密同步服务、迁移与端到端测试
-docs/SYNC.md            当前同步状态与 Cloudflare v3 开发边界
-Tests/PindoCoreTests/    可跨平台运行的数据与恢复测试
-Tests/PindoMacTests/     macOS 模型、编辑器组词、自动保存、管理列表及视图构造测试
-Resources/Info.plist     应用标识、菜单栏应用声明、最低系统版本
-scripts/build-app.sh    构建、打包并检查本机签名
-design/                 设计记录与较早的网页交互原型
-```
-
-## 验证范围
-
-`swift test` 在 Linux 上编译和运行 `PindoCoreTests`；Mac 上还会编译原生应用并运行 `PindoMacTests`。`.github/workflows/macos.yml` 已配置 macOS 构建、测试、打包与进程启动检查，运行后可下载应用压缩包。
-
-当前开发环境为 Linux，核心模块已实际编译测试。[较早版本的 macOS CI 记录](https://github.com/CodexSpaceSafe-Projects/pindo/actions/runs/42206508251)通过了原生编译、通用版打包、签名和启动检查；该记录不代表本轮面板和编辑器变更已通过原生构建。最新验证范围见 VALIDATION.md。
-
-Mac 验收请覆盖：自动隐藏菜单栏、多屏及全屏位置、pin 前台保留与取消、快捷键长按与再次唤出、中文组词时等待保存和快照、候选字鼠标选择、Markdown 预览、全部待办管理、登录启动及快照恢复。CI 的进程启动检查不能替代这些交互验证。
+源码与验证入口：`Sources/`、`Tests/`、`android/`、`backend/cloudflare/`、`sync-vectors/`。协作规则见 [AGENTS.md](AGENTS.md)。

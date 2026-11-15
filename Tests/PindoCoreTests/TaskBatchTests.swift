@@ -80,27 +80,30 @@ final class TaskBatchTests: XCTestCase {
         XCTAssertEqual(document, remaining)
     }
 
-    func testBatchWritesOnePrimaryDocumentAndRollsBackCompletelyOnWriteFailure() throws {
-        let io = MemoryStorage()
-        let directory = URL(fileURLWithPath: "/tmp/pindo-batch-\(UUID().uuidString)")
-        let repository = try PindoRepository(directory: directory, io: io, now: now)
+    func testBatchCommitsOnceAndRollsBackCompletelyOnFailure() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = try PindoRepository(directory: directory, now: now)
         let document = try makeDocument()
         try repository.update { $0 = document }
         let ids = Set(document.tasks.prefix(3).map(\.id))
         try repository.stageNote(taskID: document.tasks[0].id, text: "尚未补存的备注")
-        let primaryWrites = io.writes.filter { $0 == repository.dataURL }.count
-        let backupWrites = io.writes.filter { $0 == repository.backupURL }.count
+        let archive = try repository.exportSnapshots()
+        var commits = 0
+        let database = repository.sqlite.database
+        database.beforeCommit = { commits += 1 }
         try repository.update { _ = try $0.applyBatch(.setPhase(.completed), to: ids, now: now.addingTimeInterval(60)) }
-        XCTAssertEqual(io.writes.filter { $0 == repository.dataURL }.count, primaryWrites + 1)
-        XCTAssertEqual(io.writes.filter { $0 == repository.backupURL }.count, backupWrites)
+        XCTAssertEqual(commits, 1)
+        XCTAssertEqual(try repository.exportSnapshots(), archive)
         XCTAssertEqual(repository.document.tasks[0].note, "尚未补存的备注")
         XCTAssertFalse(repository.hasUnsavedChanges)
-        let saved = repository.document, bytes = io.files[repository.dataURL]
-
-        io.failNextWriteTo = repository.dataURL
+        let saved = repository.document
+        database.beforeCommit = { [weak database] in
+            database?.beforeCommit = nil
+            throw CocoaError(.fileWriteNoPermission)
+        }
         XCTAssertThrowsError(try repository.update { _ = try $0.applyBatch(.delete, to: ids) })
         XCTAssertEqual(repository.document, saved)
-        XCTAssertEqual(io.files[repository.dataURL], bytes)
-        XCTAssertEqual(try PindoRepository(directory: directory, io: io).document, saved)
+        XCTAssertEqual(try PindoRepository(directory: directory).document, saved)
     }
 }

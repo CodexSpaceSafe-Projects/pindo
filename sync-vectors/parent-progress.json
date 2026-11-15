@@ -15,7 +15,8 @@
       "createdAt": 1,
       "updatedAt": 1,
       "startedAt": null,
-      "completedAt": null
+      "completedAt": null,
+      "isProgressExplicit": false
     },
     {
       "id": "10000000-0000-4000-8000-000000000002",
@@ -32,7 +33,8 @@
       "createdAt": 1,
       "updatedAt": 1,
       "startedAt": null,
-      "completedAt": null
+      "completedAt": null,
+      "isProgressExplicit": false
     },
     {
       "id": "10000000-0000-4000-8000-000000000003",
@@ -49,7 +51,8 @@
       "createdAt": 1,
       "updatedAt": 10,
       "startedAt": null,
-      "completedAt": 10
+      "completedAt": 10,
+      "isProgressExplicit": false
     },
     {
       "id": "10000000-0000-4000-8000-000000000004",
@@ -66,7 +69,8 @@
       "createdAt": 1,
       "updatedAt": 1,
       "startedAt": null,
-      "completedAt": null
+      "completedAt": null,
+      "isProgressExplicit": false
     },
     {
       "id": "10000000-0000-4000-8000-000000000005",
@@ -83,7 +87,8 @@
       "createdAt": 1,
       "updatedAt": 1,
       "startedAt": null,
-      "completedAt": null
+      "completedAt": null,
+      "isProgressExplicit": false
     }
   ],
   "expectedPhases": {

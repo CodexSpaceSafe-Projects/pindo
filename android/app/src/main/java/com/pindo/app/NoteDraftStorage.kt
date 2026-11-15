@@ -16,7 +16,7 @@ internal interface NoteDraftFiles {
     fun delete(id: String)
 }
 
-/** This directory is below Context.noBackupFilesDir, outside data.json and all exports. */
+/** Drafts stay below Context.noBackupFilesDir and never enter portable exports. */
 internal class AtomicNoteDraftFiles(private val directory: File, private val beforeFinish: () -> Unit = {}) : NoteDraftFiles {
     private fun file(id: String): AtomicFile {
         require(id.matches(DRAFT_ID))

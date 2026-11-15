@@ -1,4 +1,4 @@
-name: Test Cloudflare sync core
+name: Test Cloudflare sync server
 on:
   push:
     branches: ['**']
@@ -10,7 +10,7 @@ concurrency:
   group: cloudflare-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  log-core:
+  server:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -36,7 +36,7 @@ jobs:
           retention-days: 14
   staging-smoke:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: log-core
+    needs: server
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

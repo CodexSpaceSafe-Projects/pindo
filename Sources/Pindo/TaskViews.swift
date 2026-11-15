@@ -16,10 +16,7 @@ struct ErrorBanner: View {
         if let error = model.errorMessage {
             VStack(alignment: .leading, spacing: 7) {
                 Text(error).font(.system(size: 11)).textSelection(.enabled)
-                HStack {
-                    if model.repository.needsRecovery { Button(l10n("重试恢复")) { model.retryRecovery() } }
-                    Button(l10n("关闭提示")) { model.notice = nil }
-                }.font(.system(size: 10))
+                Button(l10n("关闭提示")) { model.notice = nil }.font(.system(size: 10))
             }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.red.opacity(0.09), in: RoundedRectangle(cornerRadius: 7))
                 .padding(.horizontal, 14)

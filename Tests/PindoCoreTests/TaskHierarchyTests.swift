@@ -165,7 +165,7 @@ final class TaskHierarchyTests: XCTestCase {
         let startedChild = document.tasks[1]
         document.tasks[0].phase = .pending
         document.tasks[0].startedAt = nil
-        document.tasks[0].isProgressExplicit = nil
+        document.tasks[0].isProgressExplicit = false
 
         XCTAssertEqual(try document.applyBatch(.setPhase(.inProgress), to: [grandchild], now: now.addingTimeInterval(60)), 1)
         XCTAssertEqual(document.tasks[0].phase, .inProgress)
@@ -173,11 +173,10 @@ final class TaskHierarchyTests: XCTestCase {
         XCTAssertEqual(document.tasks[1], startedChild)
     }
 
-    func testAddingFirstPendingChildKeepsLegacyStartedTaskInProgress() throws {
+    func testAddingFirstPendingChildKeepsManuallyStartedTaskInProgress() throws {
         var document = try tree()
         let index = 4, parent = document.tasks[index].id
-        document.tasks[index].phase = .inProgress
-        document.tasks[index].startedAt = now
+        try document.setPhase(.inProgress, for: parent, now: now)
 
         let child = TodoItem(title: "首个子项", parentID: parent, now: now)
         try document.insertTask(child, now: now.addingTimeInterval(30))
@@ -304,28 +303,25 @@ final class TaskHierarchyTests: XCTestCase {
         for index in [0, 1, 3, 4] { XCTAssertEqual(document.tasks[index], original.tasks[index]) }
     }
 
-    func testLegacyFlatDataAndHierarchySnapshotRestorationAndWriteFailure() throws {
-        var flat = PindoDocument()
-        flat.tasks = [TodoItem(title: "旧事项", now: now)]
-        let data = try DocumentCodec.encode(flat)
-        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("parentID"))
-        XCTAssertEqual(try DocumentCodec.decode(PindoDocument.self, from: data).validated(), flat)
-        XCTAssertEqual(try PindoDocument.fromSnapshot(flat.snapshotValue()), flat)
-
-        let document = try tree(), io = MemoryStorage()
-        let directory = URL(fileURLWithPath: "/tmp/pindo-hierarchy-\(UUID().uuidString)")
-        let repository = try PindoRepository(directory: directory, io: io, now: now)
+    func testHierarchySnapshotRestorationAndCommitFailure() throws {
+        let document = try tree()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = try PindoRepository(directory: directory, now: now)
         try repository.update { $0 = document }
         _ = try repository.captureIfChanged(now: now)
         let target = repository.archive.records.last!.id
         try repository.update { try $0.moveTask(document.tasks[1].id, toParent: document.tasks[4].id, now: now.addingTimeInterval(30)) }
-        let moved = repository.document, bytes = io.files[repository.dataURL]
-        io.failNextWriteTo = repository.dataURL
+        let moved = repository.document, database = repository.sqlite.database
+        database.beforeCommit = { [weak database] in
+            database?.beforeCommit = nil
+            throw CocoaError(.fileWriteNoPermission)
+        }
         XCTAssertThrowsError(try repository.update { try $0.moveTask(document.tasks[1].id, toParent: nil) })
         XCTAssertEqual(repository.document, moved)
-        XCTAssertEqual(io.files[repository.dataURL], bytes)
+        XCTAssertEqual(try repository.sqlite.readDocument(), moved)
         try repository.restore(snapshotID: target, now: now.addingTimeInterval(60))
         XCTAssertEqual(repository.document, document)
-        XCTAssertEqual(try PindoRepository(directory: directory, io: io, now: now).document, document)
+        XCTAssertEqual(try PindoRepository(directory: directory, now: now).document, document)
     }
 }

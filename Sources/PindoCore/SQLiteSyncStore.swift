@@ -27,8 +27,8 @@ public struct SyncV3Chunk: Codable, Equatable, Sendable {
 }
 public struct SyncV3Anchor: Codable, Equatable, Sendable { public var batchID: String; public var revision: Int64; public var digest: String }
 
-/// The sole document authority when enabled. JSON is an import/recovery source,
-/// never a second writer. Notes and field registers have separate SQLite rows.
+/// The document authority. Notes, snapshots and sync state are committed in one
+/// database; changing a title never rewrites unrelated notes.
 public final class SQLiteSyncStore {
     public let database: SQLiteDatabase
     public let actor = UUID().uuidString.lowercased()
@@ -40,7 +40,7 @@ public final class SQLiteSyncStore {
             for sql in [
                 "CREATE TABLE IF NOT EXISTS app_meta(key TEXT PRIMARY KEY,value BLOB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS app_entities(kind TEXT NOT NULL,id TEXT NOT NULL,position INTEGER NOT NULL,data BLOB NOT NULL,note BLOB,PRIMARY KEY(kind,id))",
-                "CREATE TABLE IF NOT EXISTS v3_vaults(channel TEXT PRIMARY KEY,epoch TEXT NOT NULL,fetch_cursor INTEGER NOT NULL DEFAULT 0,apply_cursor INTEGER NOT NULL DEFAULT 0,anchor BLOB,pending_checkpoint BLOB,checkpoint_applied TEXT)",
+                "CREATE TABLE IF NOT EXISTS v3_vaults(channel TEXT PRIMARY KEY,epoch TEXT NOT NULL,fetch_cursor INTEGER NOT NULL DEFAULT 0,apply_cursor INTEGER NOT NULL DEFAULT 0,anchor BLOB,checkpoint_applied TEXT)",
                 "CREATE TABLE IF NOT EXISTS v3_records(channel TEXT NOT NULL,layer TEXT NOT NULL,key TEXT NOT NULL,field TEXT NOT NULL,data BLOB NOT NULL,PRIMARY KEY(channel,layer,key,field))",
                 "CREATE TABLE IF NOT EXISTS v3_seen(channel TEXT NOT NULL,layer TEXT NOT NULL,actor TEXT NOT NULL,counter INTEGER NOT NULL,PRIMARY KEY(channel,layer,actor))",
                 "CREATE TABLE IF NOT EXISTS v3_queue(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,channel TEXT NOT NULL,epoch TEXT NOT NULL,plain BLOB NOT NULL,wire BLOB,digest TEXT,receipt INTEGER)",
@@ -65,7 +65,8 @@ public final class SQLiteSyncStore {
         else { try database.execute("DELETE FROM app_meta WHERE key=?", [.text(key)]) }
     }
     public func initialize(_ document: PindoDocument) throws {
-        try database.transaction { if try !initialized { try saveEntities(document, previous: nil); try put("json-migration-committed", key: "migration") } }
+        _ = try document.validated()
+        try database.transaction { if try !initialized { try saveEntities(document, previous: nil) } }
         _ = try readDocument().validated()
     }
     public func readDocument() throws -> PindoDocument {
@@ -73,7 +74,8 @@ public final class SQLiteSyncStore {
         guard var result = try value(PindoDocument.self, key: "document") else { throw PindoError.corruptFile("pindo.sqlite") }
         result.tasks = try database.query("SELECT data,note FROM app_entities WHERE kind='task' ORDER BY position,id").map {
             var task = try DocumentCodec.decode(TodoItem.self, from: $0["data"]!)
-            task.note = String(data: $0["note"] ?? Data(), encoding: .utf8) ?? ""
+            guard let note = $0["note"], let text = String(data: note, encoding: .utf8) else { throw PindoError.corruptFile("pindo.sqlite") }
+            task.note = text
             return task
         }
         result.groups = try database.query("SELECT data FROM app_entities WHERE kind='group' ORDER BY position,id").map { try DocumentCodec.decode(TaskGroup.self, from: $0["data"]!) }
@@ -102,10 +104,11 @@ public final class SQLiteSyncStore {
         }
         if previous == nil || shell(previous!) != shell(document) { try put(shell(document), key: "document") }
     }
-    public func commit(_ next: PindoDocument, previous: PindoDocument, capture: Bool = true, recoveryArchive: SnapshotArchive? = nil) throws {
+    public func commit(_ next: PindoDocument, previous: PindoDocument?, archive: SnapshotArchive? = nil) throws {
         lock.lock(); defer { lock.unlock() }
+        _ = try next.validated()
         try database.transaction {
-            if capture, let b = try binding, next.tasks != previous.tasks || next.groups != previous.groups {
+            if let previous, let b = try binding, next.tasks != previous.tasks || next.groups != previous.groups {
                 let known = Set(try database.query("SELECT key FROM v3_records WHERE channel=? AND layer='optimistic' AND field='$alive'", [.text(b.channel)]).compactMap { $0["key"].flatMap { String(data: $0, encoding: .utf8) } })
                 let maxClock = Int64(try database.string("SELECT COALESCE(MAX(counter),0) FROM v3_seen WHERE channel=?", [.text(b.channel)]) ?? "0") ?? 0
                 guard maxClock < SyncV3.maximumCounter else { throw SyncV3ApplyError.capacity }
@@ -122,11 +125,19 @@ public final class SQLiteSyncStore {
                 }
             }
             try saveEntities(next, previous: previous)
-            if let recoveryArchive { try put(recoveryArchive, key: "pending_backup") }
+            if let archive { _ = try archive.validated(); try put(archive, key: "archive") }
         }
     }
-    public func completeBackupRecovery() throws { try put(Optional<String>.none, key: "pending_backup") }
-    public func pendingBackup() throws -> SnapshotArchive? { try value(SnapshotArchive.self, key: "pending_backup") }
+    public func readArchive() throws -> SnapshotArchive? {
+        try value(SnapshotArchive.self, key: "archive").map { try $0.validated() }
+    }
+    public func saveArchive(_ archive: SnapshotArchive) throws {
+        _ = try archive.validated()
+        try database.transaction { try put(archive, key: "archive") }
+    }
+    public func archiveData() throws -> Data? {
+        try database.query("SELECT value FROM app_meta WHERE key='archive'").first?["value"]
+    }
     private func recordValue<T: Encodable>(_ value: T, binding: SyncV3Binding, layer: String, key: String, field: String) throws {
         try database.execute("INSERT OR REPLACE INTO v3_records VALUES(?,?,?,?,?)", [.text(binding.channel), .text(layer), .text(key), .text(field), .bytes(try DocumentCodec.encode(value))])
     }
@@ -171,15 +182,14 @@ public final class SQLiteSyncStore {
             if !exists {
                 let count = Int(try database.string("SELECT COUNT(*) FROM v3_vaults") ?? "0") ?? 0
                 guard count < 8 else { throw SyncV3Error.quotaUnavailable }
-                if try binding == nil { try put(original, key: "unbound_source") }
                 try database.execute("INSERT INTO v3_vaults(channel,epoch) VALUES(?,?)", [.text(b.channel), .text(b.epoch)])
                 if importingLocal {
-                    var legacy = try binding == nil ? (original.syncState?.upgraded() ?? SyncReplica(version: 2)) : SyncReplica(version: 2)
-                    // Reconcile visible offline edits once while retaining legacy provenance.
-                    try legacy.rotateActor(); try legacy.capture(tasks: original.tasks, groups: original.groups)
-                    if !legacy.payload.records.isEmpty {
-                        try enqueue(.init(baseline: legacy.payload), binding: b)
-                        try saveState(legacy.payload, previous: SyncPayload(version: 2), binding: b, layer: "optimistic")
+                    var empty = original; empty.tasks = []; empty.groups = []
+                    let batch = try SyncV3Delta.capture(before: empty, after: original, actor: actor, clock: 1, known: []) { _ in [] }
+                    if !batch.operations.isEmpty {
+                        let state = try SyncPayload().applyingV3(batch)
+                        try enqueue(batch, binding: b)
+                        try saveState(state, previous: SyncPayload(), binding: b, layer: "optimistic")
                     }
                 }
             }
@@ -192,8 +202,6 @@ public final class SQLiteSyncStore {
             try saveEntities(document, previous: original)
         }
     }
-    // Pausing transport retains the binding so offline edits remain in this vault.
-    public func disconnect() throws {}
     public func cursors(_ b: SyncV3Binding) throws -> (fetched: Int64, applied: Int64) {
         let r = try database.query("SELECT fetch_cursor,apply_cursor FROM v3_vaults WHERE channel=? AND epoch=?", [.text(b.channel), .text(b.epoch)]).first
         guard let r else { throw SyncV3Error.epochMismatch }
@@ -300,7 +308,7 @@ public final class SQLiteSyncStore {
             try database.execute("DELETE FROM v3_records WHERE channel=? AND layer='confirmed'", [.text(old.channel)])
             try database.execute("DELETE FROM v3_seen WHERE channel=? AND layer='confirmed'", [.text(old.channel)])
             try database.execute("DELETE FROM v3_inbox WHERE channel=?", [.text(old.channel)])
-            try database.execute("UPDATE v3_vaults SET epoch=?,fetch_cursor=0,apply_cursor=0,anchor=NULL,pending_checkpoint=NULL,checkpoint_applied=NULL WHERE channel=?", [.text(epoch), .text(old.channel)])
+            try database.execute("UPDATE v3_vaults SET epoch=?,fetch_cursor=0,apply_cursor=0,anchor=NULL,checkpoint_applied=NULL WHERE channel=?", [.text(epoch), .text(old.channel)])
             if !optimistic.records.isEmpty { try enqueue(.init(baseline: optimistic), binding: next) }
             try put(next, key: "active_v3")
         }
