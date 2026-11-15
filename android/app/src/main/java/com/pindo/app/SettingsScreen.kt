@@ -21,6 +21,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.core.content.pm.PackageInfoCompat
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -35,6 +37,7 @@ import java.time.LocalDate
 @Composable internal fun AppSettingsScreen(store: AppStore, state: AppState, onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val installedPackage = remember(context) { context.packageManager.getPackageInfo(context.packageName, 0) }
     var cloudOpen by rememberSaveable { mutableStateOf(false) }
     var groupsOpen by rememberSaveable { mutableStateOf(false) }
     var defaultMenu by remember { mutableStateOf(false) }
@@ -95,8 +98,8 @@ import java.time.LocalDate
                         Icon(Icons.Outlined.Security, null, Modifier.padding(13.dp).size(26.dp), tint = MaterialTheme.colorScheme.primary)
                     }
                     Column(Modifier.weight(1f).padding(start = 14.dp)) {
-                        Text(if (state.syncEnabled) "已连接加密同步" else "安心记录，本地优先", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                        Text(if (state.syncEnabled) state.syncStatus else "离线也能随时记录和管理", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(when { state.syncEnabled -> "已连接加密同步"; state.syncing -> "正在连接加密同步"; state.syncStatus.contains("失败") -> "同步连接失败"; else -> "安心记录，本地优先" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text(state.syncStatus, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
@@ -133,7 +136,7 @@ import java.time.LocalDate
             SettingsRow(Icons.Outlined.Folder, "分组管理", "名称、颜色与事项数量") { groupsOpen = true }
         }
         SettingsSection("数据与同步") {
-            SettingsRow(Icons.Outlined.CloudSync, "云同步", "Cloudflare 同步正在开发 · 仅本机保存") { cloudOpen = true }
+            SettingsRow(Icons.Outlined.CloudSync, "云同步", state.syncStatus) { cloudOpen = true }
             HorizontalDivider(Modifier.padding(horizontal = 16.dp))
             SettingsRow(Icons.Outlined.FileDownload, "导出资料", "保存待办、分组与 Markdown 备注", !busy && !state.readOnly) { export.launch("Pindo-${LocalDate.now()}.json") }
             HorizontalDivider(Modifier.padding(horizontal = 16.dp))
@@ -142,6 +145,8 @@ import java.time.LocalDate
             SettingsRow(Icons.Outlined.Restore, "恢复上次导入前的资料", if (state.hasLocalBackup) "已保留一份本机保护备份" else "导入资料时会自动建立保护备份", state.hasLocalBackup && !busy && !state.readOnly) { restoring = true }
         }
         Text("导出文件为明文，请自行保管；同步凭据和恢复密钥不会导出。导入会替换当前清单，并自动保留操作前的本机备份。", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+        Text("版本 ${installedPackage.versionName ?: "未知"} (${PackageInfoCompat.getLongVersionCode(installedPackage)})",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         (message ?: state.error)?.let { text ->
             Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(14.dp)) {
@@ -218,10 +223,14 @@ import java.time.LocalDate
     var invite by remember { mutableStateOf("") }
     val context=LocalContext.current
     val sync=store.sync
+    LaunchedEffect(state.syncEnabled) {
+        if (state.syncEnabled) { invite=""; secret="" }
+    }
     Scaffold(topBar = { TopAppBar(title = { Text("云同步") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Outlined.ArrowBack, "返回设置") } }) }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
             Text("Cloudflare 加密同步", style = MaterialTheme.typography.titleLarge)
-            Text(state.syncStatus)
+            Text(state.syncStatus, Modifier.testTag("sync-status"))
+            if (state.syncing) LinearProgressIndicator(Modifier.fillMaxWidth())
             Text("离线修改会保存在本机。配对信息包含恢复密钥，请仅通过可信渠道传给自己的设备。", color=MaterialTheme.colorScheme.onSurfaceVariant)
             if (state.syncEnabled) {
                 Button(onClick={sync.sync()},enabled=!state.syncing){Text("立即同步")}
@@ -242,13 +251,13 @@ import java.time.LocalDate
             } else {
                 if(sync.active!=null||sync.pending) Button(onClick={sync.reconnect()},enabled=!state.syncing){Text("继续同步")}
                 Text("加入已有同步库",style=MaterialTheme.typography.titleMedium)
-                OutlinedTextField(invite,{invite=it},label={Text("粘贴设备配对信息")},modifier=Modifier.fillMaxWidth(),visualTransformation=androidx.compose.ui.text.input.PasswordVisualTransformation())
-                Button(onClick={sync.join(invite);invite=""},enabled=!state.syncing&&invite.isNotBlank()){Text("连接并合并本机资料")}
+                OutlinedTextField(invite,{invite=it},label={Text("粘贴设备配对信息")},modifier=Modifier.fillMaxWidth().testTag("sync-invitation"),visualTransformation=androidx.compose.ui.text.input.PasswordVisualTransformation())
+                Button(onClick={sync.join(invite)},enabled=!state.syncing&&!state.readOnly&&invite.isNotBlank(),modifier=Modifier.testTag("sync-join")){Text("连接并合并本机资料")}
                 HorizontalDivider()
                 Text("首次初始化服务",style=MaterialTheme.typography.titleMedium)
                 OutlinedTextField(endpoint,{endpoint=it},label={Text("服务地址")},modifier=Modifier.fillMaxWidth(),singleLine=true)
                 OutlinedTextField(secret,{secret=it},label={Text("服务初始化密钥")},modifier=Modifier.fillMaxWidth(),singleLine=true,visualTransformation=androidx.compose.ui.text.input.PasswordVisualTransformation())
-                Button(onClick={sync.create(endpoint.trim(),secret);secret=""},enabled=!state.syncing&&secret.isNotBlank()){Text("创建加密同步库")}
+                Button(onClick={sync.create(endpoint.trim(),secret)},enabled=!state.syncing&&!state.readOnly&&secret.isNotBlank()){Text("创建加密同步库")}
             }
         }
     }

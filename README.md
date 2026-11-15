@@ -13,6 +13,8 @@
 
 macOS 最低 14，支持 Apple Silicon 和 Intel。解压后将 `Pindo.app` 移到 `/Applications`；应用出现在菜单栏，可在设置中开启登录启动。当前使用临时签名，尚未配置 Developer ID 与公证。Android 最低 8.0（API 26），下载附件 `Pindo-Android-debug.apk`；当前安装包使用调试签名。
 
+Android 的 CI 测试包版本包含构建号与提交短 SHA，可在设置底部核对；本地构建标为 `local`。不同测试包的调试签名可能不同；覆盖安装受阻时请保留原应用和资料，不要通过卸载或清除数据排查同步问题。
+
 ## 本地构建
 
 macOS 安装 Xcode 15+ 或 Command Line Tools：

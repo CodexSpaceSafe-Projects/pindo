@@ -25,13 +25,18 @@ internal class DocumentStorage(context: Context) {
     fun write(document: JSONObject) = sqlite.write(document)
 }
 
+internal interface V3JournalStorage {
+    fun readJournal(): JSONObject?
+    fun writeJournal(journal: JSONObject)
+}
+
 /** The current connection journal is encrypted by a device-bound Keystore key. */
-internal class V3SecretStorage(context: Context) {
+internal class V3SecretStorage(context: Context) : V3JournalStorage {
     private val file = AtomicFile(File(context.noBackupFilesDir, "sync-v3-secrets.json"))
     private val alias = "com.pindo.app.sync.credentials.v3"
     private val aad = "Pindo/AndroidSecrets/v3".toByteArray()
 
-    fun readJournal(): JSONObject? {
+    override fun readJournal(): JSONObject? {
         if (!file.baseFile.exists() && !File(file.baseFile.path + ".bak").exists()) return null
         val envelope = file.openRead().use { JSONObject(it.readBytes().toString(Charsets.UTF_8)) }
         require(envelope.getInt("version") == 1) { "不支持的凭据格式。" }
@@ -41,7 +46,7 @@ internal class V3SecretStorage(context: Context) {
         return JSONObject(cipher.doFinal(Base64.decode(envelope.getString("ciphertext"), Base64.NO_WRAP)).toString(Charsets.UTF_8))
     }
 
-    fun writeJournal(journal: JSONObject) {
+    override fun writeJournal(journal: JSONObject) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key(create = true))
         cipher.updateAAD(aad)

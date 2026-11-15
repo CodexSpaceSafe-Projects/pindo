@@ -4,6 +4,25 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Distributed test APKs identify their exact build; local builds remain explicit.
+val buildNumberInput = providers.environmentVariable("PINDO_BUILD_NUMBER").orNull
+val commitInput = providers.environmentVariable("PINDO_COMMIT_SHA").orNull
+require((buildNumberInput == null) == (commitInput == null)) {
+    "PINDO_BUILD_NUMBER and PINDO_COMMIT_SHA must be provided together."
+}
+val distributionBuild = buildNumberInput?.let { value ->
+    val number = value.toIntOrNull()
+    require(value.matches(Regex("[1-9][0-9]*")) && number != null && number <= 2_099_999_000) {
+        "PINDO_BUILD_NUMBER must be a positive integer no greater than 2099999000."
+    }
+    number
+}
+val sourceRevision = commitInput?.also { value ->
+    require(value.matches(Regex("[0-9a-fA-F]{7,40}"))) {
+        "PINDO_COMMIT_SHA must contain 7 to 40 hexadecimal characters."
+    }
+}?.lowercase()
+
 android {
     namespace = "com.pindo.app"
     compileSdk = 35
@@ -11,8 +30,8 @@ android {
         applicationId = "com.pindo.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 1000 + (distributionBuild ?: 0)
+        versionName = distributionBuild?.let { "0.3.0-build$it.${sourceRevision!!.take(7)}" } ?: "0.3.0-local"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     compileOptions {

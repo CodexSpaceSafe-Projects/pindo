@@ -50,9 +50,9 @@ import java.util.Locale
 }
 
 @Composable internal fun PindoSyncChip(state: AppState, onClick: () -> Unit) {
-    val icon = when { state.syncing -> Icons.Outlined.Sync; !state.syncEnabled -> Icons.Outlined.CloudOff
-        state.syncStatus.contains("失败") -> Icons.Outlined.CloudOff; else -> Icons.Outlined.CloudDone }
-    val label = when { state.syncing -> "同步中"; !state.syncEnabled -> "本机保存"; state.syncStatus.contains("失败") -> "同步失败"; else -> "云同步" }
+    val icon = when { state.syncing -> Icons.Outlined.Sync; state.syncStatus.contains("失败") -> Icons.Outlined.CloudOff
+        !state.syncEnabled -> Icons.Outlined.CloudOff; else -> Icons.Outlined.CloudDone }
+    val label = when { state.syncing -> "同步中"; state.syncStatus.contains("失败") -> "同步失败"; !state.syncEnabled -> "本机保存"; else -> "云同步" }
     Surface(onClick = onClick, shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
         Row(Modifier.padding(horizontal = 10.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(5.dp)) {

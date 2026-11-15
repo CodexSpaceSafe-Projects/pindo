@@ -48,6 +48,8 @@ jobs:
       - name: Unit tests, lint and debug APK
         env:
           PINDO_SYNC_TEST_ENDPOINT: http://127.0.0.1:8787
+          PINDO_BUILD_NUMBER: ${{ github.run_number }}
+          PINDO_COMMIT_SHA: ${{ github.sha }}
         run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug
       - uses: actions/upload-artifact@v6
         with:

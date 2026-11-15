@@ -3,6 +3,8 @@ package com.pindo.app
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.pindo.app.sync.V3Transport
+import com.pindo.app.sync.V3HTTP
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONArray
@@ -28,6 +30,13 @@ class AppStore(application: Application) : AndroidViewModel(application) {
     private val editingLeases = mutableSetOf<String>()
     private var foreground = false
     private var uiReady = false
+    private var injectedSyncSecrets: V3JournalStorage? = null
+    private var syncTransport: (String) -> V3Transport = { V3HTTP(it) }
+
+    internal constructor(application: Application, secrets: V3JournalStorage, transport: (String) -> V3Transport) : this(application) {
+        injectedSyncSecrets = secrets
+        syncTransport = transport
+    }
 
     init {
         try {
@@ -39,9 +48,9 @@ class AppStore(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    internal val sync by lazy { SyncCoordinator(storage.sqlite, V3SecretStorage(getApplication()), viewModelScope,
+    internal val sync by lazy { SyncCoordinator(storage.sqlite, injectedSyncSecrets ?: V3SecretStorage(getApplication()), viewModelScope,
         { networkUiReady() && !state.value.readOnly }, { document=storage.sqlite.read();publish() },
-        { enabled,busy,text -> mutable.value=state.value.copy(syncEnabled=enabled,syncing=busy,syncStatus=text) }) }
+        { enabled,busy,text -> mutable.value=state.value.copy(syncEnabled=enabled,syncing=busy,syncStatus=text) }, syncTransport) }
 
     fun dismissError() { if (!state.value.readOnly) mutable.value = state.value.copy(error = null) }
     internal fun noteDraftHandle(): NoteDraftHandle = NoteDraftHandle(noteDraftFiles)
@@ -168,7 +177,7 @@ class AppStore(application: Application) : AndroidViewModel(application) {
         foreground = true; uiReady = false
         mutable.value = state.value.copy(lifecycleRevision = state.value.lifecycleRevision + 1)
     }
-    fun markUiReady() { if (foreground) { uiReady = true; sync.foreground() } }
+    fun markUiReady() { if (foreground && !uiReady) { uiReady = true; sync.foreground() } }
     internal fun networkUiReady(): Boolean = foreground && uiReady && editingLeases.isEmpty()
     fun stopForeground() { foreground = false; uiReady = false; sync.background() }
     fun beginEditing(): String = UUID.randomUUID().toString().also { editingLeases.add(it);sync.pause() }
