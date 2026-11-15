@@ -16,15 +16,64 @@ macOS 面板使用非激活、可调整尺寸的原生窗口；置顶控制隐�
 
 应用文案同步维护中英文资源，第三方编辑器许可随包附带。音效离线打包，每次成功操作按需播放并释放。
 
-## 同步与部署
+## 同步与服务端
 
 客户端使用 AES-256-GCM 和系统安全随机数，密钥及设备凭据进入 Keychain / Keystore。服务端只保存密文和必要元数据。库身份由稳定的 `serviceID`、`vaultID` 确定，地址和令牌不作为库身份。字段使用逻辑时钟，生命周期原子更新，备注保留因果并发版本，删除保留墓碑。
 
 本地操作与持久发件箱一同提交；重试复用冻结的字节，回执不推进下载游标。下载先持久化再原子应用，分别维护 fetched / applied 游标。大操作通过不可变分块和认证清单整体应用。检查点只覆盖已应用连续前缀，发布前验证分块，保留两个检查点及所需尾日志；读取租约阻止过早回收。回执、墓碑和备注因果上下文不得按 TTL 删除。
 
-Cloudflare 资源标识与服务地址以 `backend/cloudflare/deployments/staging.json` 为准，部署配置为 `cloudflare.config.ts`。全新 D1 使用 `migrations/0001_schema.sql` 初始化，不能把该完整 schema 当增量套用到已有数据库。服务要求独立的 `BOOTSTRAP_SECRET` 和 `RECOVERY_SECRET` secret bindings；首次客户端使用初始化密钥创建库，其他设备通过 10 分钟一次性配对加入。生成包不含密钥，输出到忽略的 `work/cloudflare-staging/`，记录源码提交、未提交状态和 bundle 摘要。禁止提交凭据或将本地测试服务器部署到公网。
+服务端是 TypeScript Worker，通过 D1 binding `DB` 访问数据库；运行于 Cloudflare Workers，Node.js 22 仅用于构建和测试。D1 共 12 张表，保存资料库与设备身份、令牌哈希、密文日志、回执、分块、检查点、配对和读取租约。任务业务规则、解密与冲突合并在客户端执行；当前没有 R2、Durable Objects、WebSocket 或后台 Cron。
 
-管理员恢复须先进入维护模式，再轮换 epoch：`POST /v3/admin/maintenance` 传 `{vaultID, enabled:true}`，`POST /v3/admin/recover` 传 `{vaultID, epoch:新UUID}`，使用恢复密钥作为 Bearer。D1 时间点恢复同样需要轮换 epoch；客户端保留未确认操作，恢复后重新提交。公共 `/health` 只证明服务健康，不证明客户端同步正确。
+入口为 [`src/index.ts`](backend/cloudflare/src/index.ts)；[`src/v3/devices.ts`](backend/cloudflare/src/v3/devices.ts) 负责建库、配对和设备管理，[`src/v3/history.ts`](backend/cloudflare/src/v3/history.ts) 负责分块、检查点、租约和 GC。HTTP API 包括 `/health`、`/v3/bootstrap`，以及 `/v3/vaults/<vaultID>/` 下的 `info`、`push`、`pull`、`receipts/<batchID>`、`pairings`、`devices`、`artifacts/<digest>`、`checkpoints`、`leases/<id>` 和 `gc`。
+
+每个服务仅允许首次创建一个资料库，适合个人部署后连接多台设备，尚无多用户注册。首次设备以 `BOOTSTRAP_SECRET` 建库；已有设备生成 10 分钟有效的一次性邀请供新设备加入。设备使用独立 Bearer token，D1 保存其 SHA-256 哈希，支持撤销与轮换。端到端数据加密密钥只在客户端持有。
+
+## Cloudflare 部署
+
+配置入口为 [`backend/cloudflare/cloudflare.config.ts`](backend/cloudflare/cloudflare.config.ts)，使用锁定版本的 Cloudflare CLI `cf` 生成类型，不使用 Wrangler 配置。当前支持 `development`、`staging`；发布包由现有 esbuild 脚本读取 `staging.json` 生成，再通过 Workers API 上传。项目尚未安装 `cf deploy` 所需的默认构建实现，不能直接用 `npx cf deploy` 发布，也不能把本项目的包传给 `cf deploy --prebuilt`。若增加正式环境，应先加入独立配置、数据库和 Secret。
+
+### 首次部署
+
+1. 在 Cloudflare 控制台创建空 D1 数据库，进入该数据库的 Console，执行 [`migrations/0001_schema.sql`](backend/cloudflare/migrations/0001_schema.sql) 全文一次。它是完整初始化 schema，不是已有数据库的升级脚本。
+2. 在 Workers & Pages 中创建 Worker，名称与下一步填写的 `workerName` 一致，先发布控制台的占位示例。在该 Worker 的 Settings → Variables and Secrets 中，将 `BOOTSTRAP_SECRET`、`RECOVERY_SECRET` 添加为 **Secret**，分别使用独立随机值。前者供首台设备初始化资料库；后者仅用于管理员维护与灾备，不是客户端的内容加密密钥。先建立 Worker 和 Secret，才能在后续上传时继承它们。
+3. 编辑 [`deployments/staging.json`](backend/cloudflare/deployments/staging.json)，填写自己的 `accountId`、`workerName`、`databaseId`、`databaseName`、`endpoint` 和 `serviceID`。`serviceID` 使用新生成的 UUID，一旦建库便保持稳定；若改变域名，也要更新 `endpoint`。`endpoint`、`databaseRegion` 是配置记录，不会自动创建域名或改变数据库区域。
+4. 使用 Node.js 22，在仓库根目录执行验证和打包：
+
+   ```sh
+   cd backend/cloudflare
+   npm ci
+   npm run types
+   npm run typecheck
+   npm test
+   npm run build:staging
+   ```
+
+5. 准备有目标账号 **Workers Scripts Write** 权限的 API token，在终端中设置 `CLOUDFLARE_API_TOKEN` 环境变量；不要写进仓库。在上一步的 `backend/cloudflare/` 目录继续执行：
+
+   ```sh
+   cd ../..
+   PINDO_CF_ACCOUNT_ID="$(node -p "require('./backend/cloudflare/deployments/staging.json').accountId")"
+   PINDO_CF_WORKER_NAME="$(node -p "require('./backend/cloudflare/deployments/staging.json').workerName")"
+   curl --fail-with-body --request PUT \
+     "https://api.cloudflare.com/client/v4/accounts/${PINDO_CF_ACCOUNT_ID}/workers/scripts/${PINDO_CF_WORKER_NAME}?bindings_inherit=strict" \
+     --header "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+     --form 'metadata=@work/cloudflare-staging/metadata.json;type=application/json' \
+     --form 'worker.mjs=@work/cloudflare-staging/worker.mjs;type=application/javascript+module'
+   ```
+
+   该请求上传并部署模块 Worker，同时绑定 D1 为 `DB`，设置 `SERVICE_ID`、`SYNC_ENABLED=true`，继承目标 Worker 已有的两个 Secret。`bindings_inherit=strict` 会在 Secret 缺失时拒绝上传，避免静默丢失绑定。确认响应 `success:true`；请求格式见 [Workers Upload Worker API](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/methods/update/)。
+
+6. 在 Worker 的 Domains & Routes 中确认 `workers.dev` 地址或配置自定义域名，与 `endpoint` 一致。检查 `<endpoint>/health` 返回 200、正确 `serviceID` 和同步能力；未带设备令牌访问资料 API 应返回 401。然后在首台客户端填写服务地址和 `BOOTSTRAP_SECRET` 建库，生成邀请让另一台设备加入，实际验证新增事项、备注修改和离线重连。公共健康检查不代表双端同步已验收。
+
+### 更新已有服务与构建包
+
+更新已有 Worker 时，保留原 D1、`serviceID` 和 Secret，按上面的步骤 4–6 重新验证、打包、上传并检查结果。不要重新执行初始化 SQL，也不要通过重置 `service_state.bootstrapped` 创建第二个资料库。
+
+`npm run build:staging` 只把 `worker.mjs`、`metadata.json`、`build.json` 写到仓库根目录的 `work/cloudflare-staging/`，不执行部署。构建记录包含 `sourceRevision`、`sourceDirty` 和 bundle SHA-256；其中 metadata 继承目标 Worker 已有 Secret，首次部署不能仅靠该构建包创建 Secret。它是手动 API 上传用的包，不是 `cf deploy --prebuilt` 的 Build Output。
+
+[服务端 CI](.github/workflows/cloudflare.yml) 运行测试、生成并上传 `Pindo-Cloudflare-server` artifact，并对现有 staging 探活；**没有自动部署步骤**。GitHub 构建成功、客户端 Release 发布或 `/health` 正常，都不表示最新源码已经上线。每次发布后应在 Cloudflare 的部署记录确认当前生效版本，并核对发布提交；手动上传构建包时还可核对 annotation 中的源码提交与 bundle 摘要。文档不固定记录某次线上提交，以部署记录为准。
+
+管理员恢复须先进入维护模式，再轮换 epoch：`POST /v3/admin/maintenance` 传 `{vaultID, enabled:true}`，`POST /v3/admin/recover` 传 `{vaultID, epoch:新UUID}`，使用服务端 `RECOVERY_SECRET` 作为 Bearer。D1 时间点恢复同样需要轮换 epoch；客户端保留未确认操作，恢复后重新提交。
 
 ## 验证
 
