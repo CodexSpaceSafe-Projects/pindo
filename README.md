@@ -57,6 +57,6 @@ flowchart LR
 
 自部署需要创建空 D1、执行初始化 SQL、创建 Worker 并设置两个服务端 Secret，再打包并通过 Cloudflare Workers API 发布。完整步骤、命令及已有服务更新方法见 [Cloudflare 部署说明](DEVELOPMENT.md#cloudflare-部署)。
 
-仓库附带的 staging 地址为 <https://example.com>，资源以 [`staging.json`](backend/cloudflare/deployments/staging.json) 为准。**推送到 GitHub 会自动发布客户端，但不会自动部署 Worker。** 服务端 CI 只测试、生成构建包并检查已有 staging；`npm run build:staging` 也只生成部署包。线上版本应以 Cloudflare 的部署记录为准。
+公开仓库只提供[虚构的配置示例](backend/cloudflare/deployments/staging.example.json)；个人服务地址、账号和数据库标识保存在 Git 忽略的本地配置中，应用也不内置个人服务地址。**推送到 GitHub 会自动发布客户端，但不会自动部署 Worker。** 服务端 CI 仅运行本地验证并生成通用构建包；个人部署包由本机生成，不上传为 CI 附件。线上版本以自己的 Cloudflare 部署记录为准。
 
 源码与验证入口：`Sources/`、`Tests/`、`android/`、`backend/cloudflare/`、`sync-vectors/`。协作规则见 [AGENTS.md](AGENTS.md)。

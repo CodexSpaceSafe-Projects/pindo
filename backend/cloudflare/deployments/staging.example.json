@@ -1,11 +1,11 @@
 {
   "accountId": "YOUR_CLOUDFLARE_ACCOUNT_ID",
-  "workerName": "example-sync",
+  "workerName": "example-sync-worker",
   "endpoint": "https://example.com",
-  "databaseName": "example-sync",
-  "databaseId": "00000000-0000-4000-8000-000000000002",
+  "databaseName": "example-sync-database",
+  "databaseId": "YOUR_D1_DATABASE_UUID",
   "databaseRegion": "YOUR_DATABASE_REGION",
-  "serviceID": "00000000-0000-4000-8000-000000000001",
+  "serviceID": "YOUR_NEW_SERVICE_UUID",
   "compatibilityDate": "2026-11-14",
   "observability": {
     "enabled": true,

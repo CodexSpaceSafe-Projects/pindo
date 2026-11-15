@@ -27,22 +27,13 @@ jobs:
       - run: npm run types
       - run: npm run typecheck
       - run: npm test
-      - run: npm run build:staging
+      - run: npm run build:bundle
       - uses: actions/upload-artifact@v6
         with:
           name: Pindo-Cloudflare-server
-          path: work/cloudflare-staging/
+          path: |
+            work/cloudflare-bundle/worker.mjs
+            backend/cloudflare/deployments/staging.example.json
+            backend/cloudflare/migrations/*.sql
           if-no-files-found: error
           retention-days: 14
-  staging-smoke:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: server
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Verify public staging health and unauthenticated denial
-        run: node scripts/check-cloudflare-staging.mjs

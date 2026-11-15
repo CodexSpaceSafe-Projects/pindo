@@ -1,13 +1,14 @@
 import { build } from 'esbuild';
 import { createHash } from 'node:crypto';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { loadStagingDeployment } from '../deployments/config.mjs';
 
 const directory = fileURLToPath(new URL('../', import.meta.url));
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const output = new URL('../../../work/cloudflare-staging/', import.meta.url);
-const deployment = JSON.parse(await readFile(new URL('../deployments/staging.json', import.meta.url), 'utf8'));
+const deployment = loadStagingDeployment();
 const sourceDirty = Boolean(execFileSync('git', ['status', '--porcelain', '--', 'backend/cloudflare'], {cwd:root,encoding:'utf8'}).trim());
 const sourceRevision = execFileSync('git', ['rev-parse', 'HEAD'], {cwd:root,encoding:'utf8'}).trim();
 const result = await build({
@@ -33,4 +34,4 @@ await mkdir(output,{recursive:true});
 await writeFile(new URL('worker.mjs',output),source);
 await writeFile(new URL('metadata.json',output),JSON.stringify(metadata,null,2)+'\n');
 await writeFile(new URL('build.json',output),JSON.stringify({sourceRevision,sourceDirty,bundleSHA256,endpoint:deployment.endpoint},null,2)+'\n');
-console.log(JSON.stringify({sourceRevision,sourceDirty,bundleSHA256,output:fileURLToPath(output)}));
+console.log('Built private staging package in work/cloudflare-staging/.');

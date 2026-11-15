@@ -9,6 +9,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build:test": "esbuild src/index.ts --bundle --format=esm --platform=neutral --outfile=../../work/cloudflare-worker.mjs",
+    "build:bundle": "esbuild src/index.ts --bundle --format=esm --platform=neutral --target=es2022 --outfile=../../work/cloudflare-bundle/worker.mjs",
     "test": "npm run build:test && node --test test/*.test.mjs",
     "types": "cf workers types --mode development --include-runtime=false",
     "build:staging": "node scripts/prepare-staging.mjs"

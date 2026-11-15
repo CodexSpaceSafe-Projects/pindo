@@ -3,7 +3,7 @@ import SwiftUI
 struct SyncSettings: View {
     @Environment(\.pindoLocalization) private var l10n
     @ObservedObject var controller: CloudSyncController
-    @State private var endpoint="https://example.com"
+    @State private var endpoint=""
     @State private var bootstrapSecret=""
     @State private var pairing=""
     @State private var confirmDisconnect=false
@@ -76,7 +76,7 @@ struct SyncSettings: View {
             }
             DisclosureGroup(l10n("首次初始化自己的服务"),isExpanded:$showCreate){
                 VStack(alignment:.leading,spacing:10){
-                    TextField(l10n("服务地址"),text:$endpoint)
+                    TextField(l10n("服务地址"),text:$endpoint,prompt:Text("https://example.com"))
                     SecureField(l10n("部署者初始化密钥"),text:$bootstrapSecret)
                     Button(l10n("初始化并连接")){controller.create(endpoint:endpoint,bootstrapSecret:bootstrapSecret);bootstrapSecret=""}.disabled(bootstrapSecret.isEmpty||controller.isSyncing)
                     Text(l10n("服务只允许初始化一次。之后的设备通过已有设备配对，不需要部署者密钥。"))

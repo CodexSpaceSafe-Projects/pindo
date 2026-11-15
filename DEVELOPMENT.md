@@ -30,13 +30,21 @@ macOS 面板使用非激活、可调整尺寸的原生窗口；置顶控制隐�
 
 ## Cloudflare 部署
 
-配置入口为 [`backend/cloudflare/cloudflare.config.ts`](backend/cloudflare/cloudflare.config.ts)，使用锁定版本的 Cloudflare CLI `cf` 生成类型，不使用 Wrangler 配置。当前支持 `development`、`staging`；发布包由现有 esbuild 脚本读取 `staging.json` 生成，再通过 Workers API 上传。项目尚未安装 `cf deploy` 所需的默认构建实现，不能直接用 `npx cf deploy` 发布，也不能把本项目的包传给 `cf deploy --prebuilt`。若增加正式环境，应先加入独立配置、数据库和 Secret。
+配置入口为 [`backend/cloudflare/cloudflare.config.ts`](backend/cloudflare/cloudflare.config.ts)，使用锁定版本的 Cloudflare CLI `cf` 生成类型，不使用 Wrangler 配置。公开仓库仅保存[虚构示例](backend/cloudflare/deployments/staging.example.json)，真实配置保存为 Git 忽略的 `backend/cloudflare/deployments/staging.local.json`。开发、类型生成、测试和通用构建无需该私有文件；只有本机 `staging` 配置及私有部署打包会读取它。个人网址、账号、数据库和服务标识不得写入源码、文档或公开附件。
+
+发布包由 esbuild 脚本读取本地配置生成，再通过 Workers API 上传。项目尚未安装 `cf deploy` 所需的默认构建实现，不能直接用 `npx cf deploy` 发布，也不能把本项目的包传给 `cf deploy --prebuilt`。若增加正式环境，应先加入独立本地配置、数据库和 Secret。
 
 ### 首次部署
 
 1. 在 Cloudflare 控制台创建空 D1 数据库，进入该数据库的 Console，依次执行 [0001_schema.sql](backend/cloudflare/migrations/0001_schema.sql) 和 [0002_device_names.sql](backend/cloudflare/migrations/0002_device_names.sql)，各一次。已有数据库只执行尚未应用的增量迁移，不重跑完整初始化 schema。
 2. 在 Workers & Pages 中创建 Worker，名称与下一步填写的 `workerName` 一致，先发布控制台的占位示例。在该 Worker 的 Settings → Variables and Secrets 中，将 `BOOTSTRAP_SECRET`、`RECOVERY_SECRET` 添加为 **Secret**，分别使用独立随机值。前者供首台设备初始化资料库；后者仅用于管理员维护与灾备，不是客户端的内容加密密钥。先建立 Worker 和 Secret，才能在后续上传时继承它们。
-3. 编辑 [`deployments/staging.json`](backend/cloudflare/deployments/staging.json)，填写自己的 `accountId`、`workerName`、`databaseId`、`databaseName`、`endpoint` 和 `serviceID`。`serviceID` 使用新生成的 UUID，一旦建库便保持稳定；若改变域名，也要更新 `endpoint`。`endpoint`、`databaseRegion` 是配置记录，不会自动创建域名或改变数据库区域。
+3. 在仓库根目录复制模板，再仅编辑本地副本，填写自己的 `accountId`、`workerName`、`databaseId`、`databaseName`、`endpoint` 和 `serviceID`：
+
+   ```sh
+   cp backend/cloudflare/deployments/staging.example.json backend/cloudflare/deployments/staging.local.json
+   ```
+
+   `staging.local.json` 已被 Git 忽略，不要强制加入版本控制。`serviceID` 使用新生成的 UUID，一旦建库便保持稳定；若改变域名，也要更新 `endpoint`。`endpoint`、`databaseRegion` 是本地记录，不会自动创建域名或改变数据库区域。
 4. 使用 Node.js 22，在仓库根目录执行验证和打包：
 
    ```sh
@@ -52,8 +60,8 @@ macOS 面板使用非激活、可调整尺寸的原生窗口；置顶控制隐�
 
    ```sh
    cd ../..
-   PINDO_CF_ACCOUNT_ID="$(node -p "require('./backend/cloudflare/deployments/staging.json').accountId")"
-   PINDO_CF_WORKER_NAME="$(node -p "require('./backend/cloudflare/deployments/staging.json').workerName")"
+   PINDO_CF_ACCOUNT_ID="$(node -p "require('./backend/cloudflare/deployments/staging.local.json').accountId")"
+   PINDO_CF_WORKER_NAME="$(node -p "require('./backend/cloudflare/deployments/staging.local.json').workerName")"
    curl --fail-with-body --request PUT \
      "https://api.cloudflare.com/client/v4/accounts/${PINDO_CF_ACCOUNT_ID}/workers/scripts/${PINDO_CF_WORKER_NAME}?bindings_inherit=strict" \
      --header "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
@@ -69,9 +77,9 @@ macOS 面板使用非激活、可调整尺寸的原生窗口；置顶控制隐�
 
 更新已有 Worker 时，保留原 D1、`serviceID` 和 Secret，按上面的步骤 4–6 重新验证、打包、上传并检查结果。不要重新执行初始化 SQL，也不要通过重置 `service_state.bootstrapped` 创建第二个资料库。
 
-`npm run build:staging` 只把 `worker.mjs`、`metadata.json`、`build.json` 写到仓库根目录的 `work/cloudflare-staging/`，不执行部署。构建记录包含 `sourceRevision`、`sourceDirty` 和 bundle SHA-256；其中 metadata 继承目标 Worker 已有 Secret，首次部署不能仅靠该构建包创建 Secret。它是手动 API 上传用的包，不是 `cf deploy --prebuilt` 的 Build Output。
+`npm run build:staging` 只把 `worker.mjs`、`metadata.json`、`build.json` 写到仓库根目录被忽略的 `work/cloudflare-staging/`，不执行部署。该包包含个人部署标识和端点，只在本机使用，不上传到 GitHub、Release 或 CI 附件。构建记录包含 `sourceRevision`、`sourceDirty` 和 bundle SHA-256；其中 metadata 继承目标 Worker 已有 Secret，首次部署不能仅靠该构建包创建 Secret。它是手动 API 上传用的包，不是 `cf deploy --prebuilt` 的 Build Output。
 
-[服务端 CI](.github/workflows/cloudflare.yml) 运行测试、生成并上传 `Pindo-Cloudflare-server` artifact，并对现有 staging 探活；**没有自动部署步骤**。GitHub 构建成功、客户端 Release 发布或 `/health` 正常，都不表示最新源码已经上线。每次发布后应在 Cloudflare 的部署记录确认当前生效版本，并核对发布提交；手动上传构建包时还可核对 annotation 中的源码提交与 bundle 摘要。文档不固定记录某次线上提交，以部署记录为准。
+[服务端 CI](.github/workflows/cloudflare.yml) 无需个人配置，运行本地 Worker / D1 测试与 `npm run build:bundle`，只上传通用 `worker.mjs`、虚构配置示例和 SQL；**不访问个人线上服务，也不自动部署**。GitHub 构建成功、客户端 Release 发布或 `/health` 正常，都不表示最新源码已经上线。每次发布后应在自己的 Cloudflare 部署记录确认当前生效版本，并核对发布提交；手动上传构建包时还可核对 annotation 中的源码提交与 bundle 摘要。文档不记录个人部署地址或某次线上提交。
 
 管理员恢复须先进入维护模式，再轮换 epoch：`POST /v3/admin/maintenance` 传 `{vaultID, enabled:true}`，`POST /v3/admin/recover` 传 `{vaultID, epoch:新UUID}`，使用服务端 `RECOVERY_SECRET` 作为 Bearer。D1 时间点恢复同样需要轮换 epoch；客户端保留未确认操作，恢复后重新提交。
 
@@ -90,7 +98,7 @@ npm ci
 npm run types
 npm run typecheck
 npm test
-npm run build:staging
+npm run build:bundle
 ```
 
 跨端 HTTP 测试使用真实本地 Worker / D1。仓库根目录运行 `npm --prefix backend/cloudflare run build:test`，再启动 `node backend/cloudflare/test/http-server.mjs`；客户端测试设置 `PINDO_SYNC_TEST_ENDPOINT=http://127.0.0.1:8787`。CI 在同一 Worker 上验证 Swift 写入、Android 读取并写回、Swift 读取；具体阶段以 `.github/workflows/macos.yml` 为准。

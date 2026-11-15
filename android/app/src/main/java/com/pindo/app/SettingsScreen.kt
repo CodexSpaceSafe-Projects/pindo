@@ -218,7 +218,7 @@ import java.time.LocalDate
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun CloudSettingsScreen(store: AppStore, state: AppState, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
-    var endpoint by rememberSaveable { mutableStateOf("https://example.com") }
+    var endpoint by rememberSaveable { mutableStateOf("") }
     var secret by remember { mutableStateOf("") }
     var invite by remember { mutableStateOf("") }
     val context=LocalContext.current
@@ -274,7 +274,7 @@ import java.time.LocalDate
                 Button(onClick={sync.join(invite)},enabled=!state.syncing&&!state.readOnly&&invite.isNotBlank(),modifier=Modifier.testTag("sync-join")){Text("连接并合并本机资料")}
                 HorizontalDivider()
                 Text("首次初始化服务",style=MaterialTheme.typography.titleMedium)
-                OutlinedTextField(endpoint,{endpoint=it},label={Text("服务地址")},modifier=Modifier.fillMaxWidth(),singleLine=true)
+                OutlinedTextField(endpoint,{endpoint=it},label={Text("服务地址")},placeholder={Text("https://example.com")},modifier=Modifier.fillMaxWidth(),singleLine=true)
                 OutlinedTextField(secret,{secret=it},label={Text("服务初始化密钥")},modifier=Modifier.fillMaxWidth(),singleLine=true,visualTransformation=androidx.compose.ui.text.input.PasswordVisualTransformation())
                 Button(onClick={sync.create(endpoint.trim(),secret)},enabled=!state.syncing&&!state.readOnly&&secret.isNotBlank()){Text("创建加密同步库")}
             }
