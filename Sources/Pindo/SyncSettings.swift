@@ -95,7 +95,7 @@ struct SyncSettings: View {
             }message:{Text(l10n("本机资料、恢复信息和离线修改会保留，之后可以继续连接。"))}
             .alert(l10n("删除这个设备？"),isPresented:Binding(get:{deviceToDelete != nil},set:{if !$0{deviceToDelete=nil}}),presenting:deviceToDelete){device in
                 Button(l10n("取消"),role:.cancel){deviceToDelete=nil}
-                Button(l10n("删除这个设备"),role:.destructive){controller.deleteDevice(device.id);deviceToDelete=nil}
+                Button(l10n("删除这个设备"),role:.destructive){controller.deleteDevice(device.id);deviceToDelete=nil}.disabled(controller.isSyncing || !controller.isConfigured)
             }message:{device in
                 Text(device.name+"\n\n"+l10n("将永久删除该设备的云端登记、访问凭据、配对信息和同步租约。共享事项和对方本机资料会保留，再次连接需要重新配对。"))
             }
