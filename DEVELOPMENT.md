@@ -91,6 +91,10 @@ Swift 需要 5.9+；Linux 安装 SQLite 开发头文件，`swift test --jobs 4` 
 
 Android：在 `android/` 运行 `./gradlew testDebugUnitTest lintDebug assembleDebug`，需要 JDK 17 / SDK 35。
 
+Android 界面采用 Material 3：事项内容优先、语义色适配深浅主题，操作目标至少 48dp；可用窗口宽度达到 600dp 且高度达到 480dp 时使用侧边导航，内容限制最大宽度。编辑页固定保存入口，筛选与页面状态可恢复，编辑租约及未保存备注不能因布局变化丢失。设计依据：[Compose 无障碍默认行为](https://developer.android.com/develop/ui/compose/accessibility/api-defaults)、[窗口尺寸分类](https://developer.android.com/develop/adaptive-apps/guides/use-window-size-classes)、[自适应导航](https://developer.android.com/develop/adaptive-apps/guides/build-adaptive-navigation)。
+
+`AndroidUiTest` 使用虚构资料验证清单、日历、批量操作、编辑恢复、深色主题、窄屏大字及宽屏导航，并将实际 Compose / Skia 渲染写入 `android/app/build/reports/screenshots/`。CI 报告与 Android Release 附带这些截图；它们用于布局检查，触屏、键盘遮挡、TalkBack 和系统返回仍需在真实设备验收。
+
 服务端使用 Node.js 22，在 `backend/cloudflare/` 运行：
 
 ```sh

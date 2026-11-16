@@ -4,14 +4,14 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,6 +24,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.core.content.pm.PackageInfoCompat
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.core.graphics.toColorInt
@@ -86,43 +89,33 @@ import java.time.LocalDate
         CloudSettingsScreen(store, state) { cloudOpen = false }
         return
     }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(top = 18.dp, bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(top = 24.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("设置", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
-            Text("让 Pindo 更适合你的每一天", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+            Text("外观、分组与资料", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
         }
-        Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(24.dp)) {
-            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.primary.copy(alpha = .12f)) {
-                        Icon(Icons.Outlined.Security, null, Modifier.padding(13.dp).size(26.dp), tint = MaterialTheme.colorScheme.primary)
-                    }
-                    Column(Modifier.weight(1f).padding(start = 14.dp)) {
-                        Text(when { state.syncEnabled -> "已连接加密同步"; state.syncing -> "正在连接加密同步"; state.syncStatus.contains("失败") -> "同步连接失败"; else -> "安心记录，本地优先" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                        Text(state.syncStatus, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-                    SettingsCount(state.tasks.size.toString(), "全部事项")
-                    SettingsCount(state.tasks.count { it.phase != "completed" }.toString(), "未完成")
-                    SettingsCount(state.groups.size.toString(), "我的分组")
-                }
+        SyncStatusCard(state)
+        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        (message ?: state.error)?.let { text ->
+            SettingsMessage(text, isError = message == null && state.error != null) {
+                message = null; store.dismissError()
             }
         }
         SettingsSection("偏好设置") {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Outlined.Palette, null, tint = MaterialTheme.colorScheme.primary)
-                    Text("外观", Modifier.padding(start = 12.dp), style = MaterialTheme.typography.titleSmall)
+                    Icon(Icons.Outlined.Palette, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("外观", Modifier.padding(start = 12.dp), style = MaterialTheme.typography.bodyLarge)
                 }
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     listOf(Triple("system", "跟随系统", Icons.Outlined.Smartphone), Triple("light", "浅色", Icons.Outlined.LightMode), Triple("dark", "深色", Icons.Outlined.DarkMode)).forEach { (value, label, icon) ->
                         FilterChip(selected = state.preferences.theme == value, onClick = { store.setTheme(value) },
+                            modifier = Modifier.heightIn(min = 48.dp),
                             label = { Text(label) }, leadingIcon = { Icon(icon, null, Modifier.size(17.dp)) })
                     }
                 }
             }
-            HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+            SettingsDivider()
             Box {
                 SettingsRow(Icons.Outlined.FolderOpen, "新待办默认分组", state.groups.find { it.id == state.preferences.defaultGroupID }?.name ?: "未分组") { defaultMenu = true }
                 DropdownMenu(defaultMenu, onDismissRequest = { defaultMenu = false }) {
@@ -132,34 +125,21 @@ import java.time.LocalDate
                     }
                 }
             }
-            HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+            SettingsDivider()
             SettingsRow(Icons.Outlined.Folder, "分组管理", "名称、颜色与事项数量") { groupsOpen = true }
         }
         SettingsSection("数据与同步") {
             SettingsRow(Icons.Outlined.CloudSync, "云同步", state.syncStatus) { cloudOpen = true }
-            HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+            SettingsDivider()
             SettingsRow(Icons.Outlined.FileDownload, "导出资料", "保存待办、分组与 Markdown 备注", !busy && !state.readOnly) { export.launch("Pindo-${LocalDate.now()}.json") }
-            HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+            SettingsDivider()
             SettingsRow(Icons.Outlined.FileUpload, "导入资料", "支持 Android 与 macOS 导出的 JSON", !busy && !state.readOnly) { import.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }
-            HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+            SettingsDivider()
             SettingsRow(Icons.Outlined.Restore, "恢复上次导入前的资料", if (state.hasLocalBackup) "已保留一份本机保护备份" else "导入资料时会自动建立保护备份", state.hasLocalBackup && !busy && !state.readOnly) { restoring = true }
         }
-        Text("导出文件为明文，请自行保管；同步凭据和恢复密钥不会导出。导入会替换当前清单，并自动保留操作前的本机备份。", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+        Text("导出为明文，不含同步凭据或密钥。导入会替换当前资料，并先保留一份本机备份。", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
         Text("版本 ${installedPackage.versionName ?: "未知"} (${PackageInfoCompat.getLongVersionCode(installedPackage)})",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-        (message ?: state.error)?.let { text ->
-            Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(14.dp)) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(text, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                    IconButton(onClick = { message = null; store.dismissError() }) { Icon(Icons.Outlined.Close, "关闭提示") }
-                }
-            }
-        }
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Text("Pindo", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
-            Text("轻一点，专注每一件事", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
-        }
     }
     if (groupsOpen) GroupDialog(store, state) { groupsOpen = false }
     if (importText != null) AlertDialog(onDismissRequest = { importText = null; importError = null }, icon = { Icon(Icons.Outlined.FileUpload, null) },
@@ -183,23 +163,60 @@ import java.time.LocalDate
         dismissButton = { TextButton(onClick = { restoring = false }) { Text("取消") } })
 }
 
-@Composable private fun SettingsCount(value: String, label: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+@Composable private fun SyncStatusCard(state: AppState, statusModifier: Modifier = Modifier) {
+    val failed = state.readOnly || state.syncStatus.contains("失败")
+    val accent = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = MaterialTheme.shapes.large) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                Surface(shape = MaterialTheme.shapes.medium, color = accent.copy(alpha = .1f)) {
+                    Icon(if (failed) Icons.Outlined.SyncProblem else Icons.Outlined.Security,
+                        null, Modifier.padding(12.dp).size(24.dp), tint = accent)
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text(when {
+                        state.readOnly -> "本机资料需要检查"
+                        failed -> "同步连接失败"
+                        state.syncEnabled -> "已连接加密同步"
+                        state.syncing -> "正在连接加密同步"
+                        else -> "本机资料已保留"
+                    }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(state.syncStatus, statusModifier, style = MaterialTheme.typography.bodyMedium,
+                        color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            if (state.syncing) LinearProgressIndicator(Modifier.fillMaxWidth())
+        }
+    }
+}
+
+@Composable private fun SettingsMessage(text: String, isError: Boolean = false, onDismiss: () -> Unit) {
+    Surface(color = if (isError) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = MaterialTheme.shapes.medium) {
+        Row(Modifier.padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(text, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium,
+                color = if (isError) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurface)
+            IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "关闭提示") }
+        }
     }
 }
 
 @Composable private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-        Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
-        Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp) { Column(content = content) }
+        Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
+        Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface) { Column(content = content) }
     }
 }
 
+@Composable private fun SettingsDivider() {
+    HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
+}
+
 @Composable private fun SettingsRow(icon: ImageVector, title: String, subtitle: String, enabled: Boolean = true, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick).padding(horizontal = 16.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
+    Row(Modifier.fillMaxWidth().heightIn(min = 76.dp).clickable(enabled = enabled, onClick = onClick)
+        .padding(horizontal = 16.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.outline)
         Column(Modifier.weight(1f).padding(horizontal = 13.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline)
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -211,7 +228,7 @@ import java.time.LocalDate
 @Composable private fun GroupName(group: TodoGroup) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(12.dp).background(Color(group.color.toColorInt()), CircleShape))
-        Text(group.name, Modifier.padding(start = 10.dp))
+        Text(group.name, Modifier.weight(1f).padding(start = 10.dp))
     }
 }
 
@@ -219,10 +236,11 @@ import java.time.LocalDate
 @Composable internal fun CloudSettingsScreen(store: AppStore, state: AppState, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
     var endpoint by rememberSaveable { mutableStateOf("") }
+    var creating by rememberSaveable { mutableStateOf(false) }
     var secret by remember { mutableStateOf("") }
     var invite by remember { mutableStateOf("") }
-    val context=LocalContext.current
-    val sync=store.sync
+    val context = LocalContext.current
+    val sync = store.sync
     val nameEditable = !state.syncing && !state.readOnly && (sync.active == null || state.syncEnabled)
     var deviceName by remember(sync) { mutableStateOf(sync.deviceName) }
     var requestedDevices by remember(sync) { mutableStateOf(false) }
@@ -232,51 +250,148 @@ import java.time.LocalDate
         else if (!state.syncing && !requestedDevices && sync.listDevices()) requestedDevices = true
     }
     LaunchedEffect(state.syncEnabled) {
-        if (state.syncEnabled) { invite=""; secret="" }
+        if (state.syncEnabled) { invite = ""; secret = "" }
     }
-    Scaffold(topBar = { TopAppBar(title = { Text("云同步") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Outlined.ArrowBack, "返回设置") } }) }) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            Text("Cloudflare 加密同步", style = MaterialTheme.typography.titleLarge)
-            Text(state.syncStatus, Modifier.testTag("sync-status"))
-            if (state.syncing) LinearProgressIndicator(Modifier.fillMaxWidth())
-            Text("离线修改会保存在本机。配对信息包含恢复密钥，请仅通过可信渠道传给自己的设备。", color=MaterialTheme.colorScheme.onSurfaceVariant)
-            OutlinedTextField(deviceName, { deviceName=it }, label={Text("本机设备名称")},
-                modifier=Modifier.fillMaxWidth().testTag("sync-device-name"), singleLine=true,
-                enabled=nameEditable)
-            if (sync.active != null && !state.syncEnabled) Text("继续同步后可修改设备名称", style=MaterialTheme.typography.bodySmall)
-            OutlinedButton(onClick={sync.saveDeviceName(deviceName)},
-                enabled=nameEditable && deviceName.isNotBlank(),
-                modifier=Modifier.testTag("sync-save-device-name")){Text("保存设备名称")}
-            if (state.syncEnabled) {
-                Button(onClick={sync.sync()},enabled=!state.syncing){Text("立即同步")}
-                Button(onClick={sync.pair()},enabled=!state.syncing){Text("生成设备配对信息")}
-                if(sync.invitation!=null) Button(onClick={
-                    val clip=android.content.ClipData.newPlainText("Pindo 加密配对",sync.invitation)
-                    if(android.os.Build.VERSION.SDK_INT>=33) clip.description.extras=android.os.PersistableBundle().apply{putBoolean("android.content.extra.IS_SENSITIVE",true)}
-                    (context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(clip)
-                }){Text("复制配对信息（10 分钟内有效）")}
-                OutlinedButton(onClick={sync.listDevices()},enabled=!state.syncing){Text("刷新设备列表")}
-                val devices=sync.devices
-                for(i in 0 until devices.length()) { val device=devices.getJSONObject(i);val id=device.getString("id")
-                    Row(verticalAlignment=Alignment.CenterVertically){
-                        Column(Modifier.weight(1f)) {
-                            Text((device.opt("name") as? String)?.takeIf { it.isNotBlank() } ?: "未命名设备", modifier=Modifier.testTag("sync-device-$id"), style=MaterialTheme.typography.bodyMedium)
-                            if(sync.isCurrentDevice(id)) Text("此设备",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        if(device.isNull("revoked_at")) TextButton(onClick={sync.revoke(id)},enabled=!state.syncing){Text("撤销授权")} else Text("已撤销")}
+    Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = {
+        TopAppBar(title = { Text("云同步", fontWeight = FontWeight.SemiBold) },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回设置") } })
+    }) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp).padding(top = 12.dp, bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(24.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                SyncStatusCard(state, Modifier.testTag("sync-status"))
+                if (state.syncEnabled) {
+                    Button(onClick = { sync.sync() }, enabled = !state.syncing,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("立即同步") }
+                } else if (sync.active != null || sync.pending) {
+                    Button(onClick = { sync.reconnect() }, enabled = !state.syncing,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("继续同步") }
                 }
-                OutlinedButton(onClick={sync.rotate()},enabled=!state.syncing){Text("轮换此设备凭据")}
-                TextButton(onClick={sync.disconnect()}){Text("暂停同步")}
-            } else {
-                if(sync.active!=null||sync.pending) Button(onClick={sync.reconnect()},enabled=!state.syncing){Text("继续同步")}
-                Text("加入已有同步库",style=MaterialTheme.typography.titleMedium)
-                OutlinedTextField(invite,{invite=it},label={Text("粘贴设备配对信息")},modifier=Modifier.fillMaxWidth().testTag("sync-invitation"),visualTransformation=androidx.compose.ui.text.input.PasswordVisualTransformation())
-                Button(onClick={sync.join(invite)},enabled=!state.syncing&&!state.readOnly&&invite.isNotBlank(),modifier=Modifier.testTag("sync-join")){Text("连接并合并本机资料")}
-                HorizontalDivider()
-                Text("首次初始化服务",style=MaterialTheme.typography.titleMedium)
-                OutlinedTextField(endpoint,{endpoint=it},label={Text("服务地址")},placeholder={Text("https://example.com")},modifier=Modifier.fillMaxWidth(),singleLine=true)
-                OutlinedTextField(secret,{secret=it},label={Text("服务初始化密钥")},modifier=Modifier.fillMaxWidth(),singleLine=true,visualTransformation=androidx.compose.ui.text.input.PasswordVisualTransformation())
-                Button(onClick={sync.create(endpoint.trim(),secret)},enabled=!state.syncing&&!state.readOnly&&secret.isNotBlank()){Text("创建加密同步库")}
+                Text("离线修改会保存在本机，连接后继续同步。", style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
+            }
+            if (!state.syncEnabled) {
+                SettingsSection(if (sync.active != null || sync.pending) "连接其他资料库" else "连接设备") {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                            listOf("加入已有库", "首次创建").forEachIndexed { index, label ->
+                                SegmentedButton(selected = creating == (index == 1), onClick = { creating = index == 1 },
+                                    enabled = !state.syncing, shape = SegmentedButtonDefaults.itemShape(index, 2),
+                                    modifier = Modifier.heightIn(min = 48.dp)) { Text(label, textAlign = TextAlign.Center) }
+                            }
+                        }
+                        if (creating) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("首次初始化服务", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                Text("填写你部署的服务地址和初始化密钥。", style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            OutlinedTextField(endpoint, { endpoint = it }, label = { Text("服务地址") },
+                                placeholder = { Text("https://example.com") }, modifier = Modifier.fillMaxWidth(),
+                                singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+                            OutlinedTextField(secret, { secret = it }, label = { Text("服务初始化密钥") },
+                                modifier = Modifier.fillMaxWidth(), singleLine = true,
+                                visualTransformation = PasswordVisualTransformation(),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
+                            Button(onClick = { sync.create(endpoint.trim(), secret) },
+                                enabled = !state.syncing && !state.readOnly && secret.isNotBlank(),
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                                Text("创建加密同步库", textAlign = TextAlign.Center)
+                            }
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("加入已有同步库", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                Text("先在已连接的设备上生成配对信息。", style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            OutlinedTextField(invite, { invite = it }, label = { Text("粘贴设备配对信息") },
+                                modifier = Modifier.fillMaxWidth().testTag("sync-invitation"), minLines = 2, maxLines = 4,
+                                visualTransformation = PasswordVisualTransformation(),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
+                            Button(onClick = { sync.join(invite) }, enabled = !state.syncing && !state.readOnly && invite.isNotBlank(),
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("sync-join")) {
+                                Text("连接并合并本机资料", textAlign = TextAlign.Center)
+                            }
+                        }
+                    }
+                }
+            }
+            SettingsSection("本机设备") {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(deviceName, { deviceName = it }, label = { Text("本机设备名称") },
+                        modifier = Modifier.fillMaxWidth().testTag("sync-device-name"), singleLine = true, enabled = nameEditable)
+                    if (sync.active != null && !state.syncEnabled) Text("继续同步后可修改设备名称",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedButton(onClick = { sync.saveDeviceName(deviceName) }, enabled = nameEditable && deviceName.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("sync-save-device-name")) {
+                        Text("保存设备名称")
+                    }
+                }
+            }
+            if (state.syncEnabled) {
+                SettingsSection("设备管理") {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        OutlinedButton(onClick = { sync.listDevices() }, enabled = !state.syncing,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("刷新设备列表") }
+                        val devices = sync.devices
+                        if (devices.length() == 0) Text("暂未显示设备，可刷新列表。", style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        for (i in 0 until devices.length()) {
+                            val device = devices.getJSONObject(i)
+                            val id = device.getString("id")
+                            if (i > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            Row(Modifier.fillMaxWidth().heightIn(min = 64.dp), verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Icon(if (sync.isCurrentDevice(id)) Icons.Outlined.Smartphone else Icons.Outlined.Devices,
+                                    null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text((device.opt("name") as? String)?.takeIf { it.isNotBlank() } ?: "未命名设备",
+                                        modifier = Modifier.testTag("sync-device-$id"), style = MaterialTheme.typography.bodyLarge)
+                                    if (sync.isCurrentDevice(id)) Text("此设备", style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.primary)
+                                }
+                                if (device.isNull("revoked_at")) {
+                                    TextButton(onClick = { sync.revoke(id) }, enabled = !state.syncing,
+                                        modifier = Modifier.widthIn(max = 104.dp).heightIn(min = 48.dp),
+                                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
+                                        Text("撤销授权", textAlign = TextAlign.Center)
+                                    }
+                                } else Text("已撤销", style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+                SettingsSection("添加其他设备") {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("配对信息包含恢复密钥，只传给自己的设备。", style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        val invitation = sync.invitation
+                        if (invitation != null) {
+                            Button(onClick = {
+                                val clip = android.content.ClipData.newPlainText("Pindo 加密配对", invitation)
+                                if (android.os.Build.VERSION.SDK_INT >= 33) clip.description.extras = android.os.PersistableBundle().apply {
+                                    putBoolean("android.content.extra.IS_SENSITIVE", true)
+                                }
+                                (context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(clip)
+                            }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                                Text("复制配对信息（10 分钟内有效）", textAlign = TextAlign.Center)
+                            }
+                        }
+                        OutlinedButton(onClick = { sync.pair() }, enabled = !state.syncing,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                            Text("生成设备配对信息", textAlign = TextAlign.Center)
+                        }
+                    }
+                }
+                SettingsSection("连接管理") {
+                    SettingsRow(Icons.Outlined.Autorenew, "轮换此设备凭据", "更新本机的访问凭据", !state.syncing) { sync.rotate() }
+                    SettingsDivider()
+                    SettingsRow(Icons.Outlined.PauseCircleOutline, "暂停同步", "本机记录与离线修改会保留") { sync.disconnect() }
+                }
             }
         }
     }
@@ -291,14 +406,14 @@ import java.time.LocalDate
     val colors = listOf("#4477AA" to "青蓝", "#EE6677" to "珊瑚", "#228833" to "松绿", "#CCBB44" to "姜黄", "#66CCEE" to "天青", "#AA3377" to "紫红", "#BBBBBB" to "岩灰")
     DisposableEffect(Unit) { val lease = store.beginEditing(); onDispose { store.endEditing(lease) } }
     Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.surface) {
-            Column(Modifier.heightIn(max = 640.dp).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surface) {
+            Column(Modifier.heightIn(max = 640.dp).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) { Text("我的分组", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold); Text("用颜色整理不同的生活片段", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    Column(Modifier.weight(1f)) { Text("我的分组", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold); Text("管理名称与颜色", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "关闭分组管理") }
                 }
                 state.groups.forEach { group ->
-                    Row(Modifier.fillMaxWidth().background(if (editingID == group.id) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow, RoundedCornerShape(14.dp)).padding(start = 12.dp, top = 5.dp, bottom = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).background(if (editingID == group.id) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.medium).padding(start = 12.dp, top = 5.dp, bottom = 5.dp), verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(14.dp).background(Color(group.color.toColorInt()), CircleShape))
                         Column(Modifier.weight(1f).padding(start = 10.dp)) { Text(group.name, style = MaterialTheme.typography.bodyMedium); Text("${state.tasks.count { it.groupID == group.id }} 条事项", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                         IconButton(onClick = { editingID = group.id; name = group.name; color = group.color }, enabled = !state.readOnly) { Icon(Icons.Outlined.Edit, "修改${group.name}", Modifier.size(19.dp)) }
@@ -309,18 +424,18 @@ import java.time.LocalDate
                 HorizontalDivider()
                 Text(if (editingID == null) "新建分组" else "编辑分组", style = MaterialTheme.typography.titleSmall)
                 OutlinedTextField(name, { name = it }, label = { Text("分组名称") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     colors.forEach { (hex, label) ->
-                        FilterChip(selected = color.equals(hex, true), onClick = { color = hex }, label = { Text(label) }, leadingIcon = { Box(Modifier.size(14.dp).background(Color(hex.toColorInt()), CircleShape)) })
+                        FilterChip(selected = color.equals(hex, true), onClick = { color = hex }, modifier = Modifier.heightIn(min = 48.dp), label = { Text(label) }, leadingIcon = { Box(Modifier.size(14.dp).background(Color(hex.toColorInt()), CircleShape)) })
                     }
                 }
                 OutlinedTextField(color, { color = it }, label = { Text("自定义颜色 #RRGGBB") }, modifier = Modifier.fillMaxWidth(), singleLine = true, isError = !color.matches(Regex("#[0-9a-fA-F]{6}")))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    if (editingID != null) TextButton(onClick = { editingID = null; name = "" }) { Text("取消编辑") }
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (editingID != null) TextButton(onClick = { editingID = null; name = "" }, modifier = Modifier.heightIn(min = 48.dp)) { Text("取消编辑") }
                     Button(onClick = {
                         val saved = editingID?.let { store.updateGroup(it, name, color) } ?: store.addGroup(name, color)
                         if (saved) { editingID = null; name = "" }
-                    }, enabled = !state.readOnly && name.isNotBlank() && color.matches(Regex("#[0-9a-fA-F]{6}"))) { Text(if (editingID == null) "添加分组" else "保存修改") }
+                    }, enabled = !state.readOnly && name.isNotBlank() && color.matches(Regex("#[0-9a-fA-F]{6}")), modifier = Modifier.heightIn(min = 48.dp)) { Text(if (editingID == null) "添加分组" else "保存修改") }
                 }
                 state.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
             }

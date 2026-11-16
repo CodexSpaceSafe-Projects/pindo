@@ -2,8 +2,10 @@ package com.pindo.app
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -16,8 +18,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import java.time.LocalDate
 import java.time.YearMonth
@@ -28,6 +33,7 @@ import java.util.Locale
 @Composable internal fun CalendarScreen(store: AppStore, state: AppState, selectedDay: LocalDate,
     onDaySelected: (LocalDate) -> Unit, onEdit: (String) -> Unit, onAddChild: (String) -> Unit,
     onDelete: (Set<String>) -> Unit, onAdd: () -> Unit) {
+    val today = LocalDate.now()
     var monthText by rememberSaveable { mutableStateOf(selectedDay.withDayOfMonth(1).toString()) }
     var groupID by rememberSaveable { mutableStateOf<String?>(null) }
     var phaseName by rememberSaveable { mutableStateOf(PhaseFilter.ALL.name) }
@@ -38,92 +44,177 @@ import java.util.Locale
     val rows = TodoQueries.outline(state.tasks, query, collapsed.toSet())
     val matching = TodoQueries.matching(state.tasks, query)
     LaunchedEffect(selectedDay) { monthText = selectedDay.withDayOfMonth(1).toString() }
-    LazyColumn(Modifier.fillMaxSize().testTag("calendar"), contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 5.dp, bottom = 104.dp),
-        verticalArrangement = Arrangement.spacedBy(13.dp)) {
-        item { PindoPageHeader("日历", "把时间留给重要的事") {
-            TextButton(onClick = { monthText = LocalDate.now().withDayOfMonth(1).toString(); onDaySelected(LocalDate.now()) }) { Text("今天") }
-        } }
-        item { PindoErrorMessage(state.error, store::dismissError) }
-        item {
-            Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(24.dp)) {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { monthText = month.minusMonths(1).atDay(1).toString() }) { Icon(Icons.Outlined.ChevronLeft, "上个月") }
-                        Text(month.format(DateTimeFormatter.ofPattern("yyyy年M月", Locale.SIMPLIFIED_CHINESE)), Modifier.weight(1f),
-                            style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                        IconButton(onClick = { monthText = month.plusMonths(1).atDay(1).toString() }) { Icon(Icons.Outlined.ChevronRight, "下个月") }
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val compact = maxWidth < 400.dp
+        val calendarInset = if (compact) 4.dp else 20.dp
+        val calendarInnerInset = if (compact) 4.dp else 10.dp
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().testTag("calendar"),
+            contentPadding = PaddingValues(top = 4.dp, bottom = 104.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                Box(Modifier.padding(horizontal = 20.dp)) {
+                    PindoPageHeader("日历", "今天 · " + today.format(DateTimeFormatter.ofPattern("M月d日 EEEE", Locale.SIMPLIFIED_CHINESE))) {
+                        TextButton(
+                            onClick = { monthText = today.withDayOfMonth(1).toString(); onDaySelected(today) },
+                            modifier = Modifier.heightIn(min = 48.dp)
+                        ) { Text("今天") }
                     }
-                    Row(Modifier.fillMaxWidth()) {
-                        listOf("一", "二", "三", "四", "五", "六", "日").forEach { label ->
-                            Text(label, Modifier.weight(1f).padding(vertical = 5.dp), style = MaterialTheme.typography.labelMedium,
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            if (state.error != null) item {
+                Box(Modifier.padding(horizontal = 20.dp)) { PindoErrorMessage(state.error, store::dismissError) }
+            }
+            item {
+                Surface(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = calendarInset),
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = calendarInnerInset, vertical = 8.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = { monthText = month.minusMonths(1).atDay(1).toString() },
+                                enabled = month > YearMonth.of(1, 1), modifier = Modifier.size(48.dp)
+                            ) { Icon(Icons.Outlined.ChevronLeft, "上个月") }
+                            Text(
+                                month.format(DateTimeFormatter.ofPattern("yyyy年M月", Locale.SIMPLIFIED_CHINESE)),
+                                modifier = Modifier.weight(1f).semantics { heading() },
+                                style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
+                                textAlign = TextAlign.Center
+                            )
+                            IconButton(
+                                onClick = { monthText = month.plusMonths(1).atDay(1).toString() },
+                                enabled = month < YearMonth.of(9999, 12), modifier = Modifier.size(48.dp)
+                            ) { Icon(Icons.Outlined.ChevronRight, "下个月") }
+                        }
+                        CalendarMonthGrid(month, selectedDay, today, counts, onDaySelected)
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            CalendarLegend("未完成数量", MaterialTheme.colorScheme.tertiary)
+                            CalendarLegend("已完成数量", MaterialTheme.colorScheme.primary)
                         }
                     }
-                    val first = month.atDay(1)
-                    val offset = first.dayOfWeek.value - 1
-                    val cells = ((offset + month.lengthOfMonth() + 6) / 7) * 7
-                    val start = first.minusDays(offset.toLong())
-                    (0 until cells / 7).forEach { week ->
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                            (0..6).forEach { weekday ->
-                                val date = start.plusDays((week * 7 + weekday).toLong())
-                                val dayCounts = counts[date]
-                                val selected = date == selectedDay
-                                val today = date == LocalDate.now()
-                                Surface(onClick = { onDaySelected(date) }, modifier = Modifier.weight(1f).heightIn(min = 56.dp)
-                                    .testTag("calendar-day-" + date)
-                                    .semantics { contentDescription = date.format(DateTimeFormatter.ofPattern("yyyy年M月d日", Locale.SIMPLIFIED_CHINESE)) +
-                                        "，未完成 " + (dayCounts?.unfinished ?: 0) + " 项，已完成 " + (dayCounts?.completed ?: 0) + " 项" },
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
-                                    border = if (today && !selected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null) {
-                                    Column(Modifier.fillMaxWidth().padding(top = 7.dp, bottom = 5.dp), horizontalAlignment = Alignment.CenterHorizontally,
-                                        verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        val textColor = if (selected) MaterialTheme.colorScheme.onPrimary
-                                            else if (YearMonth.from(date) != month) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.onSurface
-                                        Text(date.dayOfMonth.toString(), style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = if (today || selected) FontWeight.Bold else FontWeight.Normal, color = textColor)
-                                        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
-                                            verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                                            if ((dayCounts?.unfinished ?: 0) > 0) Text(dayCounts!!.unfinished.toString(), style = MaterialTheme.typography.labelSmall,
-                                                color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.tertiary,
-                                                fontWeight = FontWeight.Medium)
-                                            if ((dayCounts?.completed ?: 0) > 0) Row(verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                                                val completedColor = if (selected) MaterialTheme.colorScheme.onPrimary.copy(alpha = .85f) else MaterialTheme.colorScheme.primary
-                                                Box(Modifier.size(3.dp).background(completedColor, CircleShape))
-                                                Text(dayCounts!!.completed.toString(), style = MaterialTheme.typography.labelSmall,
-                                                    color = completedColor, fontWeight = FontWeight.Medium)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                }
+            }
+            item {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 4.dp), verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            selectedDay.format(DateTimeFormatter.ofPattern("M月d日 EEEE", Locale.SIMPLIFIED_CHINESE)),
+                            modifier = Modifier.semantics { heading() },
+                            style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold
+                        )
+                        Text(matching.size.toString() + " 项事项", style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    PindoPhasePicker(PhaseFilter.valueOf(phaseName), { phaseName = it.name }, compact = true)
+                }
+            }
+            item { Box(Modifier.padding(horizontal = 20.dp)) { PindoGroupChips(state.groups, groupID) { groupID = it } } }
+            if (rows.isEmpty()) item {
+                Box(Modifier.padding(horizontal = 20.dp)) {
+                    PindoEmptyState("这一天还没有安排", "选择日期，提前为下一步留出时间。", Icons.Outlined.EventAvailable,
+                        actionLabel = if (!state.readOnly) "添加这一天的事项" else null, onAction = onAdd)
+                }
+            }
+            pindoTaskItems(rows = rows, state = state, collapsed = collapsed.toSet(),
+                onDisclosure = { id -> collapsed = if (id in collapsed) collapsed - id else collapsed + id },
+                onEdit = onEdit, onAddChild = onAddChild, onDelete = onDelete, store = store, horizontalPadding = 20.dp)
+        }
+    }
+}
+
+@Composable private fun CalendarMonthGrid(month: YearMonth, selectedDay: LocalDate, today: LocalDate,
+    counts: Map<LocalDate, DayTaskCounts>, onDaySelected: (LocalDate) -> Unit) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val overflows = maxWidth < 336.dp
+        val calendarWidth = maxOf(maxWidth, 336.dp)
+        val scroll = rememberScrollState()
+        Column(Modifier.fillMaxWidth()) {
+            Column(Modifier.horizontalScroll(scroll).width(calendarWidth)) {
+                Row(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                    listOf("一", "二", "三", "四", "五", "六", "日").forEach { label ->
+                        Text(label, Modifier.weight(1f).padding(vertical = 6.dp),
+                            style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.Center,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                val first = month.atDay(1)
+                val offset = first.dayOfWeek.value - 1
+                val weeks = (offset + month.lengthOfMonth() + 6) / 7
+                val start = first.minusDays(offset.toLong())
+                repeat(weeks) { week ->
+                    Row(Modifier.fillMaxWidth().padding(bottom = 2.dp)) {
+                        repeat(7) { weekday ->
+                            val date = start.plusDays((week * 7 + weekday).toLong())
+                            val dayCounts = counts[date]
+                            CalendarDay(
+                                date = date, month = month, today = today, selected = date == selectedDay,
+                                unfinished = dayCounts?.unfinished ?: 0, completed = dayCounts?.completed ?: 0,
+                                modifier = Modifier.weight(1f), onSelect = { onDaySelected(date) }
+                            )
                         }
                     }
-                    Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(5.dp).background(MaterialTheme.colorScheme.tertiary, CircleShape)); Spacer(Modifier.width(5.dp))
-                        Text("未完成数量", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.width(14.dp)); Box(Modifier.size(5.dp).background(MaterialTheme.colorScheme.primary, CircleShape)); Spacer(Modifier.width(5.dp))
-                        Text("已完成数量", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            if (overflows) Text("左右滑动查看整周", modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable private fun CalendarDay(date: LocalDate, month: YearMonth, today: LocalDate, selected: Boolean,
+    unfinished: Int, completed: Int, modifier: Modifier, onSelect: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val textColor = when {
+        selected -> colors.onPrimary
+        YearMonth.from(date) != month -> colors.onSurfaceVariant
+        date == today -> colors.primary
+        else -> colors.onSurface
+    }
+    Surface(
+        onClick = onSelect, enabled = date.year in 1..9999,
+        modifier = modifier.heightIn(min = 48.dp).testTag("calendar-day-" + date).semantics {
+            this.selected = selected
+            contentDescription = date.format(DateTimeFormatter.ofPattern("yyyy年M月d日", Locale.SIMPLIFIED_CHINESE)) +
+                "，未完成 " + unfinished + " 项，已完成 " + completed + " 项"
+        },
+        shape = RoundedCornerShape(12.dp), color = if (selected) colors.primary else Color.Transparent,
+        border = if (date == today && !selected) BorderStroke(1.dp, colors.primary) else null
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(date.dayOfMonth.toString(), style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (date == today || selected) FontWeight.SemiBold else FontWeight.Normal, color = textColor)
+            if (unfinished > 0 || completed > 0) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(5.dp, Alignment.CenterHorizontally),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    if (unfinished > 0) Text(unfinished.toString(), style = MaterialTheme.typography.labelSmall,
+                        color = if (selected) colors.onPrimary else colors.tertiary)
+                    if (completed > 0) Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        val color = if (selected) colors.onPrimary else colors.primary
+                        Box(Modifier.size(3.dp).background(color, CircleShape))
+                        Text(completed.toString(), style = MaterialTheme.typography.labelSmall, color = color)
                     }
                 }
             }
         }
-        item { PindoGroupChips(state.groups, groupID) { groupID = it } }
-        item {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(selectedDay.format(DateTimeFormatter.ofPattern("M月d日 EEEE", Locale.SIMPLIFIED_CHINESE)), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text(matching.size.toString() + " 项事项", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                PindoPhasePicker(PhaseFilter.valueOf(phaseName), { phaseName = it.name }, compact = true)
-            }
-        }
-        if (rows.isEmpty()) item { PindoEmptyState("这一天还没有安排", "选择日期，提前为下一步留出时间。", Icons.Outlined.EventAvailable,
-            actionLabel = if (!state.readOnly) "添加这一天的事项" else null, onAction = onAdd) }
-        pindoTaskItems(rows = rows, state = state, collapsed = collapsed.toSet(),
-            onDisclosure = { id -> collapsed = if (id in collapsed) collapsed - id else collapsed + id },
-            onEdit = onEdit, onAddChild = onAddChild, onDelete = onDelete, store = store)
+    }
+}
+
+@Composable private fun CalendarLegend(label: String, color: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(Modifier.size(5.dp).background(color, CircleShape))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

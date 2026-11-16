@@ -15,6 +15,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import java.io.File
 import java.time.LocalDate
@@ -57,10 +58,12 @@ class AndroidUiTest {
         }
         showApp()
         compose.onNodeWithTag("dashboard").assertExists()
+        saveScreenshot("dashboard-light")
+        compose.onNodeWithTag("dashboard").performScrollToNode(hasText("准备下一版产品计划"))
         val parentTitleLeft = compose.onNodeWithText("准备下一版产品计划", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.left
+        compose.onNodeWithTag("dashboard").performScrollToNode(hasText("梳理用户反馈"))
         val childTitleLeft = compose.onNodeWithText("梳理用户反馈", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.left
         assertTrue("Child titles must be visibly indented after their parent titles", childTitleLeft > parentTitleLeft)
-        saveScreenshot("dashboard-light")
 
         navigate("日历")
         compose.onNodeWithTag("calendar-day-${LocalDate.now()}").performClick()
@@ -122,12 +125,129 @@ class AndroidUiTest {
     @Test fun largeFontLayoutKeepsNavigationAndQuickAddUsable() {
         compose.runOnUiThread { seedTasks() }
         showApp(fontScale = 1.35f)
+        compose.onNodeWithTag("dashboard").performScrollToNode(hasTestTag("quick-add"))
         compose.onNodeWithTag("quick-add").performTextInput("记录一个新的想法")
         compose.onNodeWithContentDescription("快速添加事项").performClick()
         compose.runOnIdle { assertTrue(store.state.value.tasks.any { it.title == "记录一个新的想法" }) }
         saveScreenshot("dashboard-large-font")
         navigate("日历")
         compose.onNodeWithTag("calendar").assertExists()
+    }
+
+    @Test
+    @Config(qualifiers = "zh-rCN-w320dp-h640dp-port-xhdpi")
+    fun narrowPhoneWithLargeFontCanAddAndReachEveryPage() {
+        compose.runOnUiThread { seedTasks() }
+        showApp(fontScale = 1.6f)
+        compose.onNodeWithTag("navigation-bar").assertIsDisplayed()
+        compose.onNodeWithTag("navigation-rail").assertDoesNotExist()
+        compose.onNodeWithTag("dashboard").performScrollToNode(hasTestTag("quick-add"))
+        compose.onNodeWithTag("quick-add").performTextInput("为下周留出阅读时间")
+        compose.onNodeWithContentDescription("快速添加事项").assertIsDisplayed().performClick()
+        compose.runOnIdle {
+            assertTrue(store.state.value.tasks.any { it.title == "为下周留出阅读时间" })
+        }
+        saveScreenshot("dashboard-narrow-large-font")
+
+        navigate("日历")
+        compose.onNodeWithTag("calendar").assertIsDisplayed()
+        navigate("管理")
+        compose.onNodeWithTag("management").assertIsDisplayed()
+        navigate("设置")
+        compose.onNode(hasText("设置") and hasClickAction()).assertIsSelected().assertIsDisplayed()
+        compose.onNodeWithTag("add-task").assertDoesNotExist()
+        navigate("清单")
+        compose.onNodeWithTag("dashboard").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "zh-rCN-w1280dp-h800dp-land-xhdpi")
+    fun tabletNavigationKeepsPagesAndContentWithinReach() {
+        compose.runOnUiThread { seedTasks() }
+        showApp()
+        compose.onNodeWithTag("navigation-rail").assertIsDisplayed()
+        compose.onNodeWithTag("navigation-bar").assertDoesNotExist()
+        assertContentWidth("dashboard")
+        val railRight = compose.onNodeWithTag("navigation-rail").fetchSemanticsNode().boundsInRoot.right
+        val contentLeft = compose.onNodeWithTag("dashboard").fetchSemanticsNode().boundsInRoot.left
+        assertTrue("Tablet content must not sit underneath the navigation rail", contentLeft >= railRight)
+        saveScreenshot("dashboard-tablet")
+
+        navigate("日历")
+        compose.onNodeWithTag("calendar").assertIsDisplayed()
+        assertContentWidth("calendar")
+        saveScreenshot("calendar-tablet")
+        navigate("管理")
+        compose.onNodeWithTag("management").assertIsDisplayed()
+        navigate("设置")
+        compose.onNode(hasText("设置") and hasClickAction()).assertIsSelected()
+        compose.onNodeWithTag("add-task").assertDoesNotExist()
+        navigate("清单")
+        compose.onNodeWithTag("add-task").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("task-editor").assertIsDisplayed()
+        compose.onNodeWithContentDescription("关闭编辑").performClick()
+        compose.onNodeWithTag("task-editor").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "zh-rCN-w800dp-h360dp-land-xhdpi")
+    fun shortLandscapeKeepsNavigationVisible() {
+        showApp()
+        compose.onNodeWithTag("navigation-bar").assertIsDisplayed()
+        compose.onNodeWithTag("navigation-rail").assertDoesNotExist()
+        navigate("日历")
+        compose.onNodeWithTag("calendar").assertIsDisplayed()
+        compose.onNodeWithTag("navigation-bar").assertIsDisplayed()
+        saveScreenshot("calendar-short-landscape")
+        navigate("清单")
+        compose.onNodeWithTag("add-task").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "zh-rCN-w800dp-h480dp-land-xhdpi")
+    fun largeFontRailCanScrollToSettingsAtMinimumHeight() {
+        compose.runOnUiThread { seedTasks() }
+        showApp(fontScale = 2f)
+        compose.onNodeWithTag("navigation-rail").assertIsDisplayed()
+        compose.onNodeWithTag("navigation-bar").assertDoesNotExist()
+        compose.onNode(hasText("设置") and hasClickAction()).performScrollTo().performClick()
+        compose.onNode(hasText("设置") and hasClickAction()).assertIsSelected().assertIsDisplayed()
+        compose.onNodeWithTag("dashboard").assertDoesNotExist()
+        saveScreenshot("navigation-rail-large-font")
+    }
+
+    @Test fun readOnlySyncChipShowsStorageErrorAndRemainsActionable() {
+        var clicked = false
+        compose.setContent {
+            PindoTheme("light") {
+                Surface {
+                    PindoSyncChip(AppState(readOnly = true, syncEnabled = true, syncing = true)) { clicked = true }
+                }
+            }
+        }
+        compose.onNodeWithText("存储异常").assertIsDisplayed().assertHasClickAction().performClick()
+        compose.runOnIdle { assertTrue("Storage errors must still open the relevant settings", clicked) }
+    }
+
+    @Test fun primaryTaskControlsHave48DpTargetsAndPerformTheirActions() {
+        compose.runOnUiThread {
+            check(store.addTask("安排一次短途散步", "", LocalDate.now(), null, null))
+        }
+        showApp()
+        assertTouchTarget(compose.onNodeWithTag("add-task"))
+        compose.onNodeWithTag("dashboard").performScrollToNode(hasText("安排一次短途散步"))
+        val phase = compose.onNodeWithContentDescription("待办，点击开始")
+        assertTouchTarget(phase)
+        phase.performClick()
+        compose.runOnIdle { assertEquals("inProgress", store.state.value.tasks.single().phase) }
+
+        val actions = compose.onNodeWithContentDescription("事项操作")
+        assertTouchTarget(actions)
+        actions.performClick()
+        compose.onNodeWithText("修改待办").performClick()
+        compose.onNodeWithTag("task-editor").assertIsDisplayed()
+        assertTouchTarget(compose.onNodeWithContentDescription("关闭编辑"))
+        assertTouchTarget(compose.onNode(hasText("保存") and hasClickAction()))
     }
 
     @Test fun importProtectsAndRestoresLocalDocumentLargerThanExternalFileLimit() {
@@ -203,6 +323,16 @@ class AndroidUiTest {
     private fun navigate(label: String) {
         compose.onNode(hasText(label) and hasClickAction()).performClick()
         compose.waitForIdle()
+    }
+
+    private fun assertTouchTarget(node: SemanticsNodeInteraction) {
+        node.assertIsDisplayed().assertHasClickAction().assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
+    }
+
+    private fun assertContentWidth(tag: String) {
+        val bounds = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
+        val maximum = with(compose.density) { 840.dp.toPx() }
+        assertTrue("Tablet content should remain readable instead of stretching across the screen", bounds.width <= maximum + 1f)
     }
 
     private fun seedTasks() {

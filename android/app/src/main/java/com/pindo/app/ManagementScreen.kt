@@ -1,18 +1,18 @@
 package com.pindo.app
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Sort
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -43,80 +43,158 @@ import java.time.LocalDate
     }
     BackHandler(enabled = selectionMode) { selectionMode = false; selectedIDs = emptyList() }
     fun perform(action: TodoBatchAction) {
-        if (selected.isNotEmpty() && store.applyBatch(selected, action)) { selectedIDs = emptyList(); selectionMode = false }
+        if (selected.isNotEmpty() && store.applyBatch(selected, action)) {
+            selectedIDs = emptyList(); selectionMode = false
+        }
     }
-    LazyColumn(Modifier.fillMaxSize().testTag("management"), contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 5.dp, bottom = 104.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item {
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().testTag("management"),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 104.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item(key = "management-header") {
             PindoPageHeader("管理事项", "跨日期查找，集中处理待办") {
-                FilledTonalIconButton(onClick = { selectionMode = !selectionMode; selectedIDs = emptyList() }, enabled = !state.readOnly,
-                    modifier = Modifier.testTag("batch-mode")) {
+                TextButton(
+                    onClick = { selectionMode = !selectionMode; selectedIDs = emptyList() },
+                    enabled = !state.readOnly,
+                    modifier = Modifier.heightIn(min = 48.dp).testTag("batch-mode")
+                ) {
                     Icon(if (selectionMode) Icons.Outlined.Close else Icons.Outlined.Checklist,
-                        if (selectionMode) "退出批量操作" else "批量操作")
+                        if (selectionMode) "退出批量操作" else "批量操作", Modifier.size(20.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (selectionMode) "取消" else "选择")
                 }
             }
         }
-        item { PindoErrorMessage(state.error, store::dismissError) }
-        item {
-            OutlinedTextField(search, { search = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("搜索标题或备注") }, singleLine = true,
-                leadingIcon = { Icon(Icons.Outlined.Search, null) }, trailingIcon = {
-                    if (search.isNotEmpty()) IconButton(onClick = { search = "" }) { Icon(Icons.Outlined.Close, "清空搜索") }
-                }, shape = RoundedCornerShape(16.dp))
+        if (state.error != null) item(key = "management-error") { PindoErrorMessage(state.error, store::dismissError) }
+        item(key = "management-search") {
+            OutlinedTextField(
+                value = search,
+                onValueChange = { search = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("搜索标题或备注") },
+                singleLine = true,
+                leadingIcon = { Icon(Icons.Outlined.Search, null) },
+                trailingIcon = {
+                    if (search.isNotEmpty()) IconButton(onClick = { search = "" }, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.Outlined.Close, "清空搜索")
+                    }
+                },
+                shape = RoundedCornerShape(14.dp)
+            )
         }
-        item { PindoGroupChips(state.groups, groupID) { groupID = it } }
-        item {
-            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        item(key = "management-groups") { PindoGroupChips(state.groups, groupID) { groupID = it } }
+        item(key = "management-filters") {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 PindoPhasePicker(PhaseFilter.valueOf(phaseName), { phaseName = it.name })
                 PindoSortPicker(TaskSort.valueOf(sortName)) { sortName = it.name }
             }
         }
-        if (selectionMode) item {
-            Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.primaryContainer) {
-                Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("已选择 " + selected.size + " 项", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                        TextButton(onClick = { selectedIDs = if (matchingIDs.isNotEmpty() && selected == matchingIDs) emptyList() else matchingIDs.toList() },
-                            enabled = matchingIDs.isNotEmpty()) { Text(if (matchingIDs.isNotEmpty() && selected == matchingIDs) "取消全选" else "全选结果") }
+        if (selectionMode) item(key = "management-selection") {
+            Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.primaryContainer) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        itemVerticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("已选择 " + selected.size + " 项", style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        TextButton(
+                            onClick = { selectedIDs = if (matchingIDs.isNotEmpty() && selected == matchingIDs) emptyList() else matchingIDs.toList() },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                            enabled = matchingIDs.isNotEmpty()
+                        ) {
+                            Text(if (matchingIDs.isNotEmpty() && selected == matchingIDs) "取消全选" else "全选结果")
+                        }
                     }
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        BatchButton("完成", Icons.Outlined.Done, selected.isNotEmpty()) { perform(TodoBatchAction.SetPhase("completed")) }
-                        BatchButton("未完成", Icons.Outlined.RadioButtonUnchecked, selected.isNotEmpty()) { perform(TodoBatchAction.SetPhase("pending")) }
-                        BatchButton("分组", Icons.Outlined.FolderOpen, selected.isNotEmpty()) { targetGroup = null; groupDialog = true }
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        BatchButton("完成", Icons.Outlined.Done, selected.isNotEmpty(), emphasized = true) {
+                            perform(TodoBatchAction.SetPhase("completed"))
+                        }
+                        BatchButton("未完成", Icons.Outlined.RadioButtonUnchecked, selected.isNotEmpty()) {
+                            perform(TodoBatchAction.SetPhase("pending"))
+                        }
+                        BatchButton("分组", Icons.Outlined.FolderOpen, selected.isNotEmpty()) {
+                            targetGroup = null; groupDialog = true
+                        }
                         BatchButton("日期", Icons.Outlined.Event, selected.isNotEmpty()) { dateDialog = true }
-                        BatchButton("删除", Icons.Outlined.DeleteOutline, selected.isNotEmpty()) { onDelete(selected) }
+                        BatchButton("删除", Icons.Outlined.DeleteOutline, selected.isNotEmpty(), destructive = true) { onDelete(selected) }
                     }
-                    Text("全选仅包含筛选结果；删除父项会同时删除其子项。", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = .8f))
+                    Text("全选仅包含筛选结果；删除父项会同时删除其子项。",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
                 }
             }
         }
-        item {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        item(key = "management-results-heading") {
+            Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("全部结果", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text(matching.size.toString() + " 项", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(matching.size.toString() + " 项", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        if (rows.isEmpty()) item { PindoEmptyState("没有符合条件的事项", "调整状态、分组或关键词，再试一次。", Icons.Outlined.FilterAltOff) }
-        pindoTaskItems(rows = rows, state = state, collapsed = collapsed.toSet(),
+        if (rows.isEmpty()) item(key = "management-empty") {
+            PindoEmptyState("没有符合条件的事项", "调整状态、分组或关键词，再试一次。", Icons.Outlined.FilterAltOff)
+        }
+        pindoTaskItems(
+            rows = rows, state = state, collapsed = collapsed.toSet(),
             onDisclosure = { id -> collapsed = if (id in collapsed) collapsed - id else collapsed + id },
             onEdit = onEdit, onAddChild = onAddChild, onDelete = onDelete, store = store,
             selected = if (selectionMode) selected else null,
             onSelect = { id -> selectedIDs = if (id in selected) selectedIDs - id else selectedIDs + id },
-            onEnterSelection = { id -> selectionMode = true; selectedIDs = listOf(id) })
+            onEnterSelection = { id -> selectionMode = true; selectedIDs = listOf(id) }
+        )
     }
-    if (groupDialog) AlertDialog(onDismissRequest = { groupDialog = false }, title = { Text("修改所选事项的分组") },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("将 " + selected.size + " 项事项移到同一分组。")
-            PindoGroupPicker(state.groups, targetGroup, "未分组") { targetGroup = it }
-        } }, confirmButton = { TextButton(onClick = { perform(TodoBatchAction.SetGroup(targetGroup)); groupDialog = false }, enabled = selected.isNotEmpty()) { Text("应用分组") } },
-        dismissButton = { TextButton(onClick = { groupDialog = false }) { Text("取消") } })
-    if (dateDialog) PindoDatePickerDialog(LocalDate.now(), { dateDialog = false }) { date -> perform(TodoBatchAction.SetDay(date)); dateDialog = false }
+    if (groupDialog) AlertDialog(
+        onDismissRequest = { groupDialog = false },
+        title = { Text("修改所选事项的分组") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("将 " + selected.size + " 项事项移到同一分组。")
+                PindoGroupPicker(state.groups, targetGroup, "未分组") { targetGroup = it }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { perform(TodoBatchAction.SetGroup(targetGroup)); groupDialog = false },
+                enabled = selected.isNotEmpty()) { Text("应用分组") }
+        },
+        dismissButton = { TextButton(onClick = { groupDialog = false }) { Text("取消") } }
+    )
+    if (dateDialog) PindoDatePickerDialog(LocalDate.now(), { dateDialog = false }) { date ->
+        perform(TodoBatchAction.SetDay(date)); dateDialog = false
+    }
 }
 
-@Composable private fun BatchButton(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, enabled: Boolean, onClick: () -> Unit) {
-    FilledTonalButton(onClick = onClick, enabled = enabled, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
-        Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(5.dp)); Text(label)
+@Composable private fun BatchButton(label: String, icon: ImageVector, enabled: Boolean,
+    emphasized: Boolean = false, destructive: Boolean = false, onClick: () -> Unit) {
+    val content: @Composable RowScope.() -> Unit = {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(label)
+    }
+    if (emphasized) {
+        Button(onClick = onClick, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp), content = content)
+    } else {
+        OutlinedButton(
+            onClick = onClick, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+            ),
+            content = content
+        )
     }
 }
 
@@ -125,14 +203,26 @@ import java.time.LocalDate
     val labels = mapOf(PhaseFilter.ALL to "全部状态", PhaseFilter.UNFINISHED to "未完成", PhaseFilter.PENDING to "待开始",
         PhaseFilter.IN_PROGRESS to "进行中", PhaseFilter.COMPLETED to "已完成")
     Box {
-        if (compact) TextButton(onClick = { expanded = true }) {
-            Text(labels.getValue(selected)); Icon(Icons.Outlined.ExpandMore, null, Modifier.size(18.dp))
-        } else OutlinedButton(onClick = { expanded = true }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
-            Icon(Icons.Outlined.FilterList, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text(labels.getValue(selected)); Icon(Icons.Outlined.ExpandMore, null, Modifier.size(18.dp))
+        if (compact) TextButton(onClick = { expanded = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+            Text(labels.getValue(selected))
+            Icon(Icons.Outlined.ExpandMore, null, Modifier.size(18.dp))
+        } else OutlinedButton(
+            onClick = { expanded = true }, modifier = Modifier.heightIn(min = 48.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
+        ) {
+            Icon(Icons.Outlined.FilterList, null, Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(labels.getValue(selected))
+            Icon(Icons.Outlined.ExpandMore, null, Modifier.size(18.dp))
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            PhaseFilter.entries.forEach { phase -> DropdownMenuItem(text = { Text(labels.getValue(phase)) },
-                trailingIcon = { if (phase == selected) Icon(Icons.Outlined.Check, null) }, onClick = { expanded = false; onSelect(phase) }) }
+            PhaseFilter.entries.forEach { phase ->
+                DropdownMenuItem(
+                    text = { Text(labels.getValue(phase)) },
+                    trailingIcon = { if (phase == selected) Icon(Icons.Outlined.Check, null) },
+                    onClick = { expanded = false; onSelect(phase) }
+                )
+            }
         }
     }
 }
@@ -141,10 +231,21 @@ import java.time.LocalDate
     var expanded by remember { mutableStateOf(false) }
     val labels = mapOf(TaskSort.MANUAL to "手动顺序", TaskSort.DATE to "计划日期", TaskSort.UPDATED to "最近修改")
     Box {
-        TextButton(onClick = { expanded = true }) { Icon(Icons.Outlined.Sort, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text(labels.getValue(selected)) }
+        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.heightIn(min = 48.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)) {
+            Icon(Icons.AutoMirrored.Outlined.Sort, null, Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(labels.getValue(selected))
+            Icon(Icons.Outlined.ExpandMore, null, Modifier.size(18.dp))
+        }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            TaskSort.entries.forEach { sort -> DropdownMenuItem(text = { Text(labels.getValue(sort)) },
-                trailingIcon = { if (sort == selected) Icon(Icons.Outlined.Check, null) }, onClick = { expanded = false; onSelect(sort) }) }
+            TaskSort.entries.forEach { sort ->
+                DropdownMenuItem(
+                    text = { Text(labels.getValue(sort)) },
+                    trailingIcon = { if (sort == selected) Icon(Icons.Outlined.Check, null) },
+                    onClick = { expanded = false; onSelect(sort) }
+                )
+            }
         }
     }
 }

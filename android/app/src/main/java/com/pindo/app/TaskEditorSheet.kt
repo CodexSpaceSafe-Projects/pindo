@@ -7,8 +7,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -20,11 +20,14 @@ import androidx.compose.runtime.saveable.Saver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -68,6 +71,7 @@ import java.time.format.DateTimeFormatter
     var preview by rememberSaveable { mutableStateOf(false) }
     var datePicker by remember { mutableStateOf(false) }
     var parentPicker by remember { mutableStateOf(false) }
+    var groupPicker by remember { mutableStateOf(false) }
     var discard by remember { mutableStateOf(false) }
     var validation by remember { mutableStateOf<String?>(null) }
     val noteChanged = remember(note.text, baseline?.noteDigest) { baseline?.let { taskNoteDigest(note.text) != it.noteDigest } ?: (note.text != originalNote) }
@@ -89,87 +93,165 @@ import java.time.format.DateTimeFormatter
     }
     Dialog(onDismissRequest = requestClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         BackHandler(onBack = requestClose)
-        Surface(Modifier.fillMaxSize().testTag("task-editor"), color = MaterialTheme.colorScheme.background) {
+        Surface(Modifier.fillMaxSize().testTag("task-editor"), color = MaterialTheme.colorScheme.surface) {
             Scaffold(
+                modifier = Modifier.imePadding(),
+                containerColor = MaterialTheme.colorScheme.surface,
                 topBar = {
-                    TopAppBar(title = { Text(if (taskID != null) "事项详情" else if (parentID != null) "添加子项" else "记录新事项", style = MaterialTheme.typography.titleMedium) },
-                        navigationIcon = { IconButton(onClick = requestClose) { Icon(Icons.Outlined.Close, "关闭编辑") } },
-                        actions = { Button(onClick = ::save, enabled = !state.readOnly && title.isNotBlank(), modifier = Modifier.padding(end = 12.dp)) { Icon(Icons.Outlined.Check, null, Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text("保存") } })
+                    TopAppBar(
+                        title = {
+                            Text(
+                                if (taskID != null) "事项详情" else if (parentID != null) "添加子项" else "记录新事项",
+                                style = MaterialTheme.typography.titleLarge,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis
+                            )
+                        },
+                        navigationIcon = {
+                            IconButton(onClick = requestClose, modifier = Modifier.size(48.dp)) {
+                                Icon(Icons.Outlined.Close, "关闭编辑")
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                    )
+                },
+                bottomBar = {
+                    Surface(color = MaterialTheme.colorScheme.surface) {
+                        Column(Modifier.navigationBarsPadding()) {
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), contentAlignment = Alignment.Center) {
+                                Button(
+                                    onClick = ::save,
+                                    enabled = !state.readOnly && title.isNotBlank(),
+                                    modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth().heightIn(min = 52.dp),
+                                    shape = MaterialTheme.shapes.medium,
+                                    contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp)
+                                ) {
+                                    Icon(Icons.Outlined.Check, null, Modifier.size(20.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("保存", style = MaterialTheme.typography.titleMedium)
+                                }
+                            }
+                        }
+                    }
                 }
             ) { padding ->
-                Column(Modifier.fillMaxSize().padding(padding).imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                    OutlinedTextField(title, { title = it; validation = null }, placeholder = { Text("准备做些什么？") },
-                        visualTransformation = MixedScriptVisualTransformation,
-                        modifier = Modifier.fillMaxWidth().testTag("task-title"), textStyle = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
-                        shape = RoundedCornerShape(18.dp), minLines = 2, maxLines = 5,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next))
-                    if (taskID != null) {
-                        EditorSection("事项状态", Icons.Outlined.CheckCircleOutline) {
-                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                listOf("pending" to "待办", "inProgress" to "进行中", "completed" to "已完成").forEach { (value, label) ->
-                                    FilterChip(selected = phase == value, onClick = { phase = value }, label = { Text(label) },
-                                        leadingIcon = if (phase == value) ({ Icon(Icons.Outlined.Check, null, Modifier.size(16.dp)) }) else null)
+                Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
+                    Column(
+                        Modifier.widthIn(max = 640.dp).fillMaxSize().align(Alignment.TopCenter)
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 20.dp).padding(top = 16.dp, bottom = 24.dp),
+                        verticalArrangement = Arrangement.spacedBy(24.dp)
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("事项标题", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            OutlinedTextField(
+                                title, { title = it; validation = null },
+                                placeholder = { Text("准备做些什么？", style = MaterialTheme.typography.headlineSmall) },
+                                visualTransformation = MixedScriptVisualTransformation,
+                                modifier = Modifier.fillMaxWidth().testTag("task-title"),
+                                textStyle = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
+                                shape = MaterialTheme.shapes.medium,
+                                minLines = 2, maxLines = 5,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+                                ),
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next)
+                            )
+                        }
+                        if (taskID != null) {
+                            EditorSection("事项状态", Icons.Outlined.CheckCircleOutline) {
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    listOf("pending" to "待办", "inProgress" to "进行中", "completed" to "已完成").forEach { (value, label) ->
+                                        FilterChip(
+                                            selected = phase == value, onClick = { phase = value },
+                                            label = { Text(label) }, modifier = Modifier.heightIn(min = 48.dp),
+                                            leadingIcon = if (phase == value) ({ Icon(Icons.Outlined.Check, null, Modifier.size(18.dp)) }) else null
+                                        )
+                                    }
+                                }
+                                if (state.tasks.any { it.parentID == taskID && it.phase != "completed" }) {
+                                    Text("子项全部完成后，父项才能标记完成。", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                                 }
                             }
-                            if (state.tasks.any { it.parentID == taskID && it.phase != "completed" }) Text("子项全部完成后，父项才能标记完成。", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                         }
-                    }
-                    EditorSection("计划日期", Icons.Outlined.Event) {
-                        Text(LocalDate.parse(day).format(DateTimeFormatter.ofPattern("M 月 d 日 · EEEE")), style = MaterialTheme.typography.titleMedium)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf(LocalDate.now() to "今天", LocalDate.now().plusDays(1) to "明天", LocalDate.now().plusDays(7) to "一周后").forEach { (date, label) ->
-                                FilterChip(selected = day == date.toString(), onClick = { day = date.toString() }, label = { Text(label) })
-                            }
-                            AssistChip(onClick = { datePicker = true }, label = { Text("选择日期") }, leadingIcon = { Icon(Icons.Outlined.CalendarMonth, null, Modifier.size(16.dp)) })
-                        }
-                    }
-                    EditorSection("所属分组", Icons.Outlined.FolderOpen) {
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                            FilterChip(selected = group == null, onClick = { group = null }, label = { Text("未分组") })
-                            state.groups.forEach { item -> FilterChip(selected = group == item.id, onClick = { group = item.id },
-                                label = { Text(item.name) }, leadingIcon = { Box(Modifier.size(11.dp).background(Color(item.color.toColorInt()), CircleShape)) }) }
-                        }
-                        if (state.groups.isEmpty()) Text("可以稍后在设置中建立工作、生活等分组。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.fillMaxWidth().clickable { parentPicker = true }) {
-                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Outlined.SubdirectoryArrowRight, null, tint = MaterialTheme.colorScheme.primary)
-                            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                                Text("父事项", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(spacedText(state.tasks.find { it.id == parent }?.title ?: "作为主待办"), style = MaterialTheme.typography.bodyLarge, maxLines = 2)
-                            }
-                            Icon(Icons.Outlined.ChevronRight, null, tint = MaterialTheme.colorScheme.outline)
-                        }
-                    }
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Outlined.Notes, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(21.dp))
-                            Text("备注", Modifier.weight(1f).padding(start = 9.dp), style = MaterialTheme.typography.titleSmall)
-                            TextButton(onClick = { preview = !preview }) { Icon(if (preview) Icons.Outlined.Edit else Icons.Outlined.Visibility, null, Modifier.size(16.dp)); Spacer(Modifier.width(5.dp)); Text(if (preview) "继续编辑" else "预览") }
-                        }
-                        if (preview) {
-                            Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp)) {
-                                MarkdownPreview(note.text, Modifier.padding(16.dp))
-                            }
-                        } else {
-                            OutlinedTextField(note, { note = it }, visualTransformation = MixedScriptVisualTransformation,
-                                placeholder = { Text("写下细节、清单或想法…\n支持 Markdown 格式") }, modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp).testTag("task-note"), minLines = 6, shape = RoundedCornerShape(18.dp))
-                            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                listOf("加粗" to "**", "斜体" to "*", "代码" to "`").forEach { (label, token) ->
-                                    TextButton(onClick = { note = surroundNote(note, token, token) }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text(label) }
+                        Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerLow) {
+                            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                EditorSection("计划日期", Icons.Outlined.Event) {
+                                    Text(
+                                        LocalDate.parse(day).format(DateTimeFormatter.ofPattern("M 月 d 日 · EEEE")),
+                                        style = MaterialTheme.typography.bodyLarge
+                                    )
+                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        listOf(LocalDate.now() to "今天", LocalDate.now().plusDays(1) to "明天", LocalDate.now().plusDays(7) to "一周后").forEach { (date, label) ->
+                                            FilterChip(selected = day == date.toString(), onClick = { day = date.toString() },
+                                                label = { Text(label) }, modifier = Modifier.heightIn(min = 48.dp))
+                                        }
+                                        AssistChip(onClick = { datePicker = true }, label = { Text("选择日期") },
+                                            modifier = Modifier.heightIn(min = 48.dp),
+                                            leadingIcon = { Icon(Icons.Outlined.CalendarMonth, null, Modifier.size(18.dp)) })
+                                    }
                                 }
-                                TextButton(onClick = { note = surroundNote(note, "\n- [ ] ", "") }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text("清单") }
-                                TextButton(onClick = { note = surroundNote(note, "\n## ", "") }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text("标题") }
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                EditorChoiceRow("所属分组", state.groups.find { it.id == group }?.name ?: "未分组", Icons.Outlined.FolderOpen) {
+                                    groupPicker = true
+                                }
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                EditorChoiceRow("父事项", state.tasks.find { it.id == parent }?.title ?: "作为主待办", Icons.Outlined.SubdirectoryArrowRight) {
+                                    parentPicker = true
+                                }
                             }
                         }
-                        Text("${note.text.length} 字符 · Markdown 原文保存在本地并加密同步", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    listOfNotNull(draftWarning, validation ?: state.error).distinct().forEach { text ->
-                        Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(14.dp)) { Text(text, Modifier.padding(13.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer) }
-                    }
-                    task?.json?.optDouble("updatedAt")?.takeIf { it.isFinite() }?.let { seconds ->
-                        val updated = Instant.ofEpochMilli(((seconds + 978307200) * 1000).toLong()).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("yyyy/M/d HH:mm"))
-                        Text("最近修改 $updated", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Outlined.Notes, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+                                Text("备注", Modifier.weight(1f).padding(start = 10.dp), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                TextButton(onClick = { preview = !preview }, modifier = Modifier.heightIn(min = 48.dp)) {
+                                    Icon(if (preview) Icons.Outlined.Edit else Icons.Outlined.Visibility, null, Modifier.size(20.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(if (preview) "继续编辑" else "预览")
+                                }
+                            }
+                            if (preview) {
+                                Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp)) {
+                                    MarkdownPreview(note.text, Modifier.padding(16.dp))
+                                }
+                            } else {
+                                OutlinedTextField(
+                                    note, { note = it }, visualTransformation = MixedScriptVisualTransformation,
+                                    placeholder = { Text("补充细节、清单或参考链接…\n支持 Markdown 格式") },
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp).testTag("task-note"),
+                                    minLines = 8, shape = MaterialTheme.shapes.medium,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+                                    )
+                                )
+                                Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.surfaceContainerLow) {
+                                    FlowRow(Modifier.fillMaxWidth().padding(4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        listOf("加粗" to "**", "斜体" to "*", "代码" to "`").forEach { (label, token) ->
+                                            TextButton(onClick = { note = surroundNote(note, token, token) },
+                                                modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 12.dp)) { Text(label) }
+                                        }
+                                        TextButton(onClick = { note = surroundNote(note, "\n- [ ] ", "") },
+                                            modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 12.dp)) { Text("清单") }
+                                        TextButton(onClick = { note = surroundNote(note, "\n## ", "") },
+                                            modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 12.dp)) { Text("标题") }
+                                    }
+                                }
+                            }
+                            Text(note.text.length.toString() + " 字符 · 支持 Markdown", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        listOfNotNull(draftWarning, validation ?: state.error).distinct().forEach { text ->
+                            Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth()) {
+                                Text(text, Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onErrorContainer)
+                            }
+                        }
+                        task?.json?.optDouble("updatedAt")?.takeIf { it.isFinite() }?.let { seconds ->
+                            val updated = Instant.ofEpochMilli(((seconds + 978307200) * 1000).toLong()).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("yyyy/M/d HH:mm"))
+                            Text("最近修改 " + updated, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
             }
@@ -179,19 +261,60 @@ import java.time.format.DateTimeFormatter
             DatePickerDialog(onDismissRequest = { datePicker = false }, confirmButton = { TextButton(onClick = {
                 pickerState.selectedDateMillis?.let { day = Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate().toString() }
                 datePicker = false
-            }) { Text("确定") } }, dismissButton = { TextButton(onClick = { datePicker = false }) { Text("取消") } }) { DatePicker(pickerState) }
+            }, modifier = Modifier.heightIn(min = 48.dp)) { Text("确定") } }, dismissButton = { TextButton(onClick = { datePicker = false }, modifier = Modifier.heightIn(min = 48.dp)) { Text("取消") } }) { DatePicker(pickerState) }
         }
+        if (groupPicker) GroupPicker(state.groups, group, onChoose = { group = it; groupPicker = false }, onDismiss = { groupPicker = false })
         if (parentPicker) ParentPicker(state.tasks, taskID, parent, onChoose = { parent = it; parentPicker = false }, onDismiss = { parentPicker = false })
         if (discard) AlertDialog(onDismissRequest = { discard = false }, title = { Text("放弃未保存的修改？") }, text = { Text("当前填写的内容还没有保存。") },
-            confirmButton = { TextButton(onClick = { discard = false; closeDraft() }) { Text("放弃修改") } }, dismissButton = { TextButton(onClick = { discard = false }) { Text("继续编辑") } })
+            confirmButton = { TextButton(onClick = { discard = false; closeDraft() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("放弃修改") } }, dismissButton = { TextButton(onClick = { discard = false }, modifier = Modifier.heightIn(min = 48.dp)) { Text("继续编辑") } })
     }
 }
 
-@Composable private fun EditorSection(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, content: @Composable ColumnScope.() -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, Modifier.size(21.dp), tint = MaterialTheme.colorScheme.primary); Text(title, Modifier.padding(start = 9.dp), style = MaterialTheme.typography.titleSmall) }
+@Composable private fun EditorSection(title: String, icon: ImageVector, content: @Composable ColumnScope.() -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.primary)
+            Text(title, Modifier.padding(start = 10.dp), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        }
         content()
     }
+}
+
+@Composable private fun EditorChoiceRow(label: String, value: String, icon: ImageVector, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable(role = Role.Button, onClick = onClick).padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary)
+        Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(spacedText(value), style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        Icon(Icons.Outlined.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable private fun GroupPicker(groups: List<TodoGroup>, selected: String?, onChoose: (String?) -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("选择分组") }, text = {
+        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 360.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            items(listOf<TodoGroup?>(null) + groups, key = { it?.id ?: "ungrouped" }) { group ->
+                val chosen = selected == group?.id
+                ListItem(
+                    headlineContent = { Text(spacedText(group?.name ?: "未分组"), maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                    leadingContent = {
+                        if (group == null) Icon(Icons.Outlined.FolderOpen, null)
+                        else Box(Modifier.size(14.dp).background(Color(group.color.toColorInt()), CircleShape))
+                    },
+                    trailingContent = { RadioButton(selected = chosen, onClick = null) },
+                    colors = ListItemDefaults.colors(containerColor = if (chosen) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)
+                        .selectable(selected = chosen, role = Role.RadioButton, onClick = { onChoose(group?.id) })
+                )
+            }
+            if (groups.isEmpty()) item {
+                Text("可以稍后在设置中建立工作、生活等分组。", Modifier.padding(top = 16.dp),
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }, confirmButton = { TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) { Text("取消") } })
 }
 
 @Composable private fun ParentPicker(tasks: List<Todo>, editingID: String?, selected: String?, onChoose: (String?) -> Unit, onDismiss: () -> Unit) {
@@ -203,14 +326,14 @@ import java.time.format.DateTimeFormatter
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedTextField(search, { search = it }, placeholder = { Text("搜索事项") }, leadingIcon = { Icon(Icons.Outlined.Search, null) }, singleLine = true, modifier = Modifier.fillMaxWidth())
             LazyColumn(Modifier.heightIn(max = 360.dp)) {
-                item { ListItem(headlineContent = { Text("作为主待办") }, leadingContent = { Icon(Icons.Outlined.FolderOpen, null) }, trailingContent = { if (selected == null) Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary) }, modifier = Modifier.clickable { onChoose(null) }) }
+                item { ListItem(headlineContent = { Text("作为主待办") }, leadingContent = { Icon(Icons.Outlined.FolderOpen, null) }, trailingContent = { if (selected == null) Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary) }, modifier = Modifier.heightIn(min = 64.dp).selectable(selected = selected == null, role = Role.RadioButton) { onChoose(null) }) }
                 items(candidates, key = { it.id }) { candidate ->
-                    ListItem(headlineContent = { Text(spacedText(candidate.title), maxLines = 2) }, supportingContent = { Text(if (candidate.parentID == null) "主待办" else "子待办") }, trailingContent = { if (candidate.id == selected) Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary) }, modifier = Modifier.clickable { onChoose(candidate.id) })
+                    ListItem(headlineContent = { Text(spacedText(candidate.title), maxLines = 2, overflow = TextOverflow.Ellipsis) }, supportingContent = { Text(if (candidate.parentID == null) "主待办" else "子待办") }, trailingContent = { if (candidate.id == selected) Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary) }, modifier = Modifier.heightIn(min = 64.dp).selectable(selected = candidate.id == selected, role = Role.RadioButton) { onChoose(candidate.id) })
                 }
                 if (candidates.isEmpty()) item { Text("没有可用的父事项", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
         }
-    }, confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } })
+    }, confirmButton = { TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) { Text("取消") } })
 }
 
 private fun surroundNote(value: TextFieldValue, prefix: String, suffix: String): TextFieldValue {

@@ -2,6 +2,8 @@ package com.pindo.app
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CalendarMonth
@@ -13,7 +15,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.time.LocalDate
@@ -38,40 +42,68 @@ private enum class MainTab(val title: String, val icon: ImageVector) {
         editorTaskID = taskID; editorParentID = parentID; editorDay = day.toString(); editorOpen = true
     }
     BackHandler(enabled = tab != MainTab.TASKS && !editorOpen && deletingIDs == null) { selectedTab = MainTab.TASKS.name }
-    Scaffold(
-        bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
-                MainTab.entries.forEach { item ->
-                    NavigationBarItem(selected = item == tab, onClick = { selectedTab = item.name },
-                        icon = { Icon(item.icon, contentDescription = null) }, label = { Text(item.title) },
-                        colors = NavigationBarItemDefaults.colors(indicatorColor = MaterialTheme.colorScheme.primaryContainer))
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val useRail = maxWidth >= 600.dp && maxHeight >= 480.dp
+        val fabEndPadding = if (useRail) ((maxWidth - 80.dp - 840.dp) / 2).coerceAtLeast(0.dp) else 0.dp
+        Scaffold(
+            modifier = Modifier.imePadding(),
+            containerColor = MaterialTheme.colorScheme.background,
+            bottomBar = {
+                if (!useRail) Column(Modifier.testTag("navigation-bar")) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
+                        MainTab.entries.forEach { item ->
+                            NavigationBarItem(selected = item == tab, onClick = { selectedTab = item.name },
+                                icon = { Icon(item.icon, contentDescription = null) }, label = { Text(item.title) },
+                                colors = NavigationBarItemDefaults.colors(indicatorColor = MaterialTheme.colorScheme.primaryContainer))
+                        }
+                    }
+                }
+            },
+            floatingActionButton = {
+                if (!state.readOnly && tab != MainTab.SETTINGS) {
+                    FloatingActionButton(onClick = {
+                        edit(null, null, if (tab == MainTab.CALENDAR) LocalDate.parse(selectedDay) else LocalDate.now())
+                    }, modifier = Modifier.padding(end = fabEndPadding).testTag("add-task"),
+                        containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) {
+                        Icon(Icons.Outlined.Add, contentDescription = "添加事项")
+                    }
                 }
             }
-        },
-        floatingActionButton = {
-            if (!state.readOnly && tab != MainTab.SETTINGS) {
-                ExtendedFloatingActionButton(onClick = {
-                    edit(null, null, if (tab == MainTab.CALENDAR) LocalDate.parse(selectedDay) else LocalDate.now())
-                }, icon = { Icon(Icons.Outlined.Add, contentDescription = null) }, text = { Text("添加事项") },
-                    containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary)
-            }
-        }
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            holder.SaveableStateProvider(selectedTab) {
-                when (tab) {
-                    MainTab.TASKS -> DashboardScreen(store, state,
-                        onEdit = { edit(it, null, LocalDate.now()) }, onAddChild = { id -> edit(null, id, state.tasks.find { it.id == id }?.day ?: LocalDate.now()) },
-                        onDelete = { deletingIDs = it.toList() }, onAdd = { edit(null, null, LocalDate.now()) },
-                        onSyncSettings = { selectedTab = MainTab.SETTINGS.name })
-                    MainTab.CALENDAR -> CalendarScreen(store, state, LocalDate.parse(selectedDay),
-                        onDaySelected = { selectedDay = it.toString() }, onEdit = { edit(it, null, LocalDate.parse(selectedDay)) },
-                        onAddChild = { id -> edit(null, id, state.tasks.find { it.id == id }?.day ?: LocalDate.parse(selectedDay)) },
-                        onDelete = { deletingIDs = it.toList() }, onAdd = { edit(null, null, LocalDate.parse(selectedDay)) })
-                    MainTab.MANAGE -> ManagementScreen(store, state, onEdit = { edit(it, null, LocalDate.now()) },
-                        onAddChild = { id -> edit(null, id, state.tasks.find { it.id == id }?.day ?: LocalDate.now()) },
-                        onDelete = { deletingIDs = it.toList() })
-                    MainTab.SETTINGS -> AppSettingsScreen(store, state) { selectedTab = MainTab.TASKS.name }
+        ) { padding ->
+            Row(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
+                if (useRail) NavigationRail(
+                    modifier = Modifier.fillMaxHeight().verticalScroll(rememberScrollState()).testTag("navigation-rail"),
+                    containerColor = MaterialTheme.colorScheme.background,
+                    windowInsets = WindowInsets(0, 0, 0, 0),
+                    header = { Text("Pindo", style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(vertical = 20.dp)) }
+                ) {
+                    MainTab.entries.forEach { item ->
+                        NavigationRailItem(selected = item == tab, onClick = { selectedTab = item.name },
+                            icon = { Icon(item.icon, contentDescription = null) }, label = { Text(item.title) })
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+                Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
+                    Box(Modifier.widthIn(max = 840.dp).fillMaxSize()) {
+                        holder.SaveableStateProvider(selectedTab) {
+                            when (tab) {
+                                MainTab.TASKS -> DashboardScreen(store, state,
+                                    onEdit = { edit(it, null, LocalDate.now()) }, onAddChild = { id -> edit(null, id, state.tasks.find { it.id == id }?.day ?: LocalDate.now()) },
+                                    onDelete = { deletingIDs = it.toList() }, onAdd = { edit(null, null, LocalDate.now()) },
+                                    onSyncSettings = { selectedTab = MainTab.SETTINGS.name })
+                                MainTab.CALENDAR -> CalendarScreen(store, state, LocalDate.parse(selectedDay),
+                                    onDaySelected = { selectedDay = it.toString() }, onEdit = { edit(it, null, LocalDate.parse(selectedDay)) },
+                                    onAddChild = { id -> edit(null, id, state.tasks.find { it.id == id }?.day ?: LocalDate.parse(selectedDay)) },
+                                    onDelete = { deletingIDs = it.toList() }, onAdd = { edit(null, null, LocalDate.parse(selectedDay)) })
+                                MainTab.MANAGE -> ManagementScreen(store, state, onEdit = { edit(it, null, LocalDate.now()) },
+                                    onAddChild = { id -> edit(null, id, state.tasks.find { it.id == id }?.day ?: LocalDate.now()) },
+                                    onDelete = { deletingIDs = it.toList() })
+                                MainTab.SETTINGS -> AppSettingsScreen(store, state) { selectedTab = MainTab.TASKS.name }
+                            }
+                        }
+                    }
                 }
             }
         }
