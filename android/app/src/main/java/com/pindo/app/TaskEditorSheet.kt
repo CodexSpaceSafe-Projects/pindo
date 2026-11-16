@@ -42,7 +42,6 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.graphics.toColorInt
 import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
@@ -79,6 +78,11 @@ import java.time.format.DateTimeFormatter
     var preview by rememberSaveable(taskID, parentID) { mutableStateOf(taskID != null && !initiallyEditing) }
     var propertiesOpen by rememberSaveable { mutableStateOf(false) }
     val titleFocus = remember { FocusRequester() }
+    val noteFocus = remember { FocusRequester() }
+    fun formatNote(prefix: String, suffix: String) {
+        note = surroundNote(note, prefix, suffix)
+        noteFocus.requestFocus()
+    }
     var datePicker by remember { mutableStateOf(false) }
     var parentPicker by remember { mutableStateOf(false) }
     var groupPicker by remember { mutableStateOf(false) }
@@ -129,10 +133,10 @@ import java.time.format.DateTimeFormatter
                         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                             Row(Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
                                 listOf("加粗" to "**", "斜体" to "*", "代码" to "`").forEach { (label, token) ->
-                                    TextButton(onClick = { note = surroundNote(note, token, token) }, modifier = Modifier.heightIn(min = 48.dp)) { Text(label) }
+                                    TextButton(onClick = { formatNote(token, token) }, modifier = Modifier.heightIn(min = 48.dp)) { Text(label) }
                                 }
-                                TextButton(onClick = { note = surroundNote(note, "\n- [ ] ", "") }) { Text("清单") }
-                                TextButton(onClick = { note = surroundNote(note, "\n## ", "") }) { Text("标题") }
+                                TextButton(onClick = { formatNote("\n- [ ] ", "") }, modifier = Modifier.heightIn(min = 48.dp)) { Text("清单") }
+                                TextButton(onClick = { formatNote("\n## ", "") }, modifier = Modifier.heightIn(min = 48.dp)) { Text("标题") }
                             }
                             IconButton(onClick = { propertiesOpen = true }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Tune, "安排事项") }
                         }
@@ -174,7 +178,7 @@ import java.time.format.DateTimeFormatter
                         } else BasicTextField(note, { note = it },
                             textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
                             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary), visualTransformation = MixedScriptVisualTransformation,
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 240.dp).testTag("task-note")
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 240.dp).testTag("task-note").focusRequester(noteFocus)
                                 .semantics { contentDescription = "事项备注，支持 Markdown" },
                             decorationBox = { input -> Box {
                                 if (note.text.isEmpty()) Text("写下细节、清单或想法…", style = MaterialTheme.typography.bodyLarge,

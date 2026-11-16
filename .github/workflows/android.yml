@@ -66,6 +66,8 @@ jobs:
           if not value:
               print('::warning::Configure PINDO_ANDROID_SIGNING. Android publishing is paused; development APKs will not be released.')
               with open(os.environ['GITHUB_OUTPUT'], 'a') as out: out.write('ready=false\n')
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+                  out.write('Android 正式发布暂停：请配置仓库 Secret `PINDO_ANDROID_SIGNING`。开发 APK 不覆盖正式应用。\n')
           else:
               secret = json.loads(value)
               password, alias = secret['password'], secret['alias']
@@ -86,12 +88,13 @@ jobs:
           PINDO_COMMIT_SHA: ${{ github.sha }}
         run: |
           ./gradlew --no-daemon assembleRelease
-          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/pindo-releases.json"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/pindo-releases.json"
           python3 - <<'PY'
           import json, os, urllib.request
           from pathlib import Path
           temp = Path(os.environ['RUNNER_TEMP'])
-          for release in json.loads((temp / 'pindo-releases.json').read_text()):
+          for release in (item for page in json.loads((temp / 'pindo-releases.json').read_text()) for item in page):
+              if release.get('draft'): continue
               asset = next((a for a in release['assets'] if a['name'] == 'android-update.json'), None)
               if asset:
                   urllib.request.urlretrieve(asset['browser_download_url'], temp / 'previous-android-update.json')
@@ -165,11 +168,11 @@ jobs:
             adb install android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
             adb shell am instrument -w -e class com.pindo.app.UpgradeStateTest#seed com.pindo.app.dev.test/androidx.test.runner.AndroidJUnitRunner > "$RUNNER_TEMP/pindo-upgrade/seed.txt"
             cat "$RUNNER_TEMP/pindo-upgrade/seed.txt"
-            rg -q 'OK \(1 test\)' "$RUNNER_TEMP/pindo-upgrade/seed.txt"
+            grep -Fq 'OK (1 test)' "$RUNNER_TEMP/pindo-upgrade/seed.txt"
             adb install -r "$RUNNER_TEMP/pindo-upgrade/after.apk"
             adb shell am instrument -w -e class com.pindo.app.UpgradeStateTest#verify com.pindo.app.dev.test/androidx.test.runner.AndroidJUnitRunner > "$RUNNER_TEMP/pindo-upgrade/verify.txt"
             cat "$RUNNER_TEMP/pindo-upgrade/verify.txt"
-            rg -q 'OK \(1 test\)' "$RUNNER_TEMP/pindo-upgrade/verify.txt"
+            grep -Fq 'OK (1 test)' "$RUNNER_TEMP/pindo-upgrade/verify.txt"
       - uses: actions/upload-artifact@v6
         if: always()
         with:

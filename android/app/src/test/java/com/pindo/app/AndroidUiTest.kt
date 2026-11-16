@@ -145,6 +145,22 @@ class AndroidUiTest {
         compose.onNodeWithTag("calendar").assertExists()
     }
 
+    @OptIn(ExperimentalTestApi::class)
+    @Test fun writingToolbarKeepsTheSelectionAndReturnsFocusToTheNote() {
+        showApp()
+        compose.onNodeWithTag("add-task").performClick()
+        compose.onNodeWithTag("task-title").performTextReplacement("记录阅读想法")
+        compose.onNodeWithTag("task-note").performTextReplacement("记录重点")
+        compose.onNodeWithTag("task-note").performTextInputSelection(androidx.compose.ui.text.TextRange(0, 4))
+        compose.onNodeWithText("加粗").performClick()
+        compose.onNodeWithTag("task-note").assertIsFocused().assertTextEquals("**记录重点**")
+        compose.onNodeWithText("保存").performClick()
+        compose.runOnIdle {
+            assertEquals("记录阅读想法", store.state.value.tasks.single().title)
+            assertEquals("**记录重点**", store.state.value.tasks.single().note)
+        }
+    }
+
     @Test
     @Config(qualifiers = "zh-rCN-w320dp-h640dp-port-xhdpi")
     fun narrowPhoneWithLargeFontCanAddAndReachEveryPage() {
@@ -159,7 +175,7 @@ class AndroidUiTest {
             assertTrue(store.state.value.tasks.any { it.title == "为下周留出阅读时间" })
         }
         saveScreenshot("dashboard-narrow-large-font")
-        compose.onNodeWithTag("scope-filter").performScrollTo().performClick()
+        compose.onNodeWithTag("scope-filter").assertIsDisplayed().performClick()
         compose.onNodeWithText("近 7 天").performClick()
         compose.onNodeWithTag("dashboard").performScrollToNode(hasText("安排周末散步"))
         compose.onNodeWithText("安排周末散步").assertIsDisplayed()
