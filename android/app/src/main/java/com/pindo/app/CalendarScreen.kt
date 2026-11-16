@@ -1,12 +1,10 @@
 package com.pindo.app
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
@@ -97,8 +95,8 @@ import java.util.Locale
                             horizontalArrangement = Arrangement.spacedBy(16.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            CalendarLegend("未完成数量", MaterialTheme.colorScheme.tertiary)
-                            CalendarLegend("已完成数量", MaterialTheme.colorScheme.primary)
+                            CalendarLegend("未完成数量", MaterialTheme.colorScheme.tertiary, completed = false)
+                            CalendarLegend("已完成数量", MaterialTheme.colorScheme.primary, completed = true)
                         }
                     }
                 }
@@ -200,21 +198,18 @@ import java.util.Locale
                     verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     if (unfinished > 0) Text(unfinished.toString(), style = MaterialTheme.typography.labelSmall,
                         color = if (selected) colors.onPrimary else colors.tertiary)
-                    if (completed > 0) Row(verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                        val color = if (selected) colors.onPrimary else colors.primary
-                        Box(Modifier.size(3.dp).background(color, CircleShape))
-                        Text(completed.toString(), style = MaterialTheme.typography.labelSmall, color = color)
-                    }
+                    if (completed > 0) Text("✓" + completed, style = MaterialTheme.typography.labelSmall,
+                        color = if (selected) colors.onPrimary else colors.primary)
                 }
             }
         }
     }
 }
 
-@Composable private fun CalendarLegend(label: String, color: Color) {
+@Composable private fun CalendarLegend(label: String, color: Color, completed: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Box(Modifier.size(5.dp).background(color, CircleShape))
+        Icon(if (completed) Icons.Outlined.Check else Icons.Outlined.RadioButtonUnchecked,
+            contentDescription = null, tint = color, modifier = Modifier.size(14.dp))
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

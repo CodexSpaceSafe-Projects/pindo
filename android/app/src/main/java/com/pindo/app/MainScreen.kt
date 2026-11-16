@@ -61,7 +61,7 @@ private enum class MainTab(val title: String, val icon: ImageVector) {
                 }
             },
             floatingActionButton = {
-                if (!state.readOnly && tab != MainTab.SETTINGS) {
+                if (!state.readOnly && (tab == MainTab.CALENDAR || tab == MainTab.MANAGE)) {
                     FloatingActionButton(onClick = {
                         edit(null, null, if (tab == MainTab.CALENDAR) LocalDate.parse(selectedDay) else LocalDate.now())
                     }, modifier = Modifier.padding(end = fabEndPadding).testTag("add-task"),

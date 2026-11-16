@@ -187,9 +187,6 @@ internal fun LazyListScope.pindoTaskItems(rows: List<TaskOutlineEntry>, state: A
                             contentDescription = if (expanded) "收起子项" else "展开子项", modifier = Modifier.size(20.dp))
                     }
                 }
-            } else if (children.isNotEmpty()) IconButton(onClick = onDisclosure, modifier = Modifier.size(48.dp)) {
-                Icon(if (expanded) Icons.Outlined.ExpandMore else Icons.Outlined.ChevronRight,
-                    contentDescription = if (expanded) "收起子项" else "展开子项", modifier = Modifier.size(20.dp))
             } else Spacer(Modifier.width(10.dp))
         }
     }

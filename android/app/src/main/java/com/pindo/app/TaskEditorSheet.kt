@@ -159,6 +159,47 @@ import java.time.format.DateTimeFormatter
                                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next)
                             )
                         }
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Outlined.Notes, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+                                Text("备注", Modifier.weight(1f).padding(start = 10.dp), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                TextButton(onClick = { preview = !preview }, modifier = Modifier.heightIn(min = 48.dp)) {
+                                    Icon(if (preview) Icons.Outlined.Edit else Icons.Outlined.Visibility, null, Modifier.size(20.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(if (preview) "继续编辑" else "预览")
+                                }
+                            }
+                            if (preview) {
+                                Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp)) {
+                                    MarkdownPreview(note.text, Modifier.padding(16.dp))
+                                }
+                            } else {
+                                OutlinedTextField(
+                                    note, { note = it }, visualTransformation = MixedScriptVisualTransformation,
+                                    placeholder = { Text("补充细节、清单或参考链接…\n支持 Markdown 格式") },
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp).testTag("task-note"),
+                                    minLines = 8, shape = MaterialTheme.shapes.medium,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+                                    )
+                                )
+                                Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.surfaceContainerLow) {
+                                    FlowRow(Modifier.fillMaxWidth().padding(4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        listOf("加粗" to "**", "斜体" to "*", "代码" to "`").forEach { (label, token) ->
+                                            TextButton(onClick = { note = surroundNote(note, token, token) },
+                                                modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 12.dp)) { Text(label) }
+                                        }
+                                        TextButton(onClick = { note = surroundNote(note, "\n- [ ] ", "") },
+                                            modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 12.dp)) { Text("清单") }
+                                        TextButton(onClick = { note = surroundNote(note, "\n## ", "") },
+                                            modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 12.dp)) { Text("标题") }
+                                    }
+                                }
+                            }
+                            Text(note.text.length.toString() + " 字符 · 支持 Markdown", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                         if (taskID != null) {
                             EditorSection("事项状态", Icons.Outlined.CheckCircleOutline) {
                                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -201,47 +242,6 @@ import java.time.format.DateTimeFormatter
                                     parentPicker = true
                                 }
                             }
-                        }
-                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Outlined.Notes, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
-                                Text("备注", Modifier.weight(1f).padding(start = 10.dp), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                                TextButton(onClick = { preview = !preview }, modifier = Modifier.heightIn(min = 48.dp)) {
-                                    Icon(if (preview) Icons.Outlined.Edit else Icons.Outlined.Visibility, null, Modifier.size(20.dp))
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(if (preview) "继续编辑" else "预览")
-                                }
-                            }
-                            if (preview) {
-                                Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerLow,
-                                    modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp)) {
-                                    MarkdownPreview(note.text, Modifier.padding(16.dp))
-                                }
-                            } else {
-                                OutlinedTextField(
-                                    note, { note = it }, visualTransformation = MixedScriptVisualTransformation,
-                                    placeholder = { Text("补充细节、清单或参考链接…\n支持 Markdown 格式") },
-                                    modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp).testTag("task-note"),
-                                    minLines = 8, shape = MaterialTheme.shapes.medium,
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-                                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest
-                                    )
-                                )
-                                Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.surfaceContainerLow) {
-                                    FlowRow(Modifier.fillMaxWidth().padding(4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        listOf("加粗" to "**", "斜体" to "*", "代码" to "`").forEach { (label, token) ->
-                                            TextButton(onClick = { note = surroundNote(note, token, token) },
-                                                modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 12.dp)) { Text(label) }
-                                        }
-                                        TextButton(onClick = { note = surroundNote(note, "\n- [ ] ", "") },
-                                            modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 12.dp)) { Text("清单") }
-                                        TextButton(onClick = { note = surroundNote(note, "\n## ", "") },
-                                            modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 12.dp)) { Text("标题") }
-                                    }
-                                }
-                            }
-                            Text(note.text.length.toString() + " 字符 · 支持 Markdown", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         listOfNotNull(draftWarning, validation ?: state.error).distinct().forEach { text ->
                             Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth()) {

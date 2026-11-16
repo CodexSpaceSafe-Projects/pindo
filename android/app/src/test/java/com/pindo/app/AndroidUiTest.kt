@@ -106,6 +106,7 @@ class AndroidUiTest {
         compose.onNodeWithText("整理本周的产品计划").performClick()
         compose.onNodeWithTag("task-title").performTextReplacement("整理下一周的产品计划")
         compose.onNodeWithText("明天").performScrollTo().performClick()
+        compose.onNodeWithTag("task-title").performScrollTo()
         saveScreenshot("task-editor", "task-editor")
         val markdown = "# 讨论纪要\n\n**明确目标**，逐步推进。\n\n- 整理反馈\n- 安排下一次讨论"
         compose.onNodeWithTag("task-note").performScrollTo().performTextReplacement(markdown)
@@ -148,6 +149,10 @@ class AndroidUiTest {
             assertTrue(store.state.value.tasks.any { it.title == "为下周留出阅读时间" })
         }
         saveScreenshot("dashboard-narrow-large-font")
+        compose.onNodeWithTag("scope-filter").performScrollTo().performClick()
+        compose.onNodeWithText("近 7 天").performClick()
+        compose.onNodeWithTag("dashboard").performScrollToNode(hasText("安排周末散步"))
+        compose.onNodeWithText("安排周末散步").assertIsDisplayed()
 
         navigate("日历")
         compose.onNodeWithTag("calendar").assertIsDisplayed()
