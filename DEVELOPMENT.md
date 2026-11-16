@@ -38,7 +38,7 @@ macOS 面板使用非激活、可调整尺寸的原生窗口；置顶控制隐�
 
 ### 首次部署
 
-1. 在 Cloudflare 控制台创建空 D1 数据库，进入该数据库的 Console，依次执行 [0001_schema.sql](backend/cloudflare/migrations/0001_schema.sql) 和 [0002_device_names.sql](backend/cloudflare/migrations/0002_device_names.sql)，各一次。已有数据库只执行尚未应用的增量迁移，不重跑完整初始化 schema。
+1. 在 Cloudflare 控制台创建空 D1 数据库，进入该数据库的 Console，按文件名顺序执行[迁移目录](backend/cloudflare/migrations/)内的全部 `.sql` 文件，各一次。已有数据库只执行尚未应用的增量迁移，不重跑完整初始化 schema。
 2. 在 Workers & Pages 中创建 Worker，名称与下一步填写的 `workerName` 一致，先发布控制台的占位示例。在该 Worker 的 Settings → Variables and Secrets 中，将 `BOOTSTRAP_SECRET`、`RECOVERY_SECRET` 添加为 **Secret**，分别使用独立随机值。前者供首台设备初始化资料库；后者仅用于管理员维护与灾备，不是客户端的内容加密密钥。先建立 Worker 和 Secret，才能在后续上传时继承它们。
 3. 在仓库根目录复制模板，再仅编辑本地副本，填写自己的 `accountId`、`workerName`、`databaseId`、`databaseName`、`endpoint` 和 `serviceID`：
 
