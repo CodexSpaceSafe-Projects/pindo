@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { createHash, createCipheriv } from 'node:crypto';
 import { createTestWorker } from './runtime.mjs';
 import { appendBatch } from '../../../work/cloudflare-worker.mjs';
+import { devices as manageDevices } from '../../../work/cloudflare-worker.mjs';
 
 const serviceID = '00000000-0000-4000-8000-000000000001';
 const vaultID = '00000000-0000-4000-8000-000000000002';
@@ -22,6 +23,13 @@ async function request(path, data, auth = token) {
   });
   return { status: response.status, body: await response.json() };
 }
+async function removeDevice(device, auth = token, deleteEpoch = epoch) {
+  const response = await mf.dispatchFetch(url(`devices/${device}`), {
+    method:'DELETE', headers:{Authorization:`Bearer ${auth}`,'Content-Type':'application/json'},
+    body:JSON.stringify({epoch:deleteEpoch})
+  });
+  return {status:response.status,body:await response.json()};
+}
 before(async () => {
   ({ mf, db } = await createTestWorker({
     SERVICE_ID: serviceID, SYNC_ENABLED: 'true',
@@ -31,7 +39,7 @@ before(async () => {
 after(async () => { await mf?.dispose(); });
 beforeEach(async () => {
   await db.batch([
-    db.prepare('DROP TRIGGER IF EXISTS fail_receipt'), db.prepare('DROP TRIGGER IF EXISTS fail_counter'),
+    db.prepare('DROP TRIGGER IF EXISTS fail_device_delete'), db.prepare('DROP TRIGGER IF EXISTS fail_receipt'), db.prepare('DROP TRIGGER IF EXISTS fail_counter'),
     ...['commit_artifacts','checkpoint_artifacts','artifacts','checkpoints','leases','pairing','mutations'].map(t=>db.prepare('DELETE FROM '+t)),
     db.prepare('UPDATE service_state SET bootstrapped=0'),
     db.prepare('DELETE FROM commits'), db.prepare('DELETE FROM receipts'), db.prepare('DELETE FROM devices'), db.prepare('DELETE FROM vaults'),
@@ -101,9 +109,9 @@ for (const [trigger, table] of [['fail_receipt','receipts'], ['fail_counter','va
   });
 }
 
-test('revocation after preflight is enforced inside the append transaction', async () => {
+test('deletion after preflight is enforced inside the append transaction', async () => {
   assert.equal((await request('info')).status, 200); // earlier authorization is no authority to write
-  await db.prepare('UPDATE devices SET revoked_at=1').run();
+  await db.prepare('DELETE FROM devices').run();
   await assert.rejects(appendBatch(new Request(url('push'), {method:'POST', headers:{'Content-Type':'application/json'},body:JSON.stringify(body())}),
     {DB:db,SERVICE_ID:serviceID}, {vaultID,tokenHash}), e => e.code === 'authentication_required');
   assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM commits').first()).n, 0);
@@ -177,7 +185,7 @@ test('bootstrap closes after one vault and pairing consumes once atomically with
   assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM devices').first()).n,2);
 });
 
-test('pair attempt cap, expired codes, token rotation and self revocation', async () => {
+test('pair attempt cap, expired codes, token rotation and self deletion protection', async () => {
   const pairID=id(80),code=Buffer.alloc(32,9).toString('base64url');
   await request('pairings',{epoch,id:pairID,code});
   const consume={epoch,code:Buffer.alloc(32,8).toString('base64url'),deviceID:id(81),deviceToken:Buffer.alloc(32,10).toString('base64url')};
@@ -187,8 +195,8 @@ test('pair attempt cap, expired codes, token rotation and self revocation', asyn
   assert.equal((await request(`devices/${deviceID}/rotate`,{epoch,deviceToken:rotated})).status,200);
   assert.equal((await request('info')).status,401);
   assert.equal((await request('info',undefined,rotated)).status,200);
-  assert.equal((await request(`devices/${deviceID}/revoke`,{epoch},rotated)).status,200);
-  assert.equal((await request('info',undefined,rotated)).status,401);
+  assert.equal((await removeDevice(deviceID,rotated)).body.error.code,'device_delete_forbidden');
+  assert.equal((await request('info',undefined,rotated)).status,200);
 });
 
 test('immutable chunk integrity, checkpoint CAS, two recovery entries and safe GC', async () => {
@@ -266,8 +274,8 @@ test('checkpoint retry neither charges twice nor moves the pointer backwards; mi
  assert.equal((await db.prepare('SELECT checkpoint_id FROM vaults').first()).checkpoint_id,checkpoint.id);
 });
 
-test('revoked devices cannot publish checkpoints, allocate chunks or advance GC after earlier authorization',async()=>{
- await request('push',body());assert.equal((await request('info')).status,200);await db.prepare('UPDATE devices SET revoked_at=1').run();
+test('deleted devices cannot publish checkpoints, allocate chunks or advance GC after earlier authorization',async()=>{
+ await request('push',body());assert.equal((await request('info')).status,200);await db.prepare('DELETE FROM devices').run();
  for(const [path,value] of[['checkpoints',{epoch,id:id(240),covered:1,expectedID:null,ciphertext:body().ciphertext,artifactIDs:[]}],['gc',{epoch}]])assert.equal((await request(path,value)).status,401);
  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM checkpoints').first()).n,0);assert.equal((await db.prepare('SELECT gc_floor FROM vaults').first()).gc_floor,0);
 });
@@ -280,8 +288,8 @@ test('device-name migration preserves an existing authorized device and its sync
     assert.equal(unhealthy.status, 503);
     const migration = await readFile(new URL('../migrations/0002_device_names.sql', import.meta.url), 'utf8');
     await db.exec(migration.replace(/--[^\n]*/g, '').replace(/\n/g, ' '));
-    const row = await db.prepare('SELECT id,token_hash,name,revoked_at FROM devices').first();
-    assert.deepEqual(row, { id: deviceID, token_hash: tokenHash, name: '', revoked_at: null });
+    const row = await db.prepare('SELECT id,token_hash,name FROM devices').first();
+    assert.deepEqual(row, { id: deviceID, token_hash: tokenHash, name: '' });
     assert.equal((await request('info')).body.head, 1);
     assert.equal((await request(`receipts/${id(0)}?epoch=${epoch}`)).body.receipt.revision, 1);
     assert.equal((await request('devices')).body.devices[0].name, '');
@@ -304,7 +312,7 @@ test('bootstrap stores the client name; a lost-response retry cannot overwrite a
   };
   const first = await initialize(created);
   assert.equal(first.status, 200);
-  assert.deepEqual((await request('devices')).body.devices, [{ id: deviceID, name: '工作 MacBook 🚀', revoked_at: null }]);
+  assert.deepEqual((await request('devices')).body.devices, [{ id: deviceID, name: '工作 MacBook 🚀' }]);
   const renamed = await request(`devices/${deviceID}/name`, { epoch, name: '  家里的 Mac  ' });
   assert.equal(renamed.status, 200);
   assert.equal(renamed.body.deviceID, deviceID);
@@ -331,9 +339,9 @@ test('pairing records each client name and only its own device token can rename 
   assert.equal((await request(`devices/${newDevice}/rotate`, { epoch, deviceToken: rotated }, newToken)).status, 200);
   assert.equal((await request(`devices/${newDevice}/name`, { epoch, name: 'Old token' }, newToken)).status, 401);
   assert.equal((await request('devices', undefined, rotated)).body.devices.find(device => device.id === newDevice).name, '我的手机');
-  assert.equal((await request(`devices/${newDevice}/revoke`, { epoch }, rotated)).status, 200);
+  assert.equal((await removeDevice(newDevice)).status, 200);
   assert.equal((await request(`devices/${newDevice}/name`, { epoch, name: 'Revoked' }, rotated)).status, 401);
-  assert.equal((await request('devices')).body.devices.find(device => device.id === newDevice).name, '我的手机');
+  assert.equal((await request('devices')).body.devices.some(device => device.id === newDevice), false);
 });
 
 test('device-name validation rejects invalid metadata before writes or pairing attempts', async () => {
@@ -360,4 +368,126 @@ test('device-name validation rejects invalid metadata before writes or pairing a
   assert.equal((await request(`devices/${deviceID}/name`, { epoch: id(262), name: 'Wrong epoch' })).status, 409);
   await db.prepare('UPDATE vaults SET maintenance=1').run();
   assert.equal((await request(`devices/${deviceID}/name`, { epoch, name: 'Maintenance' })).status, 503);
+});
+
+const management = JSON.parse(await readFile(new URL('../../../sync-vectors/device-management.json', import.meta.url), 'utf8'));
+const peerID = management.response.deviceID;
+const peerToken = Buffer.alloc(32, 23).toString('base64url');
+const peerHash = createHash('sha256').update(peerToken).digest('hex');
+async function installPeer() {
+  await db.prepare('INSERT INTO devices(id,vault_id,token_hash,name) VALUES(?,?,?,?)').bind(peerID,vaultID,peerHash,'工作手机').run();
+}
+async function deviceRecords() {
+  return {
+    devices:(await db.prepare('SELECT * FROM devices ORDER BY id').all()).results,
+    leases:(await db.prepare('SELECT * FROM leases ORDER BY id').all()).results,
+    pairing:(await db.prepare('SELECT * FROM pairing ORDER BY id').all()).results
+  };
+}
+async function seedDeviceReferences() {
+  await installPeer();
+  assert.equal((await request('push',body(),peerToken)).status,200);
+  assert.equal((await request(`leases/${id(400)}`,{epoch,floor:0},peerToken)).status,200);
+  assert.equal((await request('pairings',{epoch,id:id(401),code:peerToken},peerToken)).status,200);
+  assert.equal((await request('pairings',{epoch,id:id(402),code:peerToken})).status,200);
+  await db.prepare('UPDATE pairing SET consumed_device=?,consumed_hash=? WHERE id=?').bind(peerID,peerHash,id(402)).run();
+  assert.equal((await request('pairings',{epoch,id:id(403),code:peerToken})).status,200);
+}
+
+test('deletion removes every device credential and association, preserves history, and is retryable',async()=>{
+  await seedDeviceReferences();
+  const history=(await db.prepare('SELECT * FROM commits').all()).results;
+  const receipt=await request(`receipts/${id(0)}?epoch=${epoch}`);
+  const before=(await db.prepare('SELECT * FROM vaults').all()).results;
+  const response=await mf.dispatchFetch(url(management.devicePath),{method:management.method,
+    headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify(management.request)});
+  assert.equal(response.status,200);assert.deepEqual(await response.json(),management.response);
+  assert.deepEqual((await request('devices')).body.devices,[{id:deviceID,name:''}]);
+  assert.equal((await request('info',undefined,peerToken)).status,401);
+  assert.equal((await request('push',body(1),peerToken)).status,401);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM devices WHERE id=? OR token_hash=?').bind(peerID,peerHash).first()).n,0);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM leases WHERE device_id=?').bind(peerID).first()).n,0);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM pairing WHERE created_by=? OR consumed_device=? OR consumed_hash=?').bind(peerID,peerID,peerHash).first()).n,0);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM pairing').first()).n,1);
+  assert.equal((await request(`pairings/${id(401)}/consume`,{epoch,code:peerToken,deviceID:id(404),deviceToken:peerToken})).status,401);
+  assert.deepEqual((await db.prepare('SELECT * FROM commits').all()).results,history);
+  assert.deepEqual((await db.prepare('SELECT * FROM vaults').all()).results,before);
+  assert.deepEqual(await request(`receipts/${id(0)}?epoch=${epoch}`),receipt);
+  assert.equal((await request(`pull?epoch=${epoch}&after=0`)).body.commits.length,1);
+  assert.deepEqual((await removeDevice(peerID)).body,management.response);
+  assert.equal((await request('push',body(2))).body.receipt.revision,2);
+  assert.deepEqual((await db.prepare('PRAGMA foreign_key_check').all()).results,[]);
+});
+
+test('self deletion, stale epochs, maintenance and other vault tokens cannot change device records',async()=>{
+  await seedDeviceReferences();
+  const snapshot=await deviceRecords();
+  assert.deepEqual((await removeDevice(deviceID)).body.error,{code:management.selfDeleteError.code});
+  assert.equal((await removeDevice(deviceID)).status,management.selfDeleteError.status);
+  assert.equal((await removeDevice(peerID,token,id(410))).body.error.code,'epoch_mismatch');
+  await db.prepare('UPDATE vaults SET maintenance=1').run();
+  assert.equal((await removeDevice(peerID)).body.error.code,'maintenance');
+  await db.prepare('UPDATE vaults SET maintenance=0').run();
+  const otherVault=id(411),otherDevice=id(412),otherToken=Buffer.alloc(32,24).toString('base64url');
+  await db.prepare('INSERT INTO vaults(id,epoch) VALUES(?,?)').bind(otherVault,epoch).run();
+  await db.prepare('INSERT INTO devices(id,vault_id,token_hash) VALUES(?,?,?)').bind(otherDevice,otherVault,createHash('sha256').update(otherToken).digest('hex')).run();
+  assert.equal((await removeDevice(peerID,otherToken)).status,401);
+  assert.equal((await removeDevice(otherDevice)).status,200);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM devices WHERE id=?').bind(otherDevice).first()).n,1);
+  await db.prepare('DELETE FROM devices WHERE id=?').bind(otherDevice).run();
+  await db.prepare('DELETE FROM vaults WHERE id=?').bind(otherVault).run();
+  assert.deepEqual(await deviceRecords(),snapshot);
+  assert.equal((await request('info')).status,200);
+});
+
+test('device deletion rolls back its pairing and lease cleanup on database failure',async()=>{
+  await seedDeviceReferences();const snapshot=await deviceRecords();
+  await db.prepare("CREATE TRIGGER fail_device_delete BEFORE DELETE ON devices BEGIN SELECT RAISE(ABORT,'injected failure'); END").run();
+  assert.equal((await removeDevice(peerID)).body.error.code,'storage_unavailable');
+  assert.deepEqual(await deviceRecords(),snapshot);
+});
+
+test('deletion rechecks caller access inside the transaction after an earlier authorization',async()=>{
+  await seedDeviceReferences();let calls=0;
+  const racingDB={prepare:sql=>db.prepare(sql),batch:async statements=>{
+    if(++calls===2) await db.prepare('DELETE FROM devices WHERE id=?').bind(deviceID).run();
+    return db.batch(statements);
+  }};
+  // Remove caller-owned pairings first so the simulated concurrent deletion can
+  // use the real foreign-key constraints without bypassing them.
+  await db.prepare('DELETE FROM pairing WHERE created_by=?').bind(deviceID).run();
+  const peerBefore=await deviceRecords();
+  await assert.rejects(manageDevices(new Request(url(`devices/${peerID}`),{method:'DELETE',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({epoch})}),
+    {DB:racingDB,SERVICE_ID:serviceID},{vaultID,tokenHash},`devices/${peerID}`),e=>e.code==='authentication_required');
+  const after=await deviceRecords();
+  assert.deepEqual(after.pairing,peerBefore.pairing);assert.deepEqual(after.leases,peerBefore.leases);
+  assert.ok(after.devices.some(d=>d.id===peerID));
+});
+
+test('device deletion migration preserves shared ciphertext and authorized devices while erasing old disabled registrations',async()=>{
+  const legacy=await createTestWorker({SERVICE_ID:serviceID,SYNC_ENABLED:'true'}, {throughMigration:'0002_device_names.sql'});
+  try {
+    const old=legacy.db;
+    await old.prepare('INSERT INTO vaults(id,epoch,head) VALUES(?,?,1)').bind(vaultID,epoch).run();
+    await old.prepare('INSERT INTO devices(id,vault_id,token_hash,name) VALUES(?,?,?,?)').bind(deviceID,vaultID,tokenHash,'主设备').run();
+    await old.prepare('INSERT INTO devices(id,vault_id,token_hash,name,revoked_at) VALUES(?,?,?,?,1)').bind(peerID,vaultID,peerHash,'旧设备').run();
+    const cipher=body().ciphertext,digest='a'.repeat(64);
+    await old.prepare('INSERT INTO commits(vault_id,epoch,revision,batch_id,device_id,digest,ciphertext,created_at) VALUES(?,?,1,?,?,?,?,0)').bind(vaultID,epoch,id(0),peerID,digest,cipher).run();
+    await old.prepare('INSERT INTO receipts(vault_id,epoch,batch_id,revision,device_id,digest) VALUES(?,?,?,1,?,?)').bind(vaultID,epoch,id(0),peerID,digest).run();
+    await old.prepare('INSERT INTO leases(id,vault_id,epoch,device_id,floor,expires_at) VALUES(?,?,?,?,0,1)').bind(id(420),vaultID,epoch,peerID).run();
+    await old.prepare('INSERT INTO pairing(id,vault_id,epoch,code_hash,created_by,expires_at) VALUES(?,?,?,?,?,1)').bind(id(421),vaultID,epoch,peerHash,peerID).run();
+    await old.prepare('INSERT INTO pairing(id,vault_id,epoch,code_hash,created_by,expires_at,consumed_device,consumed_hash) VALUES(?,?,?,?,?,1,?,?)').bind(id(422),vaultID,epoch,peerHash,deviceID,peerID,peerHash).run();
+    await old.prepare('UPDATE service_state SET bootstrapped=1').run();
+    const migration=await readFile(new URL('../migrations/0003_delete_devices.sql',import.meta.url),'utf8');
+    await old.exec(migration.replace(/--[^\n]*/g,'').replace(/\n/g,' '));
+    assert.deepEqual((await old.prepare('SELECT * FROM devices').all()).results,[{id:deviceID,vault_id:vaultID,token_hash:tokenHash,name:'主设备'}]);
+    const commit=await old.prepare('SELECT * FROM commits').first();
+    assert.equal(commit.ciphertext,cipher);assert.equal(commit.revision,1);assert.equal('device_id' in commit,false);
+    const receipt=await old.prepare('SELECT * FROM receipts').first();
+    assert.equal(receipt.batch_id,id(0));assert.equal('device_id' in receipt,false);
+    for(const table of ['leases','pairing'])assert.equal((await old.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first()).n,0);
+    assert.equal((await old.prepare('SELECT bootstrapped FROM service_state').first()).bootstrapped,1);
+    assert.deepEqual((await old.prepare('PRAGMA foreign_key_check').all()).results,[]);
+  }finally{await legacy.mf.dispose();}
 });

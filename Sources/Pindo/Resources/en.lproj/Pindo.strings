@@ -266,10 +266,7 @@
 "配对信息" = "Pairing information";
 "此信息包含恢复密钥。请通过安全通道交给另一台设备，配对凭据十分钟内有效且只能使用一次。" = "This includes your recovery key. Share it securely with your other device. Pairing expires in ten minutes and can be used once.";
 "复制配对信息" = "Copy pairing information";
-"已撤销" = "Revoked";
-"撤销访问" = "Revoke access";
 "轮换本机访问令牌" = "Rotate this device token";
-"撤销只阻止之后的云访问；已下载的资料和密钥无法远程收回。" = "Revocation prevents future cloud access. Downloaded data and keys cannot be removed remotely.";
 "加入已有资料库" = "Join an existing library";
 "粘贴另一台设备的配对信息" = "Paste pairing information from your other device";
 "配对并合并本机资料" = "Pair and merge local data";
@@ -301,3 +298,9 @@
 "设备名称需要1–80个字符，最多256字节，且不能包含控制字符。" = "Use 1–80 characters, at most 256 UTF-8 bytes, without control characters.";
 "刷新设备列表" = "Refresh Device List";
 "继续同步后可修改设备名称" = "Resume syncing to change this device name.";
+"删除这个设备" = "Delete this device";
+"删除这个设备？" = "Delete this device?";
+"设备已删除" = "Device deleted";
+"不能删除正在使用的这台设备。请在另一台已连接设备上操作。" = "You cannot delete the device you are using. Use another connected device.";
+"删除后将清除服务器上的设备信息，保留共享事项和对方本机资料。当前设备不能删除。" = "Deleting removes the device information from the server. Shared tasks and its local data are kept. You cannot delete this device.";
+"将永久删除该设备的云端登记、访问凭据、配对信息和同步租约。共享事项和对方本机资料会保留，再次连接需要重新配对。" = "This permanently deletes its cloud registration, access credentials, pairing information and sync leases. Shared tasks and its local data are kept. Pair again to reconnect.";

@@ -1,7 +1,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { Miniflare, Log, LogLevel } from 'miniflare';
 
-export async function createTestWorker(bindings) {
+export async function createTestWorker(bindings, {throughMigration} = {}) {
   const mf = new Miniflare({
     modules: true,
     modulesRoot: new URL('../../../work/', import.meta.url).pathname,
@@ -13,7 +13,7 @@ export async function createTestWorker(bindings) {
   try {
     const db = await mf.getD1Database('DB');
     const migrations = new URL('../migrations/', import.meta.url);
-    for (const name of (await readdir(migrations)).filter(name => name.endsWith('.sql')).sort()) {
+    for (const name of (await readdir(migrations)).filter(name => name.endsWith('.sql') && (!throughMigration || name <= throughMigration)).sort()) {
       const schema = await readFile(new URL(name, migrations), 'utf8');
       await db.exec(schema.replace(/--[^\n]*/g, '').replace(/\n/g, ' '));
     }

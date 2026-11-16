@@ -42,13 +42,11 @@ enum MacDeviceName {
 struct V3Device: Decodable, Identifiable {
     var id: String
     var name: String
-    var revoked_at: Int64?
-    private enum CodingKeys: String, CodingKey { case id, name, revoked_at }
+    private enum CodingKeys: String, CodingKey { case id, name }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(String.self, forKey: .id)
         name = try values.decodeIfPresent(String.self, forKey: .name) ?? ""
-        revoked_at = try values.decodeIfPresent(Int64.self, forKey: .revoked_at)
     }
 }
 
@@ -92,6 +90,7 @@ struct V3Device: Decodable, Identifiable {
         case .epochMismatch,.cursorMismatch:text="服务恢复轮次或回执不一致，同步已暂停。请检查服务恢复状态。"
         case .quotaUnavailable:text="同步暂时超出资源预算，待上传内容已保留，将稍后重试。"
         case .bootstrapClosed:text="服务已完成初始化，请使用已连接设备生成配对信息。"
+        case .deviceDeleteForbidden:text="不能删除正在使用的这台设备。请在另一台已连接设备上操作。"
         case .unsupportedVersion:text="同步协议版本不兼容，请升级所有设备。"
         default:text="同步失败，本机资料和待上传内容已保留。"
         }
@@ -265,8 +264,20 @@ struct V3Device: Decodable, Identifiable {
             }catch{if generation==token{failure(error)}}
         }
     }
-    func revokeDevice(_ id:String){guard let c=journal.active else{return};let token=generation
-        Task{do{let body=try DocumentCodec.encode(JSONValue.object(["epoch":.string(c.epoch)]));_ = try await factory(c.endpoint).request(method:"POST",path:"/v3/vaults/\(c.vaultID)/devices/\(id)/revoke",body:body,token:c.token);try check(token);if id==c.deviceID{disconnect()}else{loadDevices()}}catch{if generation==token{failure(error)}}}
+    func deleteDevice(_ id:String){
+        guard isConfigured,!isSyncing,let c=journal.active else{return}
+        guard id != c.deviceID else{failure(SyncV3Error.deviceDeleteForbidden);return}
+        let token=generation;isSyncing=true
+        job=Task{do{
+            defer{if generation==token{isSyncing=false;job=nil}}
+            struct Deleted:Decodable{var deleted:Bool;var deviceID:String}
+            let body=try DocumentCodec.encode(JSONValue.object(["epoch":.string(c.epoch)]))
+            let data=try await factory(c.endpoint).request(method:"DELETE",path:"/v3/vaults/\(c.vaultID)/devices/\(id)",body:body,token:c.token)
+            try check(token)
+            let result=try DocumentCodec.decode(Deleted.self,from:data)
+            guard result.deleted,result.deviceID==id else{throw SyncV3Error.corruptData}
+            deviceList.removeAll{$0.id==id};invitation=nil;errorMessage=nil;status=localize("设备已删除")
+        }catch{if generation==token{failure(error)}}}
     }
     func rotateToken(){guard !isSyncing,var c=journal.active else{return};do{c.token=try SyncEncryption.deviceToken();c.transactionID=UUID().uuidString.lowercased();try stage(.init(connection:c,operation:"rotate"));resumePending()}catch{failure(error)}}
     func copyInvitation(){guard let invitation else{return};NSPasteboard.general.clearContents();NSPasteboard.general.setString(invitation,forType:.string);NSPasteboard.general.setData(Data(),forType:NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))}

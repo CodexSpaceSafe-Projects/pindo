@@ -241,6 +241,17 @@ import java.time.LocalDate
     var invite by remember { mutableStateOf("") }
     val context = LocalContext.current
     val sync = store.sync
+    var deviceToDelete by remember { mutableStateOf<Pair<String, String>?>(null) }
+    deviceToDelete?.let { (id, name) ->
+        AlertDialog(onDismissRequest = { deviceToDelete = null },
+            title = { Text("删除这个设备？") },
+            text = { Text("$name\n\n将永久删除该设备的云端登记、访问凭据、配对信息和同步租约。共享事项和对方本机资料会保留，再次连接需要重新配对。") },
+            confirmButton = {
+                TextButton(onClick = { sync.deleteDevice(id); deviceToDelete = null }, enabled = !state.syncing && state.syncEnabled,
+                    modifier = Modifier.testTag("sync-confirm-delete-device"),
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("删除这个设备") }
+            }, dismissButton = { TextButton(onClick = { deviceToDelete = null }) { Text("取消") } })
+    }
     val nameEditable = !state.syncing && !state.readOnly && (sync.active == null || state.syncEnabled)
     var deviceName by remember(sync) { mutableStateOf(sync.deviceName) }
     var requestedDevices by remember(sync) { mutableStateOf(false) }
@@ -353,16 +364,17 @@ import java.time.LocalDate
                                     if (sync.isCurrentDevice(id)) Text("此设备", style = MaterialTheme.typography.labelMedium,
                                         color = MaterialTheme.colorScheme.primary)
                                 }
-                                if (device.isNull("revoked_at")) {
-                                    TextButton(onClick = { sync.revoke(id) }, enabled = !state.syncing,
-                                        modifier = Modifier.widthIn(max = 104.dp).heightIn(min = 48.dp),
+                                if (!sync.isCurrentDevice(id)) {
+                                    TextButton(onClick = { deviceToDelete = id to device.optString("name", "未命名设备") }, enabled = !state.syncing,
+                                        modifier = Modifier.testTag("sync-delete-device-$id").widthIn(max = 104.dp).heightIn(min = 48.dp),
                                         colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
-                                        Text("撤销授权", textAlign = TextAlign.Center)
+                                        Text("删除这个设备", textAlign = TextAlign.Center)
                                     }
-                                } else Text("已撤销", style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
                             }
                         }
+                        Text("删除后将清除服务器上的设备信息，保留共享事项和对方本机资料。当前设备不能删除。",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 SettingsSection("添加其他设备") {

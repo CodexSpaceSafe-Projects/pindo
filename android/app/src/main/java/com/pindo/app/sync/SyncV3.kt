@@ -31,6 +31,6 @@ enum class SyncV3Error(val wire: String) {
     EPOCH_MISMATCH("epoch_mismatch"), BATCH_CONFLICT("batch_conflict"), CHECKPOINT_REQUIRED("checkpoint_required"),
     CORRUPT_DATA("corrupt_data"), QUOTA_UNAVAILABLE("quota_unavailable"), STORAGE_UNAVAILABLE("storage_unavailable"),
     MAINTENANCE("maintenance"), INVALID_REQUEST("invalid_request"), CURSOR_MISMATCH("cursor_mismatch"),
-    NOT_FOUND("not_found"), UNSUPPORTED_FEATURE("unsupported_feature"),
+    NOT_FOUND("not_found"), UNSUPPORTED_FEATURE("unsupported_feature"), DEVICE_DELETE_FORBIDDEN("device_delete_forbidden"),
     BOOTSTRAP_CLOSED("bootstrap_closed"), PAIRING_INVALID("pairing_invalid"), CHECKPOINT_CONFLICT("checkpoint_conflict"), ARTIFACT_MISSING("artifact_missing"), LEASE_EXPIRED("lease_expired")
 }

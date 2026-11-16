@@ -26,7 +26,9 @@ macOS 面板使用非激活、可调整尺寸的原生窗口；置顶控制隐�
 
 入口为 [`src/index.ts`](backend/cloudflare/src/index.ts)；[`src/v3/devices.ts`](backend/cloudflare/src/v3/devices.ts) 负责建库、配对和设备管理，[`src/v3/history.ts`](backend/cloudflare/src/v3/history.ts) 负责分块、检查点、租约和 GC。HTTP API 包括 `/health`、`/v3/bootstrap`，以及 `/v3/vaults/<vaultID>/` 下的 `info`、`push`、`pull`、`receipts/<batchID>`、`pairings`、`devices`、`artifacts/<digest>`、`checkpoints`、`leases/<id>` 和 `gc`。
 
-每个服务仅允许首次创建一个资料库，适合个人部署后连接多台设备，尚无多用户注册。首次设备以 `BOOTSTRAP_SECRET` 建库；已有设备生成 10 分钟有效的一次性邀请供新设备加入。设备使用独立 Bearer token，D1 保存其 SHA-256 哈希，支持撤销与轮换。端到端数据加密密钥只在客户端持有。设备列表返回可读名称并标记本机；注册可带 `deviceName`，`POST devices/<自己的ID>/name` 传 `{epoch,name}` 修改本机名称。名称是共享的设备管理元数据，不进入待办密文或本机导出；重试注册不会覆盖已更名设备。
+每个服务仅允许首次创建一个资料库，适合个人部署后连接多台设备，尚无多用户注册或独立管理员角色；任一已连接设备可以管理同库的其他设备。首次设备以 `BOOTSTRAP_SECRET` 建库；已有设备生成 10 分钟有效的一次性邀请供新设备加入。设备使用独立 Bearer token，D1 保存其 SHA-256 哈希，支持删除与轮换。端到端数据加密密钥只在客户端持有。设备列表仅返回当前登记的 `{id,name}`，并由客户端标记本机；注册可带 `deviceName`，`POST devices/<自己的ID>/name` 传 `{epoch,name}` 修改本机名称。名称是共享的设备管理元数据，不进入待办密文或本机导出；重试注册不会覆盖已更名设备。
+
+`DELETE /v3/vaults/<vaultID>/devices/<deviceID>` 传 `{epoch}`，使用操作者的设备令牌。成功返回 `{deleted:true,deviceID}`；重复删除同一目标仍返回成功。服务端在同一 D1 事务中重新校验操作者、轮次和维护状态，删除目标的所有配对记录（创建者或接收者）、租约和设备登记，清除名称及令牌哈希。删除本机返回 `409 device_delete_forbidden`，两端界面均不提供本机删除按钮。共享密文日志和回执不再保存设备身份字段，删除不会影响共享事项、重放连续性或回执幂等性。被删设备的原令牌失效，需要新的邀请重新配对。删除范围为在线业务数据库；Cloudflare 历史备份按平台保留期到期，不提供远程擦除客户端资料的能力。跨端操作样本见 `sync-vectors/device-management.json`。
 
 ## Cloudflare 部署
 
@@ -75,7 +77,7 @@ macOS 面板使用非激活、可调整尺寸的原生窗口；置顶控制隐�
 
 ### 更新已有服务与构建包
 
-更新已有 Worker 时，保留原 D1、`serviceID` 和 Secret，按上面的步骤 4–6 重新验证、打包、上传并检查结果。不要重新执行初始化 SQL，也不要通过重置 `service_state.bootstrapped` 创建第二个资料库。
+更新已有 Worker 时，保留原 D1、`serviceID` 和 Secret。先验证新版本，在维护窗口内按顺序应用尚未执行的迁移，再上传匹配的 Worker 并检查结果。不要重新执行初始化 SQL，也不要通过重置 `service_state.bootstrapped` 创建第二个资料库。
 
 `npm run build:staging` 只把 `worker.mjs`、`metadata.json`、`build.json` 写到仓库根目录被忽略的 `work/cloudflare-staging/`，不执行部署。该包包含个人部署标识和端点，只在本机使用，不上传到 GitHub、Release 或 CI 附件。构建记录包含 `sourceRevision`、`sourceDirty` 和 bundle SHA-256；其中 metadata 继承目标 Worker 已有 Secret，首次部署不能仅靠该构建包创建 Secret。它是手动 API 上传用的包，不是 `cf deploy --prebuilt` 的 Build Output。
 
@@ -83,7 +85,7 @@ macOS 面板使用非激活、可调整尺寸的原生窗口；置顶控制隐�
 
 管理员恢复须先进入维护模式，再轮换 epoch：`POST /v3/admin/maintenance` 传 `{vaultID, enabled:true}`，`POST /v3/admin/recover` 传 `{vaultID, epoch:新UUID}`，使用服务端 `RECOVERY_SECRET` 作为 Bearer。D1 时间点恢复同样需要轮换 epoch；客户端保留未确认操作，恢复后重新提交。
 
-已有数据库只需执行新增的 `0002_device_names.sql`（添加 `devices.name`），不可重跑完整 `0001_schema.sql`。现有设备在新版客户端打开设备管理时，仅对自己的空名称补上本机默认名；已有自定义名不会被覆盖。
+已有数据库依次应用未执行的 `0002_device_names.sql`（设备名称）和 `0003_delete_devices.sql`（真实删除），不可重跑完整 `0001_schema.sql`。执行 `0003` 前保存私密备份并进入维护窗口；它去掉共享日志、回执中的设备身份字段，删除原来已撤销的设备及相关配对、租约，保留已授权设备、共享密文、回执和初始化状态。迁移与新版 Worker 必须配套发布，完成后解除维护并更新客户端。现有设备在新版客户端打开设备管理时，仅对自己的空名称补上本机默认名；已有自定义名不会被覆盖。
 
 ## 验证
 

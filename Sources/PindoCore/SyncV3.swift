@@ -22,6 +22,7 @@ public enum SyncV3Error: String, Error, Codable, Sendable {
     case quotaUnavailable = "quota_unavailable", storageUnavailable = "storage_unavailable"
     case maintenance, invalidRequest = "invalid_request", cursorMismatch = "cursor_mismatch"
     case notFound = "not_found", unsupportedFeature = "unsupported_feature"
+    case deviceDeleteForbidden = "device_delete_forbidden"
     case bootstrapClosed = "bootstrap_closed", pairingInvalid = "pairing_invalid", checkpointConflict = "checkpoint_conflict", artifactMissing = "artifact_missing", leaseExpired = "lease_expired"
 }
 

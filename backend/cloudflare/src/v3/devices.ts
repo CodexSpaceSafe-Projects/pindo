@@ -33,7 +33,7 @@ export async function pair(request:Request,env:Env,a:Auth){
  const b=await boundedJSON(request),epoch=uuid(b.epoch),id=uuid(b.id);const code=await tokenHash(b.code);const v=await authorize(env.DB,a,epoch);
  const expiry=now()+10*60*1000;
  const r=await env.DB.batch([
- env.DB.prepare(`INSERT INTO pairing(id,vault_id,epoch,code_hash,created_by,expires_at) SELECT ?,v.id,v.epoch,?,d.id,? FROM vaults v JOIN devices d ON d.vault_id=v.id AND d.token_hash=? AND d.revoked_at IS NULL WHERE v.id=? AND v.epoch=? AND v.maintenance=0 AND NOT EXISTS(SELECT 1 FROM pairing WHERE id=?) AND (SELECT COUNT(*) FROM pairing p WHERE p.vault_id=v.id AND p.expires_at>? AND p.consumed_device IS NULL)<8`).bind(id,code,expiry,a.tokenHash,a.vaultID,epoch,id,now()),
+ env.DB.prepare(`INSERT INTO pairing(id,vault_id,epoch,code_hash,created_by,expires_at) SELECT ?,v.id,v.epoch,?,d.id,? FROM vaults v JOIN devices d ON d.vault_id=v.id AND d.token_hash=? WHERE v.id=? AND v.epoch=? AND v.maintenance=0 AND NOT EXISTS(SELECT 1 FROM pairing WHERE id=?) AND (SELECT COUNT(*) FROM pairing p WHERE p.vault_id=v.id AND p.expires_at>? AND p.consumed_device IS NULL)<8`).bind(id,code,expiry,a.tokenHash,a.vaultID,epoch,id,now()),
  stateQuery(env.DB,a),env.DB.prepare(`SELECT id,code_hash,expires_at FROM pairing WHERE id=? AND vault_id=? AND epoch=?`).bind(id,a.vaultID,epoch)]);
  check(r[1].results[0] as VaultState|undefined,epoch);const p=r[2].results[0] as {id:string;code_hash:string;expires_at:number}|undefined;
  if(!p)throw new ProtocolError('quota_unavailable',503);if(p.code_hash!==code)throw new ProtocolError('batch_conflict',409);
@@ -43,28 +43,43 @@ export async function consume(request:Request,env:Env,vault:string,id:string){
  const b=await boundedJSON(request),epoch=uuid(b.epoch),device=uuid(b.deviceID),hash=await tokenHash(b.deviceToken),code=await tokenHash(b.code),name=deviceName(b.deviceName,true),time=now();
  const r=await env.DB.batch([
  env.DB.prepare(`UPDATE pairing SET attempts=attempts+1 WHERE id=? AND vault_id=? AND epoch=? AND consumed_device IS NULL AND expires_at>? AND attempts<8`).bind(id,vault,epoch,time),
- env.DB.prepare(`INSERT INTO devices(id,vault_id,token_hash,name) SELECT ?,p.vault_id,?,? FROM pairing p JOIN vaults v ON v.id=p.vault_id AND v.epoch=p.epoch JOIN devices owner ON owner.id=p.created_by AND owner.revoked_at IS NULL WHERE p.id=? AND p.vault_id=? AND p.epoch=? AND p.code_hash=? AND p.consumed_device IS NULL AND p.expires_at>? AND p.attempts<=8 AND changes()>0 AND v.maintenance=0 AND NOT EXISTS(SELECT 1 FROM devices WHERE id=? OR token_hash=?) AND (SELECT COUNT(*) FROM devices WHERE vault_id=v.id AND revoked_at IS NULL)<64`).bind(device,hash,name,id,vault,epoch,code,time,device,hash),
+ env.DB.prepare(`INSERT INTO devices(id,vault_id,token_hash,name) SELECT ?,p.vault_id,?,? FROM pairing p JOIN vaults v ON v.id=p.vault_id AND v.epoch=p.epoch JOIN devices owner ON owner.id=p.created_by WHERE p.id=? AND p.vault_id=? AND p.epoch=? AND p.code_hash=? AND p.consumed_device IS NULL AND p.expires_at>? AND p.attempts<=8 AND changes()>0 AND v.maintenance=0 AND NOT EXISTS(SELECT 1 FROM devices WHERE id=? OR token_hash=?) AND (SELECT COUNT(*) FROM devices WHERE vault_id=v.id)<64`).bind(device,hash,name,id,vault,epoch,code,time,device,hash),
  env.DB.prepare(`UPDATE pairing SET consumed_device=?,consumed_hash=? WHERE id=? AND vault_id=? AND code_hash=? AND EXISTS(SELECT 1 FROM devices WHERE id=? AND vault_id=? AND token_hash=?)`).bind(device,hash,id,vault,code,device,vault,hash),
  stateQuery(env.DB,{vaultID:vault,tokenHash:hash})]);
  const v=r[3].results[0] as VaultState|undefined;if(!v?.device_id)throw new ProtocolError('pairing_invalid',401);return response(metadata(env,check(v,epoch)));
 }
 export async function devices(request:Request,env:Env,a:Auth,path:string){
- if(request.method==='GET'&&path==='devices'){const r=await env.DB.batch([stateQuery(env.DB,a),env.DB.prepare('SELECT id,name,revoked_at FROM devices WHERE vault_id=? ORDER BY id').bind(a.vaultID)]);const v=check(r[0].results[0] as VaultState|undefined);return response({...metadata(env,v),devices:r[1].results});}
- const b=await boundedJSON(request),epoch=uuid(b.epoch);const parts=path.split('/');const id=uuid(parts[1]);
+ if(request.method==='GET'&&path==='devices'){const r=await env.DB.batch([stateQuery(env.DB,a),env.DB.prepare('SELECT id,name FROM devices WHERE vault_id=? ORDER BY id').bind(a.vaultID)]);const v=check(r[0].results[0] as VaultState|undefined);return response({...metadata(env,v),devices:r[1].results});}
+ const parts=path.split('/');
+ if(parts.length===2&&request.method==='DELETE'){
+ const b=await boundedJSON(request),epoch=uuid(b.epoch),id=uuid(parts[1]);
+ const v=await authorize(env.DB,a,epoch);
+ if(v.device_id===id)throw new ProtocolError('device_delete_forbidden',409);
+ // Recheck the caller in every statement: a concurrent deletion of this
+ // caller must not leave a partially deleted target. D1 batches are atomic.
+ const permit=`EXISTS(SELECT 1 FROM devices a JOIN vaults v ON v.id=a.vault_id WHERE a.token_hash=? AND a.id!=? AND v.id=? AND v.epoch=? AND v.maintenance=0)`;
+ const params=[a.tokenHash,id,a.vaultID,epoch];
+ const r=await env.DB.batch([
+ env.DB.prepare(`DELETE FROM pairing WHERE vault_id=? AND (created_by=? OR consumed_device=?) AND ${permit}`).bind(a.vaultID,id,id,...params),
+ env.DB.prepare(`DELETE FROM leases WHERE vault_id=? AND device_id=? AND ${permit}`).bind(a.vaultID,id,...params),
+ env.DB.prepare(`DELETE FROM devices WHERE vault_id=? AND id=? AND ${permit}`).bind(a.vaultID,id,...params),
+ stateQuery(env.DB,a)]);
+ check(r[3].results[0] as VaultState|undefined,epoch);
+ return response({deleted:true,deviceID:id});
+ }
+ if(request.method!=='POST'||parts.length!==3)throw new ProtocolError('invalid_request',405);
+ const b=await boundedJSON(request),epoch=uuid(b.epoch),id=uuid(parts[1]);
  if(parts[2]==='name'){
  if(request.method!=='POST')throw new ProtocolError('invalid_request',405);
  const name=deviceName(b.name);
  const r=await env.DB.batch([
- env.DB.prepare(`UPDATE devices SET name=? WHERE id=? AND vault_id=? AND token_hash=? AND revoked_at IS NULL AND EXISTS(SELECT 1 FROM vaults WHERE id=? AND epoch=? AND maintenance=0)`).bind(name,id,a.vaultID,a.tokenHash,a.vaultID,epoch),stateQuery(env.DB,a)]);
+ env.DB.prepare(`UPDATE devices SET name=? WHERE id=? AND vault_id=? AND token_hash=? AND EXISTS(SELECT 1 FROM vaults WHERE id=? AND epoch=? AND maintenance=0)`).bind(name,id,a.vaultID,a.tokenHash,a.vaultID,epoch),stateQuery(env.DB,a)]);
  const v=check(r[1].results[0] as VaultState|undefined,epoch);
  if(v.device_id!==id)throw new ProtocolError('authentication_required',403);
  return response({...metadata(env,v),deviceID:id,name});}
- if(parts[2]==='revoke'){
- const r=await env.DB.batch([env.DB.prepare(`UPDATE devices SET revoked_at=COALESCE(revoked_at,?) WHERE id=? AND vault_id=? AND EXISTS(SELECT 1 FROM devices a JOIN vaults v ON a.vault_id=v.id WHERE a.token_hash=? AND a.revoked_at IS NULL AND v.id=? AND v.epoch=? AND v.maintenance=0)`).bind(now(),id,a.vaultID,a.tokenHash,a.vaultID,epoch),stateQuery(env.DB,a)]);
- if(!r[0].meta.changes)check(r[1].results[0] as VaultState|undefined,epoch);return response({revoked:true,deviceID:id});}
  if(parts[2]==='rotate'){
  const hash=await tokenHash(b.deviceToken);
- await env.DB.prepare(`UPDATE devices SET token_hash=? WHERE id=? AND vault_id=? AND token_hash=? AND revoked_at IS NULL AND EXISTS(SELECT 1 FROM vaults WHERE id=? AND epoch=? AND maintenance=0)`).bind(hash,id,a.vaultID,a.tokenHash,a.vaultID,epoch).run();
+ await env.DB.prepare(`UPDATE devices SET token_hash=? WHERE id=? AND vault_id=? AND token_hash=? AND EXISTS(SELECT 1 FROM vaults WHERE id=? AND epoch=? AND maintenance=0)`).bind(hash,id,a.vaultID,a.tokenHash,a.vaultID,epoch).run();
  const v=await authorize(env.DB,{vaultID:a.vaultID,tokenHash:hash},epoch);return response(metadata(env,v));}
  throw new ProtocolError('not_found',404);
 }

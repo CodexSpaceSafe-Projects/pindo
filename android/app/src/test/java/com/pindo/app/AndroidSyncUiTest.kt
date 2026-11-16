@@ -124,6 +124,18 @@ class AndroidSyncUiTest {
         compose.onNodeWithTag("sync-save-device-name").performScrollTo().performClick()
         compose.onNodeWithTag("sync-device-${connection.deviceID}").performScrollTo().assertTextEquals("我的新手机")
         compose.runOnIdle { assertEquals("我的新手机", remote.deviceName) }
+        compose.onNodeWithTag("sync-delete-device-${connection.deviceID}").assertDoesNotExist()
+        compose.onNodeWithTag("sync-delete-device-${remote.peerID}").performScrollTo().performClick()
+        compose.onNodeWithText("删除这个设备？").assertExists()
+        compose.runOnIdle { assertEquals(0, remote.deleteCalls) }
+        compose.onNodeWithText("取消").performClick()
+        compose.onNodeWithTag("sync-device-${remote.peerID}").assertExists()
+        compose.onNodeWithTag("sync-delete-device-${remote.peerID}").performClick()
+        compose.onNodeWithTag("sync-confirm-delete-device").performClick()
+        compose.onNodeWithTag("sync-device-${remote.peerID}").assertDoesNotExist()
+        compose.onNodeWithTag("sync-device-${connection.deviceID}").assertExists()
+        compose.runOnIdle { assertEquals(1, remote.deleteCalls); assertTrue(store.state.value.syncEnabled) }
+
     }
 
     private class UiJournal : V3JournalStorage {
@@ -145,6 +157,8 @@ class AndroidSyncUiTest {
         val peerID = "00000000-0000-4000-8000-000000000077"
         private var checkpoint: JSONObject? = null
         var consumeCalls = 0
+        var deleteCalls = 0
+        private var peerExists = true
         fun seedConnection(name: String): V3Connection {
             val c = V3Connection("https://sync.test", service, vault, epoch,
                 "00000000-0000-4000-8000-000000000006", "B".repeat(43), key)
@@ -175,8 +189,13 @@ class AndroidSyncUiTest {
                         .put("ciphertext", Base64.getEncoder().encodeToString(encrypted)))
             }
             if (method == "GET" && path.endsWith("/devices")) return JSONObject().put("devices", org.json.JSONArray()
-                .put(JSONObject().put("id", registeredID).put("name", deviceName).put("revoked_at", JSONObject.NULL))
-                .put(JSONObject().put("id", peerID).put("name", "工作 Mac").put("revoked_at", JSONObject.NULL)))
+                .put(JSONObject().put("id", registeredID).put("name", deviceName)).apply {
+                    if (peerExists) put(JSONObject().put("id", peerID).put("name", "工作 Mac"))
+                })
+            if (method == "DELETE" && path.endsWith("/devices/$peerID")) {
+                deleteCalls++; peerExists = false
+                return JSONObject().put("deleted", true).put("deviceID", peerID)
+            }
             if (method == "POST" && path.endsWith("/name")) {
                 assertEquals(registeredID, path.substringBeforeLast('/').substringAfterLast('/'))
                 deviceName = JSONObject(String(body!!, Charsets.UTF_8)).getString("name")

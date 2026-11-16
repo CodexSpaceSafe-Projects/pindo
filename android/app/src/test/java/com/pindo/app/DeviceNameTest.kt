@@ -150,6 +150,27 @@ class DeviceNameTest {
         assertEquals(0, sync.devices.length())
     }
 
+    @Test fun deletingPeerUsesTheSharedContractPreservesLocalDataAndPreventsSelfDeletion() {
+        val sync = connected("主设备")
+        assertTrue(sync.listDevices()); drain()
+        val document = store.read().toString()
+        assertFalse(sync.deleteDevice(connection().deviceID))
+        assertEquals(0, remote.deleteCalls)
+        assertTrue(sync.enabled)
+        assertEquals(2, sync.devices.length())
+        remote.failDelete = true
+        assertTrue(sync.deleteDevice("00000000-0000-4000-8000-000000000077")); drain()
+        assertEquals(2, sync.devices.length())
+        remote.failDelete = false
+        assertTrue(sync.deleteDevice("00000000-0000-4000-8000-000000000077")); drain()
+        assertEquals(1, sync.devices.length())
+        assertEquals(connection().deviceID, sync.devices.getJSONObject(0).getString("id"))
+        assertEquals(document, store.read().toString())
+        assertTrue(sync.enabled)
+        assertTrue(sync.listDevices()); drain()
+        assertEquals(1, sync.devices.length())
+    }
+
     private class MemoryJournal : V3JournalStorage {
         var value: JSONObject? = null
         override fun readJournal() = value?.let { copyV3(it) as JSONObject }
@@ -162,6 +183,9 @@ class DeviceNameTest {
         var registrationName: String? = null
         var renameCalls = 0
         var lastRenamedID: String? = null
+        var peerExists = true
+        var failDelete = false
+        var deleteCalls = 0
         var failRename = false
         var beforeRenameResponse: (() -> Unit)? = null
         var probe: JSONObject? = null
@@ -188,8 +212,20 @@ class DeviceNameTest {
                         .put("ciphertext", Base64.getEncoder().encodeToString(encrypted)))
             }
             if (method == "GET" && path.endsWith("/devices")) return JSONObject().put("devices", JSONArray()
-                .put(JSONObject().put("id", c.deviceID).put("name", name).put("revoked_at", JSONObject.NULL))
-                .put(JSONObject().put("id", "00000000-0000-4000-8000-000000000077").put("name", "工作 Mac").put("revoked_at", JSONObject.NULL)))
+                .put(JSONObject().put("id", c.deviceID).put("name", name)).apply {
+                    if (peerExists) put(JSONObject().put("id", "00000000-0000-4000-8000-000000000077").put("name", "工作 Mac"))
+                })
+            if (method == "DELETE" && path.contains("/devices/")) {
+                deleteCalls++
+                if (failDelete) throw V3Failure("storage_unavailable")
+                val fixture = JSONObject(generateSequence(File(System.getProperty("user.dir")).canonicalFile) { it.parentFile }
+                    .map { File(it, "sync-vectors/device-management.json") }.first { it.isFile }.readText())
+                assertEquals(fixture.getString("method"), method)
+                assertEquals("/v3/vaults/${c.vaultID}/" + fixture.getString("devicePath"), path)
+                assertEquals(fixture.getJSONObject("request").getString("epoch"), data!!.getString("epoch"))
+                peerExists = false
+                return fixture.getJSONObject("response")
+            }
             if (method == "POST" && path.endsWith("/name")) {
                 renameCalls++
                 if (failRename) throw V3Failure("storage_unavailable")

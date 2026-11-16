@@ -141,6 +141,7 @@ internal class SyncCoordinator(
         retryAt = SystemClock.elapsedRealtime() + (15_000L shl failures)
         lastFailure = if (e is InvalidInvitation) "同步失败：配对信息格式无效，请粘贴完整配对信息。" else when ((e as? V3Failure)?.code) {
             "authentication_required" -> "同步失败：设备授权已失效；本机资料和离线修改已保留。"
+            "device_delete_forbidden" -> "不能删除正在使用的这台设备。请在另一台已连接设备上操作。"
             "pairing_invalid" -> "同步失败：配对信息已过期或已使用，请重新生成。"
             "bootstrap_closed" -> "同步失败：服务已初始化，请使用已连接设备生成配对信息。"
             "quota_unavailable" -> "同步失败：超出资源预算，将稍后重试。"
@@ -311,7 +312,7 @@ internal class SyncCoordinator(
         check(g)
         val current = (0 until list.length()).map { list.getJSONObject(it) }
             .firstOrNull { it.getString("id") == c.deviceID }
-        if (current != null && current.isNull("revoked_at")) {
+        if (current != null) {
             val serverName = (current.opt("name") as? String).orEmpty()
             if (serverName.isBlank()) {
                 // Existing devices acquire a readable name on first management
@@ -367,12 +368,20 @@ internal class SyncCoordinator(
         }
     }
 
-    fun revoke(id: String) {
-        if (!enabled) return
-        launch { g ->
-            val c = active!!; call(c, "devices/$id/revoke", "POST", JSONObject().put("epoch", c.epoch)); check(g)
-            if (id == c.deviceID) { journal.put("enabled", false); save() }
-            devices = JSONArray(); status(enabled, false, "设备授权已撤销")
+    fun deleteDevice(id: String): Boolean {
+        if (!enabled) return false
+        if (isCurrentDevice(id)) {
+            lastFailure = "不能删除正在使用的这台设备。请在另一台已连接设备上操作。"
+            status(true, false, lastFailure!!)
+            return false
+        }
+        return launch { g ->
+            val c = active!!
+            val result = call(c, "devices/$id", "DELETE", JSONObject().put("epoch", c.epoch)); check(g)
+            if (!result.optBoolean("deleted") || result.optString("deviceID") != id) throw V3Failure("corrupt_data")
+            devices = JSONArray((0 until devices.length()).map { devices.getJSONObject(it) }.filter { it.getString("id") != id })
+            invitation = null
+            status(true, false, "设备已删除")
         }
     }
 

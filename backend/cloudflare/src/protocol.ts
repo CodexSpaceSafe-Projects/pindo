@@ -6,7 +6,7 @@ export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 export type ErrorCode = "authentication_required" | "unsupported_version" | "epoch_mismatch" |
   "batch_conflict" | "checkpoint_required" | "corrupt_data" | "quota_unavailable" |
   "storage_unavailable" | "maintenance" | "invalid_request" | "cursor_mismatch" |
-  "not_found" | "unsupported_feature" | "bootstrap_closed" | "pairing_invalid" | "checkpoint_conflict" | "artifact_missing" | "lease_expired";
+  "not_found" | "unsupported_feature" | "bootstrap_closed" | "pairing_invalid" | "checkpoint_conflict" | "artifact_missing" | "lease_expired" | "device_delete_forbidden";
 
 export class ProtocolError extends Error {
   constructor(readonly code: ErrorCode, readonly status: number) { super(code); }

@@ -1,0 +1,7 @@
+{
+  "method": "DELETE",
+  "devicePath": "devices/00000000-0000-4000-8000-000000000077",
+  "request": {"epoch": "00000000-0000-4000-8000-000000000003"},
+  "response": {"deleted": true, "deviceID": "00000000-0000-4000-8000-000000000077"},
+  "selfDeleteError": {"code": "device_delete_forbidden", "status": 409}
+}

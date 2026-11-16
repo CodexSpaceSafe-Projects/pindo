@@ -87,6 +87,49 @@ final class DeviceNameTests: XCTestCase {
         XCTAssertEqual(remoteName,"原设备名")
     }
 
+    @MainActor func testDeletingPeerUsesSharedContractAndCannotDeleteCurrentDevice() async throws {
+        let env=try environment()
+        try await connectExisting(env,name:"主设备")
+        defer {env.controller.disconnect()}
+        env.controller.loadDevices()
+        try await waitUntil {!env.controller.isSyncing}
+        let root=URL(fileURLWithPath:#filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let fixture=try JSONSerialization.jsonObject(with:Data(contentsOf:root.appendingPathComponent("sync-vectors/device-management.json"))) as! [String:Any]
+        let peer=(fixture["response"] as! [String:Any])["deviceID"] as! String
+        let document=try DocumentCodec.encode(env.model.repository.document)
+        env.controller.deleteDevice(env.connection.deviceID)
+        let callsBefore=await env.server.deleteCalls
+        XCTAssertEqual(callsBefore,0)
+        XCTAssertTrue(env.controller.isConfigured)
+        XCTAssertEqual(env.controller.deviceList.count,2)
+        env.controller.deleteDevice(peer)
+        try await waitUntil {!env.controller.isSyncing}
+        XCTAssertEqual(env.controller.deviceList.map(\.id),[env.connection.deviceID])
+        let request=await env.server.lastDeletion
+        XCTAssertEqual(request?.method,fixture["method"] as? String)
+        XCTAssertEqual(request?.path,"/v3/vaults/"+env.connection.vaultID+"/"+(fixture["devicePath"] as! String))
+        XCTAssertEqual(request?.epoch,env.connection.epoch)
+        XCTAssertEqual(try DocumentCodec.encode(env.model.repository.document),document)
+        XCTAssertTrue(env.controller.isConfigured)
+        env.controller.loadDevices()
+        try await waitUntil {!env.controller.isSyncing}
+        XCTAssertEqual(env.controller.deviceList.count,1)
+    }
+
+    @MainActor func testFailedDeviceDeletionKeepsDeviceVisibleAndLocalDataIntact() async throws {
+        let env=try environment()
+        try await connectExisting(env,name:"主设备")
+        defer {env.controller.disconnect()}
+        env.controller.loadDevices()
+        try await waitUntil {!env.controller.isSyncing}
+        await env.server.setDeleteFailure(true)
+        env.controller.deleteDevice("00000000-0000-4000-8000-000000000077")
+        try await waitUntil {!env.controller.isSyncing}
+        XCTAssertEqual(env.controller.deviceList.count,2)
+        XCTAssertNotNil(env.controller.errorMessage)
+        XCTAssertTrue(env.controller.isConfigured)
+    }
+
     @MainActor private func waitUntil(_ condition: () -> Bool) async throws {
         for _ in 0..<500 {if condition(){return};try await Task.sleep(nanoseconds:10_000_000)}
         XCTFail("Device-name operation did not finish")
@@ -126,6 +169,11 @@ private actor DeviceNameServer:SyncV3Transport {
     private var keyCheck:[String:Any]?
     var registeredName=""
     var renameCalls=0
+    private var peerExists=true
+    private var failDelete=false
+    var deleteCalls=0
+    var lastDeletion:(method:String,path:String,epoch:String)?
+    func setDeleteFailure(_ fail:Bool){failDelete=fail}
     private var failRename=false
     func setRenameFailure(_ fail:Bool){failRename=fail}
     func install(_ connection:SyncV3Connection,name:String) throws {
@@ -147,7 +195,15 @@ private actor DeviceNameServer:SyncV3Transport {
             return try encode(["version":3,"serviceID":c.serviceID,"vaultID":c.vaultID,"epoch":c.epoch,"head":0,"gcFloor":0,"checkpointID":NSNull(),"keyCheck":keyCheck!])
         }
         if path.hasSuffix("/devices") {
-            return try encode(["devices":[["id":c.deviceID,"name":registeredName,"revoked_at":NSNull()],["id":"00000000-0000-4000-8000-000000000005","name":"工作手机","revoked_at":NSNull()]]])
+            let devices:[[String:Any]]=[["id":c.deviceID,"name":registeredName]]+(peerExists ? [["id":"00000000-0000-4000-8000-000000000077","name":"工作手机"]] : [])
+            return try encode(["devices":devices])
+        }
+        if method=="DELETE",path.hasSuffix("/devices/00000000-0000-4000-8000-000000000077") {
+            deleteCalls+=1
+            if failDelete{throw SyncV3Error.storageUnavailable}
+            lastDeletion=(method,path,try object(body)["epoch"] as! String)
+            peerExists=false
+            return try encode(["deleted":true,"deviceID":"00000000-0000-4000-8000-000000000077"])
         }
         if path.hasSuffix("/devices/\(c.deviceID)/name") {
             renameCalls+=1

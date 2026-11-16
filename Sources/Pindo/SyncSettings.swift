@@ -10,6 +10,7 @@ struct SyncSettings: View {
     @State private var showCreate=false
     @State private var showDevices=false
     @State private var deviceNameDraft=""
+    @State private var deviceToDelete:V3Device?
     var body: some View {
         VStack(alignment:.leading,spacing:16){
             Label("Cloudflare",systemImage:"lock.icloud").font(.headline)
@@ -58,12 +59,14 @@ struct SyncSettings: View {
                                 Text(device.name.isEmpty ? l10n("未命名设备") : device.name)
                                 if device.id == controller.currentDeviceID {Text(l10n("此设备")).foregroundStyle(.secondary)}
                                 Spacer()
-                                if device.revoked_at != nil{Text(l10n("已撤销"))}else{Button(l10n("撤销访问")){controller.revokeDevice(device.id)}.disabled(controller.isSyncing)}
+                                if device.id != controller.currentDeviceID{
+                                    Button(l10n("删除这个设备"),role:.destructive){deviceToDelete=device}.disabled(controller.isSyncing || !controller.isConfigured)
+                                }
                             }
                         }
                         Button(l10n("刷新设备列表")){controller.loadDevices()}.disabled(controller.isSyncing)
                         Button(l10n("轮换本机访问令牌")){controller.rotateToken()}.disabled(controller.isSyncing)
-                        Text(l10n("撤销只阻止之后的云访问；已下载的资料和密钥无法远程收回。"))
+                        Text(l10n("删除后将清除服务器上的设备信息，保留共享事项和对方本机资料。当前设备不能删除。"))
                     }.padding(6)
                 }
             }
@@ -90,5 +93,11 @@ struct SyncSettings: View {
                 Button(l10n("取消"),role:.cancel){}
                 Button(l10n("停用云同步"),role:.destructive){controller.disconnect()}
             }message:{Text(l10n("本机资料、恢复信息和离线修改会保留，之后可以继续连接。"))}
+            .alert(l10n("删除这个设备？"),isPresented:Binding(get:{deviceToDelete != nil},set:{if !$0{deviceToDelete=nil}}),presenting:deviceToDelete){device in
+                Button(l10n("取消"),role:.cancel){deviceToDelete=nil}
+                Button(l10n("删除这个设备"),role:.destructive){controller.deleteDevice(device.id);deviceToDelete=nil}
+            }message:{device in
+                Text(device.name+"\n\n"+l10n("将永久删除该设备的云端登记、访问凭据、配对信息和同步租约。共享事项和对方本机资料会保留，再次连接需要重新配对。"))
+            }
     }
 }
