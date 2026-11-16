@@ -91,9 +91,23 @@ Swift 需要 5.9+；Linux 安装 SQLite 开发头文件，`swift test --jobs 4` 
 
 Android：在 `android/` 运行 `./gradlew testDebugUnitTest lintDebug assembleDebug`，需要 JDK 17 / SDK 35。
 
-Android 界面采用 Material 3：事项内容优先、语义色适配深浅主题，操作目标至少 48dp；可用窗口宽度达到 600dp 且高度达到 480dp 时使用侧边导航，内容限制最大宽度。编辑页固定保存入口，筛选与页面状态可恢复，编辑租约及未保存备注不能因布局变化丢失。设计依据：[Compose 无障碍默认行为](https://developer.android.com/develop/ui/compose/accessibility/api-defaults)、[窗口尺寸分类](https://developer.android.com/develop/adaptive-apps/guides/use-window-size-classes)、[自适应导航](https://developer.android.com/develop/adaptive-apps/guides/build-adaptive-navigation)。
+Android 界面采用 Material 3：事项内容优先、语义色适配深浅主题，操作目标至少 48dp；可用窗口宽度达到 600dp 且高度达到 480dp 时使用侧边导航，内容限制最大宽度。清单首屏优先展示事项，快速输入固定在底部，分组和完成状态筛选按需展开；阅读默认渲染 Markdown，写作使用无边框正文、顶部保存与键盘上方格式工具，日期/分组/父项收在安排面板。页面、编辑模式和草稿可恢复，编辑租约及未保存备注不能因布局变化丢失。设计依据：[Compose 无障碍默认行为](https://developer.android.com/develop/ui/compose/accessibility/api-defaults)、[窗口尺寸分类](https://developer.android.com/develop/adaptive-apps/guides/use-window-size-classes)、[自适应导航](https://developer.android.com/develop/adaptive-apps/guides/build-adaptive-navigation)。
 
 `AndroidUiTest` 使用虚构资料验证清单、日历、批量操作、编辑恢复、深色主题、窄屏大字及宽屏导航，并将实际 Compose / Skia 渲染写入 `android/app/build/reports/screenshots/`。CI 报告与 Android Release 附带这些截图；它们用于布局检查，触屏、键盘遮挡、TalkBack 和系统返回仍需在真实设备验收。
+
+### Android 发布与覆盖升级
+
+正式包固定使用 `com.pindo.app`；开发变体为 `com.pindo.app.dev`，显示名 `Pindo Dev`。CI 只向 Release 发布非调试的 `Pindo-Android.apk`。`versionCode = 1000 + PINDO_BUILD_NUMBER`；同一工作流的构建号递增，发布前还核对上一份 `android-update.json`，拒绝新源码复用或降低版本号。
+
+长期签名公钥证书保存在 `android/release-certificate.pem`，用于校验每次发布，公开证书不含私钥。私钥和密码只放 Git 忽略的 `work/android-signing/` 及仓库 Actions Secret `PINDO_ANDROID_SIGNING`，不得进入源码、日志或构建附件。该 Secret 的 JSON 为 `{keystore:PKCS12的Base64, password:密码, alias:别名}`。已有签名必须从私密备份恢复，不能重新生成；更换密钥会破坏更新链。首次建立身份可运行 `JAVA_HOME=你的JDK目录 python3 scripts/prepare-android-signing.py`，该脚本拒绝覆盖已有身份。保管目录的独立安全备份，再用已登录的 GitHub CLI 写入 Secret：
+
+```sh
+gh secret set PINDO_ANDROID_SIGNING --repo CodexSpaceSafe-Projects/pindo < work/android-signing/github-secret.json
+```
+
+本机正式构建设置 `PINDO_ANDROID_KEYSTORE_PATH`、`PINDO_ANDROID_KEYSTORE_PASSWORD`、`PINDO_ANDROID_KEY_ALIAS` 及成对的 `PINDO_BUILD_NUMBER`、`PINDO_COMMIT_SHA`，执行 `./gradlew assembleRelease`。`scripts/verify-android-apk.py` 校验签名证书、包名、调试标记和版本；缺少 CI Secret 时暂停正式发布，禁止生成临时密钥兜底。
+
+Android CI 的覆盖升级作业在模拟器中安装较低版本，写入真实 SQLite 事项/备注、主题、默认分组、设备名称及 Android Keystore 加密凭据；使用 `adb install -r` 安装较高版本后逐项断言保留，过程中不卸载应用。模拟器两包使用同一作业的测试身份，正式 APK 则另行对固定公钥证书和上一版本元数据校验。此测试不能让旧的随机调试签名恢复兼容；Android 要求更新证书相同或具备由旧私钥签发的轮换证明，参见 [应用更新规则](https://developer.android.com/google/play/app-updates)。
 
 服务端使用 Node.js 22，在 `backend/cloudflare/` 运行：
 

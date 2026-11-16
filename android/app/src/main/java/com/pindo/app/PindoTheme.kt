@@ -18,7 +18,7 @@ private val LightPindoColors = lightColorScheme(
     secondary = Color(0xFF607568), onSecondary = Color.White,
     secondaryContainer = Color(0xFFE6EDE5), onSecondaryContainer = Color(0xFF293D31),
     tertiary = Color(0xFF91683D), tertiaryContainer = Color(0xFFF5E7CF), onTertiaryContainer = Color(0xFF583A18),
-    background = Color(0xFFF6F8F7), onBackground = Color(0xFF202A25),
+    background = Color(0xFFFCFDFC), onBackground = Color(0xFF202A25),
     surface = Color.White, onSurface = Color(0xFF202A25),
     surfaceVariant = Color(0xFFE7EDE9), onSurfaceVariant = Color(0xFF56635C),
     surfaceContainerLowest = Color.White, surfaceContainerLow = Color(0xFFF0F4F1),
@@ -33,7 +33,7 @@ private val DarkPindoColors = darkColorScheme(
     primaryContainer = Color(0xFF294B3C), onPrimaryContainer = Color(0xFFC4EBD5),
     secondary = Color(0xFFB7CDBD), secondaryContainer = Color(0xFF354B3C), onSecondaryContainer = Color(0xFFD8E9DA),
     tertiary = Color(0xFFE4C18C), tertiaryContainer = Color(0xFF584127), onTertiaryContainer = Color(0xFFF5E2C6),
-    background = Color(0xFF101613), onBackground = Color(0xFFE2E9E4),
+    background = Color(0xFF151B17), onBackground = Color(0xFFE2E9E4),
     surface = Color(0xFF19211C), onSurface = Color(0xFFE2E9E4),
     surfaceVariant = Color(0xFF303C34), onSurfaceVariant = Color(0xFFB9C6BD),
     surfaceContainerLowest = Color(0xFF0D130F), surfaceContainerLow = Color(0xFF19221C),
@@ -45,7 +45,7 @@ private val DarkPindoColors = darkColorScheme(
 
 private val PindoTypography = Typography().let { defaults ->
     defaults.copy(
-        headlineLarge = defaults.headlineLarge.copy(fontSize = 28.sp, lineHeight = 36.sp),
+        headlineLarge = defaults.headlineLarge.copy(fontSize = 24.sp, lineHeight = 32.sp),
         headlineMedium = defaults.headlineMedium.copy(fontSize = 24.sp, lineHeight = 32.sp),
         titleLarge = defaults.titleLarge.copy(fontSize = 22.sp, lineHeight = 30.sp),
         titleMedium = defaults.titleMedium.copy(lineHeight = 24.sp),

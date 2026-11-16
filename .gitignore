@@ -17,3 +17,9 @@ node_modules/
 
 # Personal Cloudflare deployment identities stay on the local machine.
 /backend/cloudflare/deployments/*.local.json
+
+# Android signing private keys stay in local backups and GitHub Secrets.
+*.keystore
+*.jks
+*.p12
+*.pfx

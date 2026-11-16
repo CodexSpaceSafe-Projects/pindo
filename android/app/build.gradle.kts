@@ -22,6 +22,12 @@ val sourceRevision = commitInput?.also { value ->
         "PINDO_COMMIT_SHA must contain 7 to 40 hexadecimal characters."
     }
 }?.lowercase()
+val releaseStore = providers.environmentVariable("PINDO_ANDROID_KEYSTORE_PATH").orNull
+val releasePassword = providers.environmentVariable("PINDO_ANDROID_KEYSTORE_PASSWORD").orNull
+val releaseAlias = providers.environmentVariable("PINDO_ANDROID_KEY_ALIAS").orNull
+require(listOf(releaseStore, releasePassword, releaseAlias).let { values -> values.all { it == null } || values.all { !it.isNullOrBlank() } }) {
+    "Provide the complete Android release signing configuration."
+}
 
 android {
     namespace = "com.pindo.app"
@@ -31,8 +37,9 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 1000 + (distributionBuild ?: 0)
-        versionName = distributionBuild?.let { "0.3.0-build$it.${sourceRevision!!.take(7)}" } ?: "0.3.0-local"
+        versionName = distributionBuild?.let { "0.4.0-build$it.${sourceRevision!!.take(7)}" } ?: "0.4.0-local"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        resValue("string", "app_name", "Pindo")
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -40,6 +47,26 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    signingConfigs {
+        if (releaseStore != null) create("distribution") {
+            storeType = "PKCS12"
+            storeFile = file(releaseStore)
+            storePassword = releasePassword
+            keyAlias = releaseAlias
+            keyPassword = releasePassword
+        }
+    }
+    buildTypes {
+        getByName("debug") {
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+            resValue("string", "app_name", "Pindo Dev")
+        }
+        getByName("release") {
+            isDebuggable = false
+            if (releaseStore != null) signingConfig = signingConfigs.getByName("distribution")
+        }
+    }
     testOptions {
         unitTests.isReturnDefaultValues = true
         unitTests.isIncludeAndroidResources = true
@@ -60,6 +87,8 @@ dependencies {
     testImplementation("androidx.compose.ui:ui-test-junit4")
     testImplementation("androidx.test:core:1.6.1")
     testImplementation("org.robolectric:robolectric:4.14.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
 }
 
 tasks.withType<Test>().configureEach {

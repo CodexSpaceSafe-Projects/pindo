@@ -2,6 +2,9 @@ package com.pindo.app
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,9 +23,14 @@ import androidx.compose.runtime.saveable.Saver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -39,7 +47,7 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
-@Composable internal fun TaskEditorSheet(store: AppStore, state: AppState, taskID: String?, parentID: String?, initialDay: LocalDate, onDismiss: () -> Unit) {
+@Composable internal fun TaskEditorSheet(store: AppStore, state: AppState, taskID: String?, parentID: String?, initialDay: LocalDate, initiallyEditing: Boolean = false, onDismiss: () -> Unit) {
     val currentTask = state.tasks.find { it.id == taskID }
     val baselineText by rememberSaveable(taskID, parentID) { mutableStateOf(currentTask?.let { TaskEditBaseline.capture(it).encoded() }) }
     val baseline = remember(baselineText) { baselineText?.let(TaskEditBaseline::decode) }
@@ -68,7 +76,10 @@ import java.time.format.DateTimeFormatter
     var group by rememberSaveable(taskID, parentID) { mutableStateOf(originalGroup) }
     var parent by rememberSaveable(taskID, parentID) { mutableStateOf(originalParent) }
     var phase by rememberSaveable(taskID, parentID) { mutableStateOf(baseline?.phase ?: "pending") }
-    var preview by rememberSaveable { mutableStateOf(false) }
+    var preview by rememberSaveable(taskID, parentID) { mutableStateOf(taskID != null && !initiallyEditing) }
+    var propertiesOpen by rememberSaveable { mutableStateOf(false) }
+    val titleFocus = remember { FocusRequester() }
+    LaunchedEffect(preview) { if (!preview && taskID == null) titleFocus.requestFocus() }
     var datePicker by remember { mutableStateOf(false) }
     var parentPicker by remember { mutableStateOf(false) }
     var groupPicker by remember { mutableStateOf(false) }
@@ -94,168 +105,130 @@ import java.time.format.DateTimeFormatter
     Dialog(onDismissRequest = requestClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         BackHandler(onBack = requestClose)
         Surface(Modifier.fillMaxSize().testTag("task-editor"), color = MaterialTheme.colorScheme.surface) {
-            Scaffold(
-                modifier = Modifier.imePadding(),
-                containerColor = MaterialTheme.colorScheme.surface,
+            Scaffold(modifier = Modifier.imePadding(), containerColor = MaterialTheme.colorScheme.surface,
                 topBar = {
-                    TopAppBar(
-                        title = {
-                            Text(
-                                if (taskID != null) "事项详情" else if (parentID != null) "添加子项" else "记录新事项",
-                                style = MaterialTheme.typography.titleLarge,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis
-                            )
-                        },
-                        navigationIcon = {
-                            IconButton(onClick = requestClose, modifier = Modifier.size(48.dp)) {
-                                Icon(Icons.Outlined.Close, "关闭编辑")
+                    Column {
+                    TopAppBar(title = { Text(if (preview) "事项" else "写事项", style = MaterialTheme.typography.titleMedium) },
+                        navigationIcon = { IconButton(onClick = requestClose, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Close, "关闭编辑") } },
+                        actions = {
+                            if (preview) TextButton(onClick = { preview = false }, enabled = !state.readOnly) {
+                                Text(if (dirty) "继续编辑" else "编辑")
+                            } else TextButton(onClick = { preview = true }) { Text("预览") }
+                            if (!preview || dirty) TextButton(onClick = ::save, enabled = !state.readOnly && title.isNotBlank()) {
+                                Text("保存", fontWeight = FontWeight.SemiBold)
                             }
-                        },
-                        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
-                    )
+                        }, colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface))
+                    listOfNotNull(draftWarning, validation ?: state.error).distinct().forEach { text ->
+                        Text(text, Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                    }
+                    }
                 },
                 bottomBar = {
-                    Surface(color = MaterialTheme.colorScheme.surface) {
-                        Column(Modifier.navigationBarsPadding()) {
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                            Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), contentAlignment = Alignment.Center) {
-                                Button(
-                                    onClick = ::save,
-                                    enabled = !state.readOnly && title.isNotBlank(),
-                                    modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth().heightIn(min = 52.dp),
-                                    shape = MaterialTheme.shapes.medium,
-                                    contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp)
-                                ) {
-                                    Icon(Icons.Outlined.Check, null, Modifier.size(20.dp))
-                                    Spacer(Modifier.width(8.dp))
-                                    Text("保存", style = MaterialTheme.typography.titleMedium)
+                    if (!preview) Column(Modifier.navigationBarsPadding()) {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
+                                listOf("加粗" to "**", "斜体" to "*", "代码" to "`").forEach { (label, token) ->
+                                    TextButton(onClick = { note = surroundNote(note, token, token) }, modifier = Modifier.heightIn(min = 48.dp)) { Text(label) }
                                 }
+                                TextButton(onClick = { note = surroundNote(note, "\n- [ ] ", "") }) { Text("清单") }
+                                TextButton(onClick = { note = surroundNote(note, "\n## ", "") }) { Text("标题") }
                             }
+                            IconButton(onClick = { propertiesOpen = true }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Tune, "安排事项") }
                         }
                     }
                 }
             ) { padding ->
-                Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
-                    Column(
-                        Modifier.widthIn(max = 640.dp).fillMaxSize().align(Alignment.TopCenter)
-                            .verticalScroll(rememberScrollState())
-                            .padding(horizontal = 20.dp).padding(top = 16.dp, bottom = 24.dp),
-                        verticalArrangement = Arrangement.spacedBy(24.dp)
-                    ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text("事项标题", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            OutlinedTextField(
-                                title, { title = it; validation = null },
-                                placeholder = { Text("准备做些什么？", style = MaterialTheme.typography.headlineSmall) },
-                                visualTransformation = MixedScriptVisualTransformation,
-                                modifier = Modifier.fillMaxWidth().testTag("task-title"),
-                                textStyle = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
-                                shape = MaterialTheme.shapes.medium,
-                                minLines = 2, maxLines = 5,
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-                                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest
-                                ),
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next)
-                            )
-                        }
-                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Outlined.Notes, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
-                                Text("备注", Modifier.weight(1f).padding(start = 10.dp), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                                TextButton(onClick = { preview = !preview }, modifier = Modifier.heightIn(min = 48.dp)) {
-                                    Icon(if (preview) Icons.Outlined.Edit else Icons.Outlined.Visibility, null, Modifier.size(20.dp))
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(if (preview) "继续编辑" else "预览")
-                                }
+                Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding), contentAlignment = Alignment.TopCenter) {
+                    Column(Modifier.widthIn(max = 720.dp).fillMaxSize().verticalScroll(rememberScrollState())
+                        .padding(horizontal = 20.dp).padding(top = 12.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        if (preview) {
+                            SelectionContainer { Text(spacedText(title.ifBlank { "未命名事项" }), style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("task-reader-title")) }
+                        } else BasicTextField(title, { title = it; validation = null },
+                            textStyle = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary), visualTransformation = MixedScriptVisualTransformation,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("task-title").focusRequester(titleFocus)
+                                .semantics { contentDescription = "事项标题" },
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                            decorationBox = { input -> Box {
+                                if (title.isEmpty()) Text("事项标题", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                input()
+                            } })
+                        if (preview) {
+                            TextButton(onClick = { propertiesOpen = true }, enabled = !state.readOnly,
+                                contentPadding = PaddingValues(0.dp), modifier = Modifier.heightIn(min = 48.dp)) {
+                                Icon(Icons.Outlined.Event, null, Modifier.size(18.dp))
+                                Text(listOfNotNull(relativeDay(LocalDate.parse(day)), state.groups.find { it.id == group }?.name,
+                                    when (phase) { "completed" -> "已完成"; "inProgress" -> "进行中"; else -> null }).joinToString(" · "),
+                                    Modifier.weight(1f).padding(horizontal = 8.dp), style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Icon(Icons.Outlined.Tune, "安排事项", Modifier.size(18.dp))
                             }
-                            if (preview) {
-                                Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerLow,
-                                    modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp)) {
-                                    MarkdownPreview(note.text, Modifier.padding(16.dp))
-                                }
-                            } else {
-                                OutlinedTextField(
-                                    note, { note = it }, visualTransformation = MixedScriptVisualTransformation,
-                                    placeholder = { Text("补充细节、清单或参考链接…\n支持 Markdown 格式") },
-                                    modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp).testTag("task-note"),
-                                    minLines = 8, shape = MaterialTheme.shapes.medium,
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-                                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest
-                                    )
-                                )
-                                Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.surfaceContainerLow) {
-                                    FlowRow(Modifier.fillMaxWidth().padding(4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        listOf("加粗" to "**", "斜体" to "*", "代码" to "`").forEach { (label, token) ->
-                                            TextButton(onClick = { note = surroundNote(note, token, token) },
-                                                modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 12.dp)) { Text(label) }
-                                        }
-                                        TextButton(onClick = { note = surroundNote(note, "\n- [ ] ", "") },
-                                            modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 12.dp)) { Text("清单") }
-                                        TextButton(onClick = { note = surroundNote(note, "\n## ", "") },
-                                            modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 12.dp)) { Text("标题") }
-                                    }
-                                }
-                            }
-                            Text(note.text.length.toString() + " 字符 · 支持 Markdown", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        if (taskID != null) {
-                            EditorSection("事项状态", Icons.Outlined.CheckCircleOutline) {
-                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    listOf("pending" to "待办", "inProgress" to "进行中", "completed" to "已完成").forEach { (value, label) ->
-                                        FilterChip(
-                                            selected = phase == value, onClick = { phase = value },
-                                            label = { Text(label) }, modifier = Modifier.heightIn(min = 48.dp),
-                                            leadingIcon = if (phase == value) ({ Icon(Icons.Outlined.Check, null, Modifier.size(18.dp)) }) else null
-                                        )
-                                    }
-                                }
-                                if (state.tasks.any { it.parentID == taskID && it.phase != "completed" }) {
-                                    Text("子项全部完成后，父项才能标记完成。", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                                }
-                            }
-                        }
-                        Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerLow) {
-                            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                                EditorSection("计划日期", Icons.Outlined.Event) {
-                                    Text(
-                                        LocalDate.parse(day).format(DateTimeFormatter.ofPattern("M 月 d 日 · EEEE")),
-                                        style = MaterialTheme.typography.bodyLarge
-                                    )
-                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        listOf(LocalDate.now() to "今天", LocalDate.now().plusDays(1) to "明天", LocalDate.now().plusDays(7) to "一周后").forEach { (date, label) ->
-                                            FilterChip(selected = day == date.toString(), onClick = { day = date.toString() },
-                                                label = { Text(label) }, modifier = Modifier.heightIn(min = 48.dp))
-                                        }
-                                        AssistChip(onClick = { datePicker = true }, label = { Text("选择日期") },
-                                            modifier = Modifier.heightIn(min = 48.dp),
-                                            leadingIcon = { Icon(Icons.Outlined.CalendarMonth, null, Modifier.size(18.dp)) })
-                                    }
-                                }
-                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                                EditorChoiceRow("所属分组", state.groups.find { it.id == group }?.name ?: "未分组", Icons.Outlined.FolderOpen) {
-                                    groupPicker = true
-                                }
-                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                                EditorChoiceRow("父事项", state.tasks.find { it.id == parent }?.title ?: "作为主待办", Icons.Outlined.SubdirectoryArrowRight) {
-                                    parentPicker = true
-                                }
-                            }
-                        }
-                        listOfNotNull(draftWarning, validation ?: state.error).distinct().forEach { text ->
-                            Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth()) {
-                                Text(text, Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onErrorContainer)
-                            }
-                        }
-                        task?.json?.optDouble("updatedAt")?.takeIf { it.isFinite() }?.let { seconds ->
-                            val updated = Instant.ofEpochMilli(((seconds + 978307200) * 1000).toLong()).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("yyyy/M/d HH:mm"))
-                            Text("最近修改 " + updated, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
+                            if (note.text.isBlank()) Text("暂无备注。点编辑补充内容。", style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            else MarkdownPreview(note.text, Modifier.fillMaxWidth().testTag("task-reader"))
+                        } else BasicTextField(note, { note = it },
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary), visualTransformation = MixedScriptVisualTransformation,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 240.dp).testTag("task-note")
+                                .semantics { contentDescription = "事项备注，支持 Markdown" },
+                            decorationBox = { input -> Box {
+                                if (note.text.isEmpty()) Text("写下细节、清单或想法…", style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                input()
+                            } })
                     }
                 }
             }
         }
+        if (propertiesOpen) AlertDialog(onDismissRequest = { propertiesOpen = false }, title = { Text("安排事项") },
+            text = { Column(Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                if (taskID != null) {
+                    EditorSection("事项状态", Icons.Outlined.CheckCircleOutline) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            listOf("pending" to "待办", "inProgress" to "进行中", "completed" to "已完成").forEach { (value, label) ->
+                                FilterChip(
+                                    selected = phase == value, onClick = { phase = value },
+                                    label = { Text(label) }, modifier = Modifier.heightIn(min = 48.dp),
+                                    leadingIcon = if (phase == value) ({ Icon(Icons.Outlined.Check, null, Modifier.size(18.dp)) }) else null
+                                )
+                            }
+                        }
+                        if (state.tasks.any { it.parentID == taskID && it.phase != "completed" }) {
+                            Text("子项全部完成后，父项才能标记完成。", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+                Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerLow) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        EditorSection("计划日期", Icons.Outlined.Event) {
+                            Text(
+                                LocalDate.parse(day).format(DateTimeFormatter.ofPattern("M 月 d 日 · EEEE")),
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                listOf(LocalDate.now() to "今天", LocalDate.now().plusDays(1) to "明天", LocalDate.now().plusDays(7) to "一周后").forEach { (date, label) ->
+                                    FilterChip(selected = day == date.toString(), onClick = { day = date.toString() },
+                                        label = { Text(label) }, modifier = Modifier.heightIn(min = 48.dp))
+                                }
+                                AssistChip(onClick = { datePicker = true }, label = { Text("选择日期") },
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                    leadingIcon = { Icon(Icons.Outlined.CalendarMonth, null, Modifier.size(18.dp)) })
+                            }
+                        }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        EditorChoiceRow("所属分组", state.groups.find { it.id == group }?.name ?: "未分组", Icons.Outlined.FolderOpen) {
+                            groupPicker = true
+                        }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        EditorChoiceRow("父事项", state.tasks.find { it.id == parent }?.title ?: "作为主待办", Icons.Outlined.SubdirectoryArrowRight) {
+                            parentPicker = true
+                        }
+                    }
+                }
+            } }, confirmButton = { TextButton(onClick = { propertiesOpen = false }) { Text("完成") } })
         if (datePicker) {
             val pickerState = rememberDatePickerState(initialSelectedDateMillis = LocalDate.parse(day).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli())
             DatePickerDialog(onDismissRequest = { datePicker = false }, confirmButton = { TextButton(onClick = {

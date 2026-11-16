@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.sp
 import androidx.core.graphics.toColorInt
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -100,14 +101,14 @@ import java.util.Locale
 }
 
 internal fun LazyListScope.pindoTaskItems(rows: List<TaskOutlineEntry>, state: AppState,
-    collapsed: Set<String>, onDisclosure: (String) -> Unit, onEdit: (String) -> Unit,
+    collapsed: Set<String>, onDisclosure: (String) -> Unit, onEdit: (String, Boolean) -> Unit,
     onAddChild: (String) -> Unit, onDelete: (Set<String>) -> Unit, store: AppStore,
     selected: Set<String>? = null, onSelect: (String) -> Unit = {}, onEnterSelection: ((String) -> Unit)? = null,
     horizontalPadding: Dp = 0.dp) {
     items(rows, key = { it.task.id }) { row ->
         Box(Modifier.padding(horizontal = horizontalPadding)) {
             PindoTaskRow(row, state, expanded = row.task.id !in collapsed, onDisclosure = { onDisclosure(row.task.id) },
-                onEdit = { onEdit(row.task.id) }, onAddChild = { onAddChild(row.task.id) },
+                onEdit = { onEdit(row.task.id, false) }, onWrite = { onEdit(row.task.id, true) }, onAddChild = { onAddChild(row.task.id) },
                 onDelete = { onDelete(setOf(row.task.id)) }, onMove = { store.move(row.task.id, it) },
                 onPhase = { store.advancePhase(row.task.id) }, selected = selected?.contains(row.task.id),
                 onSelect = { onSelect(row.task.id) }, onEnterSelection = onEnterSelection?.let { callback -> { callback(row.task.id) } })
@@ -117,7 +118,7 @@ internal fun LazyListScope.pindoTaskItems(rows: List<TaskOutlineEntry>, state: A
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable private fun PindoTaskRow(entry: TaskOutlineEntry, state: AppState, expanded: Boolean,
-    onDisclosure: () -> Unit, onEdit: () -> Unit, onAddChild: () -> Unit, onDelete: () -> Unit,
+    onDisclosure: () -> Unit, onEdit: () -> Unit, onWrite: () -> Unit, onAddChild: () -> Unit, onDelete: () -> Unit,
     onMove: (Int) -> Unit, onPhase: () -> Unit, selected: Boolean?, onSelect: () -> Unit, onEnterSelection: (() -> Unit)?) {
     val task = entry.task
     val children = state.tasks.filter { it.parentID == task.id }
@@ -129,50 +130,45 @@ internal fun LazyListScope.pindoTaskItems(rows: List<TaskOutlineEntry>, state: A
     val date = if (task.phase == "completed" && task.day < today.minusDays(1))
         task.day.format(DateTimeFormatter.ofPattern("M月d日", Locale.SIMPLIFIED_CHINESE)) else relativeDay(task.day, today)
     val overdue = task.day < today && task.phase != "completed"
-    Surface(shape = RoundedCornerShape(16.dp), color = when {
-        selected == true -> MaterialTheme.colorScheme.primaryContainer
-        !entry.matchesQuery -> MaterialTheme.colorScheme.surfaceContainerLow
-        else -> MaterialTheme.colorScheme.surface
-    }, modifier = Modifier.fillMaxWidth().padding(start = (entry.depth * 16).dp)
-        .alpha(if (entry.matchesQuery) 1f else .7f)) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 80.dp).padding(start = 4.dp, end = 2.dp)
-            .combinedClickable(enabled = !state.readOnly,
-                onClickLabel = if (selected != null) "选择事项" else "编辑事项",
-                onClick = { if (selected != null) { if (entry.matchesQuery) onSelect() } else onEdit() },
-                onLongClickLabel = "事项操作",
-                onLongClick = { if (selected == null && editable) menu = true }), verticalAlignment = Alignment.CenterVertically) {
-            if (selected != null) Checkbox(checked = selected, onCheckedChange = { onSelect() }, enabled = editable, modifier = Modifier.size(48.dp))
-            else PindoPhaseCircle(task.phase, editable, onPhase)
-            Column(Modifier.weight(1f).padding(vertical = 12.dp, horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(spacedText(task.title), style = MaterialTheme.typography.titleMedium,
-                    fontWeight = if (task.phase == "completed") FontWeight.Normal else FontWeight.Medium,
-                    textDecoration = if (task.phase == "completed") TextDecoration.LineThrough else TextDecoration.None,
-                    color = if (task.phase == "completed") MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
-                FlowRow(verticalArrangement = Arrangement.spacedBy(4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()) {
-                    if (!entry.matchesQuery) Text("所在父项", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    else Text(date, style = MaterialTheme.typography.labelMedium,
-                        color = if (overdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (group != null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Box(Modifier.size(6.dp).background(Color(group.color.toColorInt()), CircleShape))
-                        Text(group.name, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    if (children.isNotEmpty()) {
-                        Text("子项 " + completedChildren + "/" + children.size, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    if (task.note.isNotBlank()) {
-                        Icon(Icons.AutoMirrored.Outlined.Notes, "含备注", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    Column(Modifier.fillMaxWidth().padding(start = (entry.depth * 16).dp).alpha(if (entry.matchesQuery) 1f else .65f)) {
+        Surface(color = if (selected == true) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+            shape = RoundedCornerShape(8.dp)) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                .combinedClickable(enabled = selected == null || (!state.readOnly && entry.matchesQuery),
+                    onClickLabel = if (selected != null) "选择事项" else "阅读事项",
+                    onClick = { if (selected != null) onSelect() else onEdit() },
+                    onLongClickLabel = "事项操作", onLongClick = if (selected == null && editable) ({ menu = true }) else null),
+                verticalAlignment = Alignment.CenterVertically) {
+                if (selected != null) Checkbox(checked = selected, onCheckedChange = { onSelect() }, enabled = editable,
+                    modifier = Modifier.size(48.dp))
+                else PindoPhaseCircle(task.phase, editable, onPhase)
+                Column(Modifier.weight(1f).padding(horizontal = 4.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(spacedText(task.title), style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 22.sp),
+                        maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        textDecoration = if (task.phase == "completed") TextDecoration.LineThrough else TextDecoration.None,
+                        color = if (task.phase == "completed") MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
+                    val labels = listOfNotNull(if (!entry.matchesQuery) "所在父项" else if (task.day != today) date else null,
+                        group?.name, if (children.isNotEmpty()) "子项 $completedChildren/${children.size}" else null)
+                    if (labels.isNotEmpty() || task.note.isNotBlank()) Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (labels.isNotEmpty()) Text(labels.joinToString(" · "), modifier = Modifier.weight(1f, fill = false),
+                            style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            color = if (overdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (task.note.isNotBlank()) Icon(Icons.AutoMirrored.Outlined.Notes, "含备注", Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-            }
-            if (selected == null) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                if (selected == null) {
+                    if (children.isNotEmpty()) IconButton(onClick = onDisclosure, modifier = Modifier.size(48.dp)) {
+                        Icon(if (expanded) Icons.Outlined.ExpandMore else Icons.Outlined.ChevronRight,
+                            if (expanded) "收起子项" else "展开子项", Modifier.size(20.dp))
+                    }
                     Box {
                         IconButton(onClick = { menu = true }, enabled = editable, modifier = Modifier.size(48.dp)) {
-                            Icon(Icons.Outlined.MoreVert, "事项操作", Modifier.size(20.dp))
+                            Icon(Icons.Outlined.MoreVert, "事项操作", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                            DropdownMenuItem(text = { Text("修改待办") }, leadingIcon = { Icon(Icons.Outlined.Edit, null) }, onClick = { menu = false; onEdit() })
+                            DropdownMenuItem(text = { Text("修改待办") }, leadingIcon = { Icon(Icons.Outlined.Edit, null) }, onClick = { menu = false; onWrite() })
                             DropdownMenuItem(text = { Text("打开备注") }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Notes, null) }, onClick = { menu = false; onEdit() })
                             if (entry.depth < 2) DropdownMenuItem(text = { Text("添加子项") }, leadingIcon = { Icon(Icons.Outlined.Add, null) }, onClick = { menu = false; onAddChild() })
                             if (onEnterSelection != null) DropdownMenuItem(text = { Text("选择事项") }, leadingIcon = { Icon(Icons.Outlined.CheckBox, null) }, onClick = { menu = false; onEnterSelection() })
@@ -182,13 +178,10 @@ internal fun LazyListScope.pindoTaskItems(rows: List<TaskOutlineEntry>, state: A
                             DropdownMenuItem(text = { Text("删除待办", color = MaterialTheme.colorScheme.error) }, leadingIcon = { Icon(Icons.Outlined.DeleteOutline, null, tint = MaterialTheme.colorScheme.error) }, onClick = { menu = false; onDelete() })
                         }
                     }
-                    if (children.isNotEmpty()) IconButton(onClick = onDisclosure, modifier = Modifier.size(48.dp)) {
-                        Icon(if (expanded) Icons.Outlined.ExpandMore else Icons.Outlined.ChevronRight,
-                            contentDescription = if (expanded) "收起子项" else "展开子项", modifier = Modifier.size(20.dp))
-                    }
                 }
-            } else Spacer(Modifier.width(10.dp))
+            }
         }
+        HorizontalDivider(Modifier.padding(start = 56.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f))
     }
 }
 

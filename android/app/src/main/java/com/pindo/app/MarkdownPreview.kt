@@ -14,19 +14,21 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import java.net.URI
 
 internal enum class MarkdownBlockKind { PARAGRAPH, HEADING, QUOTE, BULLET, ORDERED, CHECKED, UNCHECKED, CODE, DIVIDER }
 internal data class MarkdownBlock(val kind: MarkdownBlockKind, val text: String, val level: Int = 0, val prefix: String = "")
 internal data class MarkdownSpan(val text: String, val bold: Boolean = false, val italic: Boolean = false,
-    val strike: Boolean = false, val code: Boolean = false, val link: Boolean = false)
+    val strike: Boolean = false, val code: Boolean = false, val link: Boolean = false, val url: String? = null)
 
-/** Read-only local renderer. No HTML engine, URL opener, image loader, or network access. */
+/** Local renderer; links open only on an explicit tap. Images and HTML remain text. */
 @Composable internal fun MarkdownPreview(markdown: String, modifier: Modifier = Modifier) {
     val blocks = remember(markdown) { markdownBlocks(markdown) }
     if (blocks.isEmpty()) {
@@ -102,7 +104,9 @@ internal data class MarkdownSpan(val text: String, val bold: Boolean = false, va
                 fontFamily = if (part.code) FontFamily.Monospace else null,
                 background = if (part.code) codeBackground else Color.Unspecified
             ))
+            if (part.url != null) pushLink(LinkAnnotation.Url(part.url))
             append(part.text)
+            if (part.url != null) pop()
             pop()
         }
     }
@@ -175,7 +179,12 @@ internal fun markdownSpans(source: String, depth: Int = 0): List<MarkdownSpan> {
         when {
             groups[1] != null -> output += MarkdownSpan(groups[1]!!.value, code = true)
             groups[2] != null -> output += MarkdownSpan("[图片：${groups[2]!!.value.ifBlank { "未命名" }}]", italic = true)
-            groups[3] != null -> output += markdownSpans(groups[3]!!.value, depth + 1).map { it.copy(link = true) }
+            groups[3] != null -> {
+                val destination = runCatching { URI(groups[4]!!.value.trim()) }.getOrNull()?.takeIf {
+                    (it.scheme.equals("https", true) || it.scheme.equals("http", true)) && it.host != null
+                }?.toASCIIString()
+                output += markdownSpans(groups[3]!!.value, depth + 1).map { it.copy(link = true, url = destination) }
+            }
             groups[5] != null || groups[6] != null -> output += markdownSpans((groups[5] ?: groups[6])!!.value, depth + 1).map { it.copy(bold = true) }
             groups[7] != null -> output += markdownSpans(groups[7]!!.value, depth + 1).map { it.copy(strike = true) }
             else -> output += markdownSpans((groups[8] ?: groups[9])!!.value, depth + 1).map { it.copy(italic = true) }

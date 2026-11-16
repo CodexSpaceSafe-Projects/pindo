@@ -4,16 +4,18 @@
 
 - 待办支持日期、分组、备注、三种状态、三级子项、父子完成联动及批量管理。
 - macOS 支持置顶清单、全局快捷键、快速记录、原生 Markdown 编辑器、字体设置和中英文界面。
-- Android 使用 Material 3 界面，提供清单、日历、批量管理和设置，适配深浅主题、大字体及宽屏侧栏，支持离线编辑、Markdown 预览及保护备份。
+- Android 以紧凑清单和阅读、写作模式组织事项；筛选按需展开，支持连续快速输入、Markdown 阅读、离线编辑、深浅主题及宽屏侧栏。
 - 两端使用 SQLite 保存资料；同步支持设备配对、暂停、离线队列、并发备注与设备撤销。
 
 ## 下载与运行
 
 [macOS 下载](https://github.com/CodexSpaceSafe-Projects/pindo/releases/latest) · [Android 下载](https://github.com/CodexSpaceSafe-Projects/pindo/releases?q=android-build-&expanded=true)
 
-macOS 最低 14，支持 Apple Silicon 和 Intel。解压后将 `Pindo.app` 移到 `/Applications`；应用出现在菜单栏，可在设置中开启登录启动。当前使用临时签名，尚未配置 Developer ID 与公证。Android 最低 8.0（API 26），下载附件 `Pindo-Android-debug.apk`；当前安装包使用调试签名。
+macOS 最低 14，支持 Apple Silicon 和 Intel。解压后将 `Pindo.app` 移到 `/Applications`；应用出现在菜单栏，可在设置中开启登录启动。当前使用临时签名，尚未配置 Developer ID 与公证。Android 最低 8.0（API 26），正式下载附件为 `Pindo-Android.apk`，使用长期固定签名。
 
-Android 的 CI 测试包版本包含构建号与提交短 SHA，可在设置底部核对；本地构建标为 `local`。不同测试包的调试签名可能不同；覆盖安装受阻时请保留原应用和资料，不要通过卸载或清除数据排查同步问题。
+Android 正式包保持 `com.pindo.app`、固定签名和递增版本号，后续 APK 可直接覆盖安装，保留事项、本机偏好和同步凭据。版本包含构建号与提交短 SHA，可在设置底部核对。开发包显示为 `Pindo Dev`，使用独立包名，不覆盖正式安装。
+
+**已安装旧调试包的用户先不要卸载。** 旧 `Pindo-Android-debug.apk` 在不同 CI 构建中用了不同签名，原临时私钥未保存；新包无法绕过 Android 的签名校验。切换固定签名版本前，先导出资料并在其他已连接设备核对数据；JSON 导出不含本机偏好和同步凭据，需要保留设置记录并重新配对。不要把卸载或清除数据当作正常升级步骤。
 
 ## 本地构建
 
@@ -32,7 +34,7 @@ cd android
 ./gradlew testDebugUnitTest lintDebug assembleDebug
 ```
 
-APK 输出到 `android/app/build/outputs/apk/debug/app-debug.apk`。服务端构建和跨端验证见 [开发说明](DEVELOPMENT.md)。推送到 `main` 后，GitHub Actions 运行测试与构建，成功后发布应用下载。
+开发 APK 输出到 `android/app/build/outputs/apk/debug/app-debug.apk`。正式签名配置与覆盖升级验证见 [开发说明](DEVELOPMENT.md#android-发布与覆盖升级)。推送到 `main` 后，GitHub Actions 验证测试、lint、签名和覆盖升级，再发布正式 APK；缺少固定签名 Secret 时暂停 Android 发布，不以临时调试包替代。
 
 ## 保存与同步
 

@@ -69,6 +69,10 @@ class AndroidUiTest {
         compose.onNodeWithTag("calendar-day-${LocalDate.now()}").performClick()
         compose.onNodeWithTag("calendar").assertExists()
         saveScreenshot("calendar-light")
+        compose.onNodeWithContentDescription("展开月历").performClick()
+        compose.onNodeWithTag("calendar-day-${LocalDate.now().withDayOfMonth(LocalDate.now().lengthOfMonth())}").assertExists()
+        saveScreenshot("calendar-month")
+        compose.onNodeWithContentDescription("收起月历").performClick()
 
         navigate("管理")
         compose.onNode(hasSetTextAction()).performTextReplacement("梳理用户反馈")
@@ -104,13 +108,19 @@ class AndroidUiTest {
         showApp()
         compose.onNodeWithTag("dashboard").performScrollToNode(hasText("整理本周的产品计划"))
         compose.onNodeWithText("整理本周的产品计划").performClick()
+        compose.onNodeWithTag("task-title").assertDoesNotExist()
+        compose.onNodeWithTag("task-reader").assertIsDisplayed()
+        saveScreenshot("task-reader", "task-editor")
+        compose.onNodeWithText("编辑").performClick()
         compose.onNodeWithTag("task-title").performTextReplacement("整理下一周的产品计划")
+        compose.onNodeWithContentDescription("安排事项").performClick()
         compose.onNodeWithText("明天").performScrollTo().performClick()
+        compose.onNodeWithText("完成").performClick()
         compose.onNodeWithTag("task-title").performScrollTo()
         saveScreenshot("task-editor", "task-editor")
         val markdown = "# 讨论纪要\n\n**明确目标**，逐步推进。\n\n- 整理反馈\n- 安排下一次讨论"
         compose.onNodeWithTag("task-note").performScrollTo().performTextReplacement(markdown)
-        compose.onNodeWithText("预览").performScrollTo().performClick()
+        compose.onNodeWithText("预览").performClick()
         compose.onNodeWithText("继续编辑").assertExists()
         saveScreenshot("note-preview", "task-editor")
         compose.onNodeWithText("保存").performClick()
@@ -126,7 +136,7 @@ class AndroidUiTest {
     @Test fun largeFontLayoutKeepsNavigationAndQuickAddUsable() {
         compose.runOnUiThread { seedTasks() }
         showApp(fontScale = 1.35f)
-        compose.onNodeWithTag("dashboard").performScrollToNode(hasTestTag("quick-add"))
+        compose.onNodeWithTag("quick-add").assertIsDisplayed()
         compose.onNodeWithTag("quick-add").performTextInput("记录一个新的想法")
         compose.onNodeWithContentDescription("快速添加事项").performClick()
         compose.runOnIdle { assertTrue(store.state.value.tasks.any { it.title == "记录一个新的想法" }) }
@@ -142,7 +152,7 @@ class AndroidUiTest {
         showApp(fontScale = 1.6f)
         compose.onNodeWithTag("navigation-bar").assertIsDisplayed()
         compose.onNodeWithTag("navigation-rail").assertDoesNotExist()
-        compose.onNodeWithTag("dashboard").performScrollToNode(hasTestTag("quick-add"))
+        compose.onNodeWithTag("quick-add").assertIsDisplayed()
         compose.onNodeWithTag("quick-add").performTextInput("为下周留出阅读时间")
         compose.onNodeWithContentDescription("快速添加事项").assertIsDisplayed().performClick()
         compose.runOnIdle {
@@ -289,6 +299,7 @@ class AndroidUiTest {
         try {
             compose.onNodeWithTag("dashboard").performScrollToNode(hasText("恢复编辑中的事项"))
             compose.onNodeWithText("恢复编辑中的事项").performClick()
+            compose.onNodeWithText("编辑").performClick()
             val draft = "旋转与恢复之后仍未提交的备注"
             compose.onNodeWithTag("task-note").performScrollTo().performTextReplacement(draft)
             compose.runOnUiThread { store.stopForeground() }
@@ -363,7 +374,7 @@ class AndroidUiTest {
             // that Robolectric cannot deliver. Draw the actual Compose view to
             // a native Skia Canvas instead; dialogs have their own decor view.
             val view = if (tag == null) rootView else checkNotNull(
-                ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.window?.decorView)
+                ShadowDialog.getShownDialogs().lastOrNull { it.isShowing }?.window?.decorView)
             check(view.width > 0 && view.height > 0)
             image = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
             view.draw(Canvas(image))

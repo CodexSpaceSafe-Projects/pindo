@@ -20,12 +20,21 @@ class MarkdownPreviewTest {
         assertEquals("正在记录\n下一行", block.text)
     }
 
-    @Test fun linksAndImagesAreTextAndNeverBecomeRemoteLoads() {
+    @Test fun linksKeepExplicitDestinationsAndImagesStayLocal() {
         val spans = markdownSpans("查看 [文档](https://example.test/private) ![封面](https://example.test/track.png)")
         assertEquals("查看 文档 [图片：封面]", spans.joinToString("") { it.text })
         assertTrue(spans.any { it.link && it.text == "文档" })
+        assertEquals("https://example.test/private", spans.single { it.link }.url)
         assertFalse(spans.joinToString("") { it.text }.contains("https://"))
         assertEquals("<b>原文</b>", markdownSpans("<b>原文</b>").single().text)
+    }
+
+    @Test fun unsupportedLinksStayTextAndCannotLaunchAnExternalScheme() {
+        for (url in listOf("javascript:alert", "file:///private/file", "intent://example", "https:///missing-host")) {
+            val span = markdownSpans("[链接]($url)").single()
+            assertEquals("链接", span.text)
+            assertNull(span.url)
+        }
     }
 
     @Test fun inlineCodeDoesNotInterpretMarkdownWhileTextStylesAreRetained() {

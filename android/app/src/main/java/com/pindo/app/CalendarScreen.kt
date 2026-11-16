@@ -29,15 +29,18 @@ import java.util.Locale
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable internal fun CalendarScreen(store: AppStore, state: AppState, selectedDay: LocalDate,
-    onDaySelected: (LocalDate) -> Unit, onEdit: (String) -> Unit, onAddChild: (String) -> Unit,
+    onDaySelected: (LocalDate) -> Unit, onEdit: (String, Boolean) -> Unit, onAddChild: (String) -> Unit,
     onDelete: (Set<String>) -> Unit, onAdd: () -> Unit) {
     val today = LocalDate.now()
     var monthText by rememberSaveable { mutableStateOf(selectedDay.withDayOfMonth(1).toString()) }
     var groupID by rememberSaveable { mutableStateOf<String?>(null) }
     var phaseName by rememberSaveable { mutableStateOf(PhaseFilter.ALL.name) }
     var collapsed by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    var monthExpanded by rememberSaveable { mutableStateOf(false) }
     val month = YearMonth.from(LocalDate.parse(monthText))
-    val counts = TodoQueries.calendarCounts(state.tasks, month, groupID)
+    val weekStart = selectedDay.minusDays(selectedDay.dayOfWeek.value.toLong() - 1)
+    val countMonths = if (monthExpanded) listOf(month) else listOf(YearMonth.from(weekStart), YearMonth.from(weekStart.plusDays(6))).distinct()
+    val counts = countMonths.flatMap { TodoQueries.calendarCounts(state.tasks, it, groupID).entries }.associate { it.key to it.value }
     val query = TaskQuery(TaskScope.DAY, selectedDay, PhaseFilter.valueOf(phaseName), groupID, "", TaskSort.MANUAL)
     val rows = TodoQueries.outline(state.tasks, query, collapsed.toSet())
     val matching = TodoQueries.matching(state.tasks, query)
@@ -75,21 +78,21 @@ import java.util.Locale
                     Column(Modifier.fillMaxWidth().padding(horizontal = calendarInnerInset, vertical = 8.dp)) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             IconButton(
-                                onClick = { monthText = month.minusMonths(1).atDay(1).toString() },
-                                enabled = month > YearMonth.of(1, 1), modifier = Modifier.size(48.dp)
-                            ) { Icon(Icons.Outlined.ChevronLeft, "上个月") }
-                            Text(
-                                month.format(DateTimeFormatter.ofPattern("yyyy年M月", Locale.SIMPLIFIED_CHINESE)),
-                                modifier = Modifier.weight(1f).semantics { heading() },
-                                style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
-                                textAlign = TextAlign.Center
-                            )
+                                onClick = { if (monthExpanded) monthText = month.minusMonths(1).atDay(1).toString() else onDaySelected(selectedDay.minusWeeks(1)) },
+                                enabled = if (monthExpanded) month > YearMonth.of(1, 1) else selectedDay.minusWeeks(1).year >= 1, modifier = Modifier.size(48.dp)
+                            ) { Icon(Icons.Outlined.ChevronLeft, if (monthExpanded) "上个月" else "上一周") }
+                            TextButton(onClick = { monthText = selectedDay.withDayOfMonth(1).toString(); monthExpanded = !monthExpanded },
+                                modifier = Modifier.weight(1f).semantics { contentDescription = if (monthExpanded) "收起月历" else "展开月历" }) {
+                                Text(month.format(DateTimeFormatter.ofPattern("yyyy年M月", Locale.SIMPLIFIED_CHINESE)),
+                                    style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                Icon(if (monthExpanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null, Modifier.size(18.dp))
+                            }
                             IconButton(
-                                onClick = { monthText = month.plusMonths(1).atDay(1).toString() },
-                                enabled = month < YearMonth.of(9999, 12), modifier = Modifier.size(48.dp)
-                            ) { Icon(Icons.Outlined.ChevronRight, "下个月") }
+                                onClick = { if (monthExpanded) monthText = month.plusMonths(1).atDay(1).toString() else onDaySelected(selectedDay.plusWeeks(1)) },
+                                enabled = if (monthExpanded) month < YearMonth.of(9999, 12) else selectedDay.plusWeeks(1).year <= 9999, modifier = Modifier.size(48.dp)
+                            ) { Icon(Icons.Outlined.ChevronRight, if (monthExpanded) "下个月" else "下一周") }
                         }
-                        CalendarMonthGrid(month, selectedDay, today, counts, onDaySelected)
+                        CalendarMonthGrid(month, selectedDay, today, counts, onDaySelected, if (monthExpanded) null else weekStart)
                         FlowRow(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 8.dp),
                             horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -131,7 +134,7 @@ import java.util.Locale
 }
 
 @Composable private fun CalendarMonthGrid(month: YearMonth, selectedDay: LocalDate, today: LocalDate,
-    counts: Map<LocalDate, DayTaskCounts>, onDaySelected: (LocalDate) -> Unit) {
+    counts: Map<LocalDate, DayTaskCounts>, onDaySelected: (LocalDate) -> Unit, weekStart: LocalDate? = null) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val overflows = maxWidth < 336.dp
         val calendarWidth = maxOf(maxWidth, 336.dp)
@@ -145,9 +148,9 @@ import java.util.Locale
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                val first = month.atDay(1)
-                val offset = first.dayOfWeek.value - 1
-                val weeks = (offset + month.lengthOfMonth() + 6) / 7
+                val first = weekStart ?: month.atDay(1)
+                val offset = if (weekStart != null) 0 else first.dayOfWeek.value - 1
+                val weeks = if (weekStart != null) 1 else (offset + month.lengthOfMonth() + 6) / 7
                 val start = first.minusDays(offset.toLong())
                 repeat(weeks) { week ->
                     Row(Modifier.fillMaxWidth().padding(bottom = 2.dp)) {
@@ -155,7 +158,7 @@ import java.util.Locale
                             val date = start.plusDays((week * 7 + weekday).toLong())
                             val dayCounts = counts[date]
                             CalendarDay(
-                                date = date, month = month, today = today, selected = date == selectedDay,
+                                date = date, month = if (weekStart != null) YearMonth.from(date) else month, today = today, selected = date == selectedDay,
                                 unfinished = dayCounts?.unfinished ?: 0, completed = dayCounts?.completed ?: 0,
                                 modifier = Modifier.weight(1f), onSelect = { onDaySelected(date) }
                             )

@@ -2,6 +2,8 @@ package com.pindo.app
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -18,6 +20,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.time.LocalDate
@@ -27,18 +31,21 @@ private enum class MainTab(val title: String, val icon: ImageVector) {
     MANAGE("管理", Icons.Outlined.Tune), SETTINGS("设置", Icons.Outlined.Settings)
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable fun PindoScreen(store: AppStore) {
     val state by store.state.collectAsStateWithLifecycle()
     var selectedTab by rememberSaveable { mutableStateOf(MainTab.TASKS.name) }
     val tab = MainTab.valueOf(selectedTab)
     var selectedDay by rememberSaveable { mutableStateOf(LocalDate.now().toString()) }
     var editorOpen by rememberSaveable { mutableStateOf(false) }
+    var editorWriting by rememberSaveable { mutableStateOf(false) }
     var editorTaskID by rememberSaveable { mutableStateOf<String?>(null) }
     var editorParentID by rememberSaveable { mutableStateOf<String?>(null) }
     var editorDay by rememberSaveable { mutableStateOf(LocalDate.now().toString()) }
     var deletingIDs by rememberSaveable { mutableStateOf<List<String>?>(null) }
     val holder = rememberSaveableStateHolder()
-    fun edit(taskID: String?, parentID: String?, day: LocalDate) {
+    fun edit(taskID: String?, parentID: String?, day: LocalDate, writing: Boolean = false) {
+        editorWriting = writing
         editorTaskID = taskID; editorParentID = parentID; editorDay = day.toString(); editorOpen = true
     }
     BackHandler(enabled = tab != MainTab.TASKS && !editorOpen && deletingIDs == null) { selectedTab = MainTab.TASKS.name }
@@ -49,13 +56,19 @@ private enum class MainTab(val title: String, val icon: ImageVector) {
             modifier = Modifier.imePadding(),
             containerColor = MaterialTheme.colorScheme.background,
             bottomBar = {
-                if (!useRail) Column(Modifier.testTag("navigation-bar")) {
+                if (!useRail && !WindowInsets.isImeVisible) Column(Modifier.testTag("navigation-bar")) {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
+                    Row(Modifier.fillMaxWidth().navigationBarsPadding().selectableGroup()) {
                         MainTab.entries.forEach { item ->
-                            NavigationBarItem(selected = item == tab, onClick = { selectedTab = item.name },
-                                icon = { Icon(item.icon, contentDescription = null) }, label = { Text(item.title) },
-                                colors = NavigationBarItemDefaults.colors(indicatorColor = MaterialTheme.colorScheme.primaryContainer))
+                            val color = if (item == tab) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            Column(Modifier.weight(1f).heightIn(min = 56.dp)
+                                .selectable(selected = item == tab, role = Role.Tab, onClick = { selectedTab = item.name })
+                                .padding(horizontal = 4.dp, vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterVertically)) {
+                                Icon(item.icon, null, Modifier.size(22.dp), tint = color)
+                                Text(item.title, style = MaterialTheme.typography.labelSmall, color = color,
+                                    fontWeight = if (item == tab) FontWeight.Bold else FontWeight.Normal)
+                            }
                         }
                     }
                 }
@@ -90,14 +103,14 @@ private enum class MainTab(val title: String, val icon: ImageVector) {
                         holder.SaveableStateProvider(selectedTab) {
                             when (tab) {
                                 MainTab.TASKS -> DashboardScreen(store, state,
-                                    onEdit = { edit(it, null, LocalDate.now()) }, onAddChild = { id -> edit(null, id, state.tasks.find { it.id == id }?.day ?: LocalDate.now()) },
+                                    onEdit = { id, writing -> edit(id, null, LocalDate.now(), writing) }, onAddChild = { id -> edit(null, id, state.tasks.find { it.id == id }?.day ?: LocalDate.now()) },
                                     onDelete = { deletingIDs = it.toList() }, onAdd = { edit(null, null, LocalDate.now()) },
                                     onSyncSettings = { selectedTab = MainTab.SETTINGS.name })
                                 MainTab.CALENDAR -> CalendarScreen(store, state, LocalDate.parse(selectedDay),
-                                    onDaySelected = { selectedDay = it.toString() }, onEdit = { edit(it, null, LocalDate.parse(selectedDay)) },
+                                    onDaySelected = { selectedDay = it.toString() }, onEdit = { id, writing -> edit(id, null, LocalDate.parse(selectedDay), writing) },
                                     onAddChild = { id -> edit(null, id, state.tasks.find { it.id == id }?.day ?: LocalDate.parse(selectedDay)) },
                                     onDelete = { deletingIDs = it.toList() }, onAdd = { edit(null, null, LocalDate.parse(selectedDay)) })
-                                MainTab.MANAGE -> ManagementScreen(store, state, onEdit = { edit(it, null, LocalDate.now()) },
+                                MainTab.MANAGE -> ManagementScreen(store, state, onEdit = { id, writing -> edit(id, null, LocalDate.now(), writing) },
                                     onAddChild = { id -> edit(null, id, state.tasks.find { it.id == id }?.day ?: LocalDate.now()) },
                                     onDelete = { deletingIDs = it.toList() })
                                 MainTab.SETTINGS -> AppSettingsScreen(store, state) { selectedTab = MainTab.TASKS.name }
@@ -110,7 +123,7 @@ private enum class MainTab(val title: String, val icon: ImageVector) {
     }
     if (editorOpen) {
         TaskEditorSheet(store = store, state = state, taskID = editorTaskID, parentID = editorParentID,
-            initialDay = LocalDate.parse(editorDay), onDismiss = { editorOpen = false })
+            initialDay = LocalDate.parse(editorDay), initiallyEditing = editorWriting, onDismiss = { editorOpen = false })
     }
     deletingIDs?.let { ids ->
         val existing = ids.toSet().intersect(state.tasks.map { it.id }.toSet())

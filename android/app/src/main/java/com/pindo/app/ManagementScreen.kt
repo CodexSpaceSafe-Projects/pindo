@@ -19,7 +19,7 @@ import androidx.compose.ui.unit.dp
 import java.time.LocalDate
 
 @OptIn(ExperimentalLayoutApi::class)
-@Composable internal fun ManagementScreen(store: AppStore, state: AppState, onEdit: (String) -> Unit,
+@Composable internal fun ManagementScreen(store: AppStore, state: AppState, onEdit: (String, Boolean) -> Unit,
     onAddChild: (String) -> Unit, onDelete: (Set<String>) -> Unit) {
     var search by rememberSaveable { mutableStateOf("") }
     var groupID by rememberSaveable { mutableStateOf<String?>(null) }
