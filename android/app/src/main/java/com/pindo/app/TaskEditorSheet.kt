@@ -79,7 +79,6 @@ import java.time.format.DateTimeFormatter
     var preview by rememberSaveable(taskID, parentID) { mutableStateOf(taskID != null && !initiallyEditing) }
     var propertiesOpen by rememberSaveable { mutableStateOf(false) }
     val titleFocus = remember { FocusRequester() }
-    LaunchedEffect(preview) { if (!preview && taskID == null) titleFocus.requestFocus() }
     var datePicker by remember { mutableStateOf(false) }
     var parentPicker by remember { mutableStateOf(false) }
     var groupPicker by remember { mutableStateOf(false) }
@@ -111,10 +110,10 @@ import java.time.format.DateTimeFormatter
                     TopAppBar(title = { Text(if (preview) "事项" else "写事项", style = MaterialTheme.typography.titleMedium) },
                         navigationIcon = { IconButton(onClick = requestClose, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Close, "关闭编辑") } },
                         actions = {
-                            if (preview) TextButton(onClick = { preview = false }, enabled = !state.readOnly) {
+                            if (preview) TextButton(onClick = { preview = false }, modifier = Modifier.heightIn(min = 48.dp), enabled = !state.readOnly) {
                                 Text(if (dirty) "继续编辑" else "编辑")
-                            } else TextButton(onClick = { preview = true }) { Text("预览") }
-                            if (!preview || dirty) TextButton(onClick = ::save, enabled = !state.readOnly && title.isNotBlank()) {
+                            } else TextButton(onClick = { preview = true }, modifier = Modifier.heightIn(min = 48.dp)) { Text("预览") }
+                            if (!preview || dirty) TextButton(onClick = ::save, modifier = Modifier.heightIn(min = 48.dp), enabled = !state.readOnly && title.isNotBlank()) {
                                 Text("保存", fontWeight = FontWeight.SemiBold)
                             }
                         }, colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface))
@@ -146,7 +145,8 @@ import java.time.format.DateTimeFormatter
                         if (preview) {
                             SelectionContainer { Text(spacedText(title.ifBlank { "未命名事项" }), style = MaterialTheme.typography.headlineSmall,
                                 fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("task-reader-title")) }
-                        } else BasicTextField(title, { title = it; validation = null },
+                        } else {
+                            BasicTextField(title, { title = it; validation = null },
                             textStyle = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface),
                             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary), visualTransformation = MixedScriptVisualTransformation,
                             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("task-title").focusRequester(titleFocus)
@@ -156,6 +156,8 @@ import java.time.format.DateTimeFormatter
                                 if (title.isEmpty()) Text("事项标题", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 input()
                             } })
+                            LaunchedEffect(Unit) { if (taskID == null) titleFocus.requestFocus() }
+                        }
                         if (preview) {
                             TextButton(onClick = { propertiesOpen = true }, enabled = !state.readOnly,
                                 contentPadding = PaddingValues(0.dp), modifier = Modifier.heightIn(min = 48.dp)) {

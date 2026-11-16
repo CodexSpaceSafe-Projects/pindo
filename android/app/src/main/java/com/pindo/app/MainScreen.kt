@@ -21,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -31,7 +32,6 @@ private enum class MainTab(val title: String, val icon: ImageVector) {
     MANAGE("管理", Icons.Outlined.Tune), SETTINGS("设置", Icons.Outlined.Settings)
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable fun PindoScreen(store: AppStore) {
     val state by store.state.collectAsStateWithLifecycle()
     var selectedTab by rememberSaveable { mutableStateOf(MainTab.TASKS.name) }
@@ -56,13 +56,14 @@ private enum class MainTab(val title: String, val icon: ImageVector) {
             modifier = Modifier.imePadding(),
             containerColor = MaterialTheme.colorScheme.background,
             bottomBar = {
-                if (!useRail && !WindowInsets.isImeVisible) Column(Modifier.testTag("navigation-bar")) {
+                if (!useRail) Column(Modifier.testTag("navigation-bar")) {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     Row(Modifier.fillMaxWidth().navigationBarsPadding().selectableGroup()) {
                         MainTab.entries.forEach { item ->
                             val color = if (item == tab) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                             Column(Modifier.weight(1f).heightIn(min = 56.dp)
                                 .selectable(selected = item == tab, role = Role.Tab, onClick = { selectedTab = item.name })
+                                .semantics(mergeDescendants = true) {}
                                 .padding(horizontal = 4.dp, vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterVertically)) {
                                 Icon(item.icon, null, Modifier.size(22.dp), tint = color)
