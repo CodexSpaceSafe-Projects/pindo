@@ -121,17 +121,27 @@ class AndroidErgonomicsTest {
     }
 
     private fun clickable(label: String, textContains: Boolean = false): AccessibilityNodeInfo? {
-        val candidates = nodes().filter { it.isVisibleToUser && matches(it, label, textContains) }
-        candidates.firstOrNull { it.isClickable && it.isEnabled }?.let { return it }
+        val visible = nodes().filter { it.isVisibleToUser }
+        val candidates = visible.filter { matches(it, label, textContains) }
+        candidates.firstOrNull(::acceptsClick)?.let { return it }
         for (node in candidates) {
             var parent = node.parent
             while (parent != null) {
-                if (parent.isClickable && parent.isEnabled && parent.isVisibleToUser) return parent
+                if (acceptsClick(parent)) return parent
                 parent = parent.parent
             }
         }
+        // Compose may flatten the description and click action into peers.
+        // Require one exact-bounds action target, never an arbitrary button.
+        for (node in candidates) {
+            val sameBounds = visible.filter { acceptsClick(it) && bounds(it) == bounds(node) }.distinct()
+            if (sameBounds.size == 1) return sameBounds.single()
+        }
         return null
     }
+
+    private fun acceptsClick(node: AccessibilityNodeInfo): Boolean = node.refresh() && node.isVisibleToUser && node.isEnabled &&
+        node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK }
 
     private fun field(description: String): AccessibilityNodeInfo? {
         val visible = nodes().filter { it.isVisibleToUser }
@@ -230,6 +240,7 @@ class AndroidErgonomicsTest {
                 .append(" description=").append(node.contentDescription).append(" bounds=").append(bounds(node))
                 .append(" editable=").append(node.isEditable).append(" focused=").append(node.isFocused)
                 .append(" accessibilityFocused=").append(node.isAccessibilityFocused)
+                .append(" clickable=").append(node.isClickable)
                 .append(" enabled=").append(node.isEnabled).append(" actions=").append(node.actionList).append('\n')
         }
     }
