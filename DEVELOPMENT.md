@@ -93,9 +93,11 @@ Swift 需要 5.9+；Linux 安装 SQLite 开发头文件，`swift test --jobs 4` 
 
 Android：在 `android/` 运行 `./gradlew testDebugUnitTest lintDebug assembleDebug`，需要 JDK 17 / SDK 35。
 
-Android 界面采用 Material 3：事项内容优先、语义色适配深浅主题，操作目标至少 48dp；可用窗口宽度达到 600dp 且高度达到 480dp 时使用侧边导航，内容限制最大宽度。清单首屏优先展示事项，快速输入固定在底部，分组和完成状态筛选按需展开；阅读默认渲染 Markdown，写作使用无边框正文、顶部保存与键盘上方格式工具，日期/分组/父项收在安排面板。页面、编辑模式和草稿可恢复，编辑租约及未保存备注不能因布局变化丢失。设计依据：[Compose 无障碍默认行为](https://developer.android.com/develop/ui/compose/accessibility/api-defaults)、[窗口尺寸分类](https://developer.android.com/develop/adaptive-apps/guides/use-window-size-classes)、[自适应导航](https://developer.android.com/develop/adaptive-apps/guides/build-adaptive-navigation)。
+Android 0.5 的界面以暖白纸感、克制蓝色和统一字阶呈现内容，深色模式使用高对比石墨底色。主导航只有“今天 / 日历 / 清单”，设置为次级返回页；手机底栏在键盘或快速录入面板打开时隐藏，宽屏使用侧栏，正文限宽。快速记录支持连续添加、收起保留草稿、继承当前日期/分组，以及把未提交标题交给完整编辑器；不会为了添加而清空筛选或切换页面。圆形完成控件直接完成/恢复待办，“进行中”保留在菜单与安排面板。列表把子项展开移到次级信息区，减少标题旁的按钮；长中文与大字体自然换行，所有操作保留至少48dp触控区和可区分的事项名称。阅读页无表单边框，写作工具靠近键盘，日期/分组/父项统一进入安排面板；草稿、选区、编辑租约与未保存退出保护继续复用。
 
-`AndroidUiTest` 使用虚构资料验证清单、日历、批量操作、编辑恢复、深色主题、窄屏大字及宽屏导航，并将实际 Compose / Skia 渲染写入 `android/app/build/reports/screenshots/`。CI 报告与 Android Release 附带这些截图；它们用于布局检查，触屏、键盘遮挡、TalkBack 和系统返回仍需在真实设备验收。
+设计参考了 [Now in Android](https://github.com/android/nowinandroid/blob/main/app/src/main/kotlin/com/google/samples/apps/nowinandroid/ui/NiaApp.kt) 的自适应导航、[Tasks.org](https://github.com/tasks/tasks/blob/main/app/src/main/res/layout/task_adapter_row.xml) 的事项信息层次、[Quillpad](https://github.com/quillpad/quillpad/blob/master/app/src/main/res/layout/fragment_editor.xml) 的读写分离与键盘附近工具，以及 [Fossify Notes](https://github.com/FossifyOrg/Notes/blob/main/app/src/main/kotlin/org/fossify/notes/fragments/TextFragment.kt) 的正文优先布局；Pindo 使用原创 Compose 实现。规范依据包括 [Android 导航与布局](https://developer.android.com/design/ui/mobile/guides/layout-and-content/layout-and-nav-patterns)、[Compose 无障碍与48dp触控](https://developer.android.com/develop/ui/compose/accessibility/api-defaults)、[自适应导航](https://developer.android.com/develop/adaptive-apps/guides/build-adaptive-navigation)。
+
+`AndroidUiTest` 使用虚构资料验证连续捕获与草稿交接、清单、日历上下文、批量操作、编辑恢复、深色主题、窄屏大字及宽屏导航，并将实际 Compose / Skia 渲染写入 `android/app/build/reports/screenshots/`。CI 报告与 Android Release 附带这些截图；它们用于布局检查，触屏、键盘遮挡、TalkBack 和系统返回仍需在真实设备验收。
 
 ### Android 发布与覆盖升级
 
@@ -109,7 +111,7 @@ gh secret set PINDO_ANDROID_SIGNING --repo CodexSpaceSafe-Projects/pindo < work/
 
 本机正式构建设置 `PINDO_ANDROID_KEYSTORE_PATH`、`PINDO_ANDROID_KEYSTORE_PASSWORD`、`PINDO_ANDROID_KEY_ALIAS` 及成对的 `PINDO_BUILD_NUMBER`、`PINDO_COMMIT_SHA`，执行 `./gradlew assembleRelease`。`scripts/verify-android-apk.py` 校验签名证书、包名、调试标记和版本；缺少 CI Secret 时暂停正式发布，禁止生成临时密钥兜底。
 
-Android CI 的覆盖升级作业在模拟器中安装较低版本，写入真实 SQLite 事项/备注、主题、默认分组、设备名称及 Android Keystore 加密凭据；使用 `adb install -r` 安装较高版本后逐项断言保留，过程中不卸载应用。模拟器两包使用同一作业的测试身份，正式 APK 则另行对固定公钥证书和上一版本元数据校验。此测试不能让旧的随机调试签名恢复兼容；Android 要求更新证书相同或具备由旧私钥签发的轮换证明，参见 [应用更新规则](https://developer.android.com/google/play/app-updates)。
+Android CI 的覆盖升级作业分别在 API 29 / 34 模拟器中安装较低版本，写入真实 SQLite 事项/备注、主题、默认分组、设备名称及 Android Keystore 加密凭据；使用 `adb install -r` 安装较高版本后逐项断言保留，过程中不卸载应用。模拟器两包使用同一作业的测试身份，正式 APK 则另行对固定公钥证书和上一版本元数据校验。覆盖验证后，`AndroidErgonomicsTest` 通过生产 Activity、真实软件键盘与触摸验证连续记录、读写切换、键盘上方的48dp添加/保存按钮及 SQLite 保存，并附系统截图与失败界面层级；不清除已验证资料。此测试不能让旧的随机调试签名恢复兼容；Android 要求更新证书相同或具备由旧私钥签发的轮换证明，参见 [应用更新规则](https://developer.android.com/google/play/app-updates)。
 
 服务端使用 Node.js 22，在 `backend/cloudflare/` 运行：
 

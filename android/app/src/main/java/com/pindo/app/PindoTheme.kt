@@ -2,73 +2,70 @@ package com.pindo.app
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Shapes
-import androidx.compose.material3.Typography
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 private val LightPindoColors = lightColorScheme(
-    primary = Color(0xFF2C6855), onPrimary = Color.White,
-    primaryContainer = Color(0xFFDDEBE1), onPrimaryContainer = Color(0xFF153C2F),
-    secondary = Color(0xFF607568), onSecondary = Color.White,
-    secondaryContainer = Color(0xFFE6EDE5), onSecondaryContainer = Color(0xFF293D31),
-    tertiary = Color(0xFF91683D), tertiaryContainer = Color(0xFFF5E7CF), onTertiaryContainer = Color(0xFF583A18),
-    background = Color(0xFFFCFDFC), onBackground = Color(0xFF202A25),
-    surface = Color.White, onSurface = Color(0xFF202A25),
-    surfaceVariant = Color(0xFFE7EDE9), onSurfaceVariant = Color(0xFF56635C),
-    surfaceContainerLowest = Color.White, surfaceContainerLow = Color(0xFFF0F4F1),
-    surfaceContainer = Color(0xFFEAF0EC), surfaceContainerHigh = Color(0xFFE3EBE6),
-    surfaceContainerHighest = Color(0xFFDBE5DF),
-    outline = Color(0xFF79877F), outlineVariant = Color(0xFFD6E0D9),
-    error = Color(0xFFAB423B), errorContainer = Color(0xFFFFE4DE), onErrorContainer = Color(0xFF70251F)
+    primary = Color(0xFF4058AF), onPrimary = Color.White,
+    primaryContainer = Color(0xFFE8EDFF), onPrimaryContainer = Color(0xFF263C87),
+    secondary = Color(0xFF606575), onSecondary = Color.White,
+    secondaryContainer = Color(0xFFEFEEE9), onSecondaryContainer = Color(0xFF3D414B),
+    tertiary = Color(0xFF8B6B48), onTertiary = Color.White,
+    tertiaryContainer = Color(0xFFF4E9D9), onTertiaryContainer = Color(0xFF614424),
+    background = Color(0xFFFAF9F6), onBackground = Color(0xFF252831),
+    surface = Color(0xFFFFFEFB), onSurface = Color(0xFF252831),
+    surfaceVariant = Color(0xFFF0EFEB), onSurfaceVariant = Color(0xFF686C77),
+    surfaceContainerLowest = Color(0xFFFFFEFB), surfaceContainerLow = Color(0xFFF5F4F0),
+    surfaceContainer = Color(0xFFEFEEE9), surfaceContainerHigh = Color(0xFFE9E8E3),
+    surfaceContainerHighest = Color(0xFFE3E2DD),
+    outline = Color(0xFF858995), outlineVariant = Color(0xFFE1E1DD),
+    error = Color(0xFFAD443E), onError = Color.White,
+    errorContainer = Color(0xFFFBE9E4), onErrorContainer = Color(0xFF7D2D29)
 )
-
 private val DarkPindoColors = darkColorScheme(
-    primary = Color(0xFFA2D3BA), onPrimary = Color(0xFF12392A),
-    primaryContainer = Color(0xFF294B3C), onPrimaryContainer = Color(0xFFC4EBD5),
-    secondary = Color(0xFFB7CDBD), secondaryContainer = Color(0xFF354B3C), onSecondaryContainer = Color(0xFFD8E9DA),
-    tertiary = Color(0xFFE4C18C), tertiaryContainer = Color(0xFF584127), onTertiaryContainer = Color(0xFFF5E2C6),
-    background = Color(0xFF151B17), onBackground = Color(0xFFE2E9E4),
-    surface = Color(0xFF19211C), onSurface = Color(0xFFE2E9E4),
-    surfaceVariant = Color(0xFF303C34), onSurfaceVariant = Color(0xFFB9C6BD),
-    surfaceContainerLowest = Color(0xFF0D130F), surfaceContainerLow = Color(0xFF19221C),
-    surfaceContainer = Color(0xFF1E2921), surfaceContainerHigh = Color(0xFF263229),
-    surfaceContainerHighest = Color(0xFF303D33),
-    outline = Color(0xFF829183), outlineVariant = Color(0xFF3F4D41),
-    error = Color(0xFFFFB4A8), errorContainer = Color(0xFF65342E), onErrorContainer = Color(0xFFFFDAD2)
+    primary = Color(0xFFBBC8FF), onPrimary = Color(0xFF203576),
+    primaryContainer = Color(0xFF2C3D72), onPrimaryContainer = Color(0xFFDFE5FF),
+    secondary = Color(0xFFC1C5D3), onSecondary = Color(0xFF2A2F3B),
+    secondaryContainer = Color(0xFF303540), onSecondaryContainer = Color(0xFFE1E5EF),
+    tertiary = Color(0xFFE4C291), onTertiary = Color(0xFF49371E),
+    tertiaryContainer = Color(0xFF51412B), onTertiaryContainer = Color(0xFFF7E3C7),
+    background = Color(0xFF14171D), onBackground = Color(0xFFE7E9EF),
+    surface = Color(0xFF1B1F27), onSurface = Color(0xFFE7E9EF),
+    surfaceVariant = Color(0xFF303641), onSurfaceVariant = Color(0xFFAFB5C4),
+    surfaceContainerLowest = Color(0xFF101319), surfaceContainerLow = Color(0xFF1B1F27),
+    surfaceContainer = Color(0xFF222730), surfaceContainerHigh = Color(0xFF2A303B),
+    surfaceContainerHighest = Color(0xFF343B48),
+    outline = Color(0xFF8C93A3), outlineVariant = Color(0xFF353C48),
+    error = Color(0xFFFFB4A8), onError = Color(0xFF651B17),
+    errorContainer = Color(0xFF5C302D), onErrorContainer = Color(0xFFFFDAD2)
 )
-
-private val PindoTypography = Typography().let { defaults ->
-    defaults.copy(
-        headlineLarge = defaults.headlineLarge.copy(fontSize = 24.sp, lineHeight = 32.sp),
-        headlineMedium = defaults.headlineMedium.copy(fontSize = 24.sp, lineHeight = 32.sp),
-        titleLarge = defaults.titleLarge.copy(fontSize = 22.sp, lineHeight = 30.sp),
-        titleMedium = defaults.titleMedium.copy(lineHeight = 24.sp),
-        bodyLarge = defaults.bodyLarge.copy(lineHeight = 26.sp),
-        bodyMedium = defaults.bodyMedium.copy(lineHeight = 22.sp)
+private val PindoTypography = Typography().let { base ->
+    base.copy(
+        headlineLarge = base.headlineLarge.copy(fontSize = 30.sp, lineHeight = 38.sp, fontWeight = FontWeight.Bold, letterSpacing = (-.6).sp),
+        headlineMedium = base.headlineMedium.copy(fontSize = 27.sp, lineHeight = 36.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-.4).sp),
+        headlineSmall = base.headlineSmall.copy(fontSize = 24.sp, lineHeight = 34.sp, fontWeight = FontWeight.SemiBold),
+        titleLarge = base.titleLarge.copy(fontSize = 22.sp, lineHeight = 30.sp, fontWeight = FontWeight.SemiBold),
+        titleMedium = base.titleMedium.copy(fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold),
+        bodyLarge = base.bodyLarge.copy(fontSize = 16.sp, lineHeight = 25.sp, letterSpacing = 0.sp),
+        bodyMedium = base.bodyMedium.copy(fontSize = 14.sp, lineHeight = 22.sp, letterSpacing = 0.sp),
+        bodySmall = base.bodySmall.copy(fontSize = 12.sp, lineHeight = 18.sp),
+        labelLarge = base.labelLarge.copy(fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium),
+        labelMedium = base.labelMedium.copy(fontSize = 12.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
     )
 }
-
 @Composable internal fun isPindoDarkTheme(theme: String): Boolean = when (theme) {
     "light" -> false
     "dark" -> true
     else -> isSystemInDarkTheme()
 }
-
 @Composable fun PindoTheme(theme: String = "system", content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = if (isPindoDarkTheme(theme)) DarkPindoColors else LightPindoColors,
+    MaterialTheme(colorScheme = if (isPindoDarkTheme(theme)) DarkPindoColors else LightPindoColors,
         typography = PindoTypography,
-        shapes = Shapes(
-            extraSmall = RoundedCornerShape(6.dp), small = RoundedCornerShape(10.dp),
-            medium = RoundedCornerShape(16.dp), large = RoundedCornerShape(22.dp),
-            extraLarge = RoundedCornerShape(28.dp)
-        ),
-        content = content
-    )
+        shapes = Shapes(extraSmall = RoundedCornerShape(4.dp), small = RoundedCornerShape(8.dp),
+            medium = RoundedCornerShape(12.dp), large = RoundedCornerShape(16.dp), extraLarge = RoundedCornerShape(24.dp)),
+        content = content)
 }

@@ -62,7 +62,7 @@ class AndroidSyncUiTest {
             val state by store.state.collectAsState()
             PindoTheme("system") { Surface { PindoScreen(store) } }
         }
-        compose.onNode(hasText("设置") and hasClickAction()).performClick()
+        compose.onNodeWithTag("open-settings").assertIsDisplayed().performClick()
         compose.onNode(hasText("云同步") and hasClickAction()).performScrollTo().performClick()
         val input = compose.onNodeWithTag("sync-invitation")
         val join = compose.onNodeWithTag("sync-join")

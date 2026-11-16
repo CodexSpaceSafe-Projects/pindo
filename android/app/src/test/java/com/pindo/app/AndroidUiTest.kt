@@ -11,6 +11,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.material3.Surface
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -74,8 +76,9 @@ class AndroidUiTest {
         saveScreenshot("calendar-month")
         compose.onNodeWithContentDescription("收起月历").performClick()
 
-        navigate("管理")
-        compose.onNode(hasSetTextAction()).performTextReplacement("梳理用户反馈")
+        navigate("清单")
+        compose.onNodeWithContentDescription("搜索事项").performClick()
+        compose.onNodeWithTag("management-search").performTextReplacement("梳理用户反馈")
         compose.onNodeWithTag("batch-mode").performClick()
         compose.onNodeWithText("全选结果").performClick()
         compose.onNodeWithText("已选择 1 项").assertExists()
@@ -91,12 +94,12 @@ class AndroidUiTest {
     @Test fun settingsThemeChangesPersistAndRenderDarkDashboard() {
         compose.runOnUiThread { seedTasks() }
         showApp()
-        navigate("设置")
+        openSettings()
         compose.onNodeWithText("偏好设置").assertExists()
         saveScreenshot("settings-light")
         compose.onNodeWithText("深色").performScrollTo().performClick()
         compose.runOnIdle { assertEquals("dark", store.state.value.preferences.theme) }
-        navigate("清单")
+        returnFromSettings()
         compose.onNodeWithTag("dashboard").assertExists()
         saveScreenshot("dashboard-dark")
     }
@@ -136,19 +139,99 @@ class AndroidUiTest {
     @Test fun largeFontLayoutKeepsNavigationAndQuickAddUsable() {
         compose.runOnUiThread { seedTasks() }
         showApp(fontScale = 1.35f)
+        openQuickCapture()
         compose.onNodeWithTag("quick-add").assertIsDisplayed()
         compose.onNodeWithTag("quick-add").performTextInput("记录一个新的想法")
         compose.onNodeWithContentDescription("快速添加事项").performClick()
         compose.runOnIdle { assertTrue(store.state.value.tasks.any { it.title == "记录一个新的想法" }) }
+        closeQuickCapture()
         saveScreenshot("dashboard-large-font")
         navigate("日历")
         compose.onNodeWithTag("calendar").assertExists()
     }
 
+    @Test fun quickCaptureSupportsConsecutiveEntriesAndRestoresAnUnsubmittedDraft() {
+        showApp()
+        openQuickCapture()
+        val field = compose.onNodeWithTag("quick-add")
+        assertTouchTarget(compose.onNodeWithContentDescription("快速添加事项"))
+        field.performTextInput("记下会议里的第一个想法")
+        compose.onNodeWithContentDescription("快速添加事项").performClick()
+        compose.onNodeWithTag("quick-capture").assertIsDisplayed()
+        assertEquals("", field.fetchSemanticsNode().config[SemanticsProperties.EditableText].text)
+        field.performTextInput("再记下一件想做的事")
+        field.performImeAction()
+        compose.onNodeWithTag("quick-capture").assertIsDisplayed()
+        assertEquals("", field.fetchSemanticsNode().config[SemanticsProperties.EditableText].text)
+        compose.runOnIdle {
+            assertEquals(listOf("记下会议里的第一个想法", "再记下一件想做的事"),
+                store.state.value.tasks.map { it.title })
+        }
+
+        val draft = "稍后继续补充的第三个想法"
+        field.performTextInput(draft)
+        saveScreenshot("quick-capture", "quick-capture")
+        closeQuickCapture()
+        compose.onNodeWithTag("dashboard").assertIsDisplayed()
+        compose.onNode(hasText("今天") and hasClickAction()).assertIsSelected()
+        compose.runOnIdle { assertEquals("Closing capture must not submit its draft", 2, store.state.value.tasks.size) }
+        openQuickCapture()
+        compose.onNodeWithTag("quick-add").assertTextEquals(draft)
+        closeQuickCapture()
+    }
+
+    @Test fun quickCapturePassesItsTitleToDetailedEditingWithoutCreatingADuplicate() {
+        showApp()
+        openQuickCapture()
+        val title = "把新的阅读想法写完整"
+        compose.onNodeWithTag("quick-add").performTextInput(title)
+        compose.onNodeWithText("详细编辑").performClick()
+        compose.onNodeWithTag("quick-capture").assertDoesNotExist()
+        compose.onNodeWithTag("task-editor").assertIsDisplayed()
+        compose.onNodeWithTag("task-title").assertTextEquals(title)
+        compose.runOnIdle { assertTrue("Entering detailed editing must not save a partial task", store.state.value.tasks.isEmpty()) }
+        compose.onNodeWithTag("task-note").performTextReplacement("保留捕获标题，再补充正文。")
+        compose.onNodeWithText("保存").performClick()
+        compose.runOnIdle {
+            val task = store.state.value.tasks.single()
+            assertEquals(title, task.title)
+            assertEquals("保留捕获标题，再补充正文。", task.note)
+            assertEquals(LocalDate.now(), task.day)
+        }
+        compose.onNodeWithTag("task-editor").assertDoesNotExist()
+    }
+
+    @Test fun calendarQuickCapturePersistsTheSelectedFutureDayAndKeepsItsNavigationContext() {
+        val today = LocalDate.now()
+        val selectedDay = today.plusDays(1)
+        val title = "未来一天的阅读安排"
+        showApp()
+        navigate("日历")
+        compose.onNodeWithContentDescription("展开月历").performClick()
+        if (selectedDay.month != today.month) compose.onNodeWithContentDescription("下个月").performClick()
+        compose.onNodeWithTag("calendar-day-$selectedDay").performClick().assertIsSelected()
+        openQuickCapture()
+        compose.onNodeWithTag("quick-add").performTextInput(title)
+        compose.onNodeWithContentDescription("快速添加事项").performClick()
+        compose.runOnIdle {
+            val app = ApplicationProvider.getApplicationContext<Application>()
+            val persisted = DocumentStorage(app).sqlite.read().getJSONArray("tasks")
+            assertEquals("Capture must save exactly one real SQLite task", 1, persisted.length())
+            val task = Todo.from(persisted.getJSONObject(0))
+            assertEquals(title, task.title)
+            assertEquals("Calendar capture must keep the selected day instead of defaulting to today", selectedDay, task.day)
+            assertEquals(selectedDay, store.state.value.tasks.single().day)
+        }
+        closeQuickCapture()
+        compose.onNodeWithTag("calendar").assertIsDisplayed()
+        compose.onNode(hasText("日历") and hasClickAction()).assertIsSelected()
+        compose.onNodeWithTag("dashboard").assertDoesNotExist()
+    }
+
     @OptIn(ExperimentalTestApi::class)
     @Test fun writingToolbarKeepsTheSelectionAndReturnsFocusToTheNote() {
         showApp()
-        compose.onNodeWithTag("add-task").performClick()
+        openDetailedEditor()
         compose.onNodeWithTag("task-title").performTextReplacement("记录阅读想法")
         compose.onNodeWithTag("task-note").performTextReplacement("记录重点")
         compose.onNodeWithTag("task-note").performTextInputSelection(androidx.compose.ui.text.TextRange(0, 4))
@@ -168,26 +251,34 @@ class AndroidUiTest {
         showApp(fontScale = 1.6f)
         compose.onNodeWithTag("navigation-bar").assertIsDisplayed()
         compose.onNodeWithTag("navigation-rail").assertDoesNotExist()
+        openQuickCapture()
         compose.onNodeWithTag("quick-add").assertIsDisplayed()
         compose.onNodeWithTag("quick-add").performTextInput("为下周留出阅读时间")
         compose.onNodeWithContentDescription("快速添加事项").assertIsDisplayed().performClick()
         compose.runOnIdle {
             assertTrue(store.state.value.tasks.any { it.title == "为下周留出阅读时间" })
         }
+        closeQuickCapture()
         saveScreenshot("dashboard-narrow-large-font")
+        navigate("清单")
+        compose.onNodeWithTag("list-filters").assertIsDisplayed().performClick()
         compose.onNodeWithTag("scope-filter").assertIsDisplayed().performClick()
         compose.onNodeWithText("近 7 天").performClick()
-        compose.onNodeWithTag("dashboard").performScrollToNode(hasText("安排周末散步"))
+        compose.onNodeWithText("显示结果").performClick()
+        compose.onNodeWithTag("management").performScrollToNode(hasText("安排周末散步"))
         compose.onNodeWithText("安排周末散步").assertIsDisplayed()
 
         navigate("日历")
         compose.onNodeWithTag("calendar").assertIsDisplayed()
-        navigate("管理")
-        compose.onNodeWithTag("management").assertIsDisplayed()
-        navigate("设置")
-        compose.onNode(hasText("设置") and hasClickAction()).assertIsSelected().assertIsDisplayed()
-        compose.onNodeWithTag("add-task").assertDoesNotExist()
         navigate("清单")
+        compose.onNodeWithTag("management").assertIsDisplayed()
+        openSettings()
+        compose.onNodeWithTag("navigation-bar").assertDoesNotExist()
+        compose.onNodeWithTag("add-task").assertDoesNotExist()
+        returnFromSettings()
+        compose.onNodeWithTag("management").assertIsDisplayed()
+        compose.onNode(hasText("清单") and hasClickAction()).assertIsSelected()
+        navigate("今天")
         compose.onNodeWithTag("dashboard").assertIsDisplayed()
     }
 
@@ -208,13 +299,16 @@ class AndroidUiTest {
         compose.onNodeWithTag("calendar").assertIsDisplayed()
         assertContentWidth("calendar")
         saveScreenshot("calendar-tablet")
-        navigate("管理")
-        compose.onNodeWithTag("management").assertIsDisplayed()
-        navigate("设置")
-        compose.onNode(hasText("设置") and hasClickAction()).assertIsSelected()
-        compose.onNodeWithTag("add-task").assertDoesNotExist()
         navigate("清单")
+        compose.onNodeWithTag("management").assertIsDisplayed()
+        openSettings()
+        compose.onNodeWithTag("navigation-rail").assertDoesNotExist()
+        compose.onNodeWithTag("add-task").assertDoesNotExist()
+        returnFromSettings()
+        compose.onNodeWithTag("management").assertIsDisplayed()
         compose.onNodeWithTag("add-task").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("quick-capture").assertIsDisplayed()
+        compose.onNodeWithText("详细编辑").performClick()
         compose.onNodeWithTag("task-editor").assertIsDisplayed()
         compose.onNodeWithContentDescription("关闭编辑").performClick()
         compose.onNodeWithTag("task-editor").assertDoesNotExist()
@@ -230,21 +324,29 @@ class AndroidUiTest {
         compose.onNodeWithTag("calendar").assertIsDisplayed()
         compose.onNodeWithTag("navigation-bar").assertIsDisplayed()
         saveScreenshot("calendar-short-landscape")
-        navigate("清单")
+        navigate("今天")
         compose.onNodeWithTag("add-task").assertIsDisplayed()
     }
 
     @Test
     @Config(qualifiers = "zh-rCN-w800dp-h480dp-land-xhdpi")
-    fun largeFontRailCanScrollToSettingsAtMinimumHeight() {
+    fun largeFontRailKeepsNavigationAndSettingsReachableAtMinimumHeight() {
         compose.runOnUiThread { seedTasks() }
         showApp(fontScale = 2f)
         compose.onNodeWithTag("navigation-rail").assertIsDisplayed()
         compose.onNodeWithTag("navigation-bar").assertDoesNotExist()
-        compose.onNode(hasText("设置") and hasClickAction()).performScrollTo().performClick()
-        compose.onNode(hasText("设置") and hasClickAction()).assertIsSelected().assertIsDisplayed()
-        compose.onNodeWithTag("dashboard").assertDoesNotExist()
+        navigate("日历")
+        compose.onNodeWithTag("calendar").assertIsDisplayed()
+        navigate("清单")
+        compose.onNodeWithTag("management").assertIsDisplayed()
         saveScreenshot("navigation-rail-large-font")
+        openSettings()
+        compose.onNodeWithContentDescription("返回清单").assertIsDisplayed()
+        compose.onNodeWithTag("dashboard").assertDoesNotExist()
+        compose.onNodeWithTag("navigation-rail").assertDoesNotExist()
+        returnFromSettings()
+        compose.onNodeWithTag("management").assertIsDisplayed()
+        compose.onNodeWithTag("navigation-rail").assertIsDisplayed()
     }
 
     @Test fun readOnlySyncChipShowsStorageErrorAndRemainsActionable() {
@@ -267,12 +369,26 @@ class AndroidUiTest {
         showApp()
         assertTouchTarget(compose.onNodeWithTag("add-task"))
         compose.onNodeWithTag("dashboard").performScrollToNode(hasText("安排一次短途散步"))
-        val phase = compose.onNodeWithContentDescription("待办，点击开始")
+        val phase = compose.onNodeWithContentDescription("完成事项：安排一次短途散步")
         assertTouchTarget(phase)
         phase.performClick()
-        compose.runOnIdle { assertEquals("inProgress", store.state.value.tasks.single().phase) }
+        compose.runOnIdle { assertEquals("completed", store.state.value.tasks.single().phase) }
+        navigate("清单")
+        compose.onNodeWithTag("management").performScrollToNode(hasText("安排一次短途散步"))
+        val restore = compose.onNodeWithContentDescription("恢复待办：安排一次短途散步")
+        assertTouchTarget(restore)
+        restore.performClick()
+        compose.runOnIdle { assertEquals("pending", store.state.value.tasks.single().phase) }
 
-        val actions = compose.onNodeWithContentDescription("事项操作")
+        compose.onNodeWithContentDescription("事项操作：安排一次短途散步").performClick()
+        compose.onNodeWithText("开始进行").performClick()
+        compose.runOnIdle { assertEquals("inProgress", store.state.value.tasks.single().phase) }
+        val completeInProgress = compose.onNodeWithContentDescription("完成事项：安排一次短途散步")
+        assertTouchTarget(completeInProgress)
+        completeInProgress.performClick()
+        compose.runOnIdle { assertEquals("completed", store.state.value.tasks.single().phase) }
+
+        val actions = compose.onNodeWithContentDescription("事项操作：安排一次短途散步")
         assertTouchTarget(actions)
         actions.performClick()
         compose.onNodeWithText("修改待办").performClick()
@@ -353,8 +469,37 @@ class AndroidUiTest {
     }
 
     private fun navigate(label: String) {
-        compose.onNode(hasText(label) and hasClickAction()).performClick()
+        val destination = compose.onNode(hasText(label) and hasClickAction() and
+            SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab))
+        if (compose.onAllNodesWithTag("navigation-rail").fetchSemanticsNodes().isNotEmpty()) destination.performScrollTo()
+        destination.performClick()
         compose.waitForIdle()
+    }
+
+    private fun openSettings() {
+        compose.onNodeWithTag("open-settings").assertIsDisplayed().performClick()
+        compose.onNodeWithContentDescription("返回清单").assertIsDisplayed()
+    }
+
+    private fun returnFromSettings() {
+        compose.onNodeWithContentDescription("返回清单").performClick()
+        compose.waitForIdle()
+    }
+
+    private fun openQuickCapture() {
+        compose.onNodeWithTag("add-task").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("quick-capture").assertIsDisplayed()
+    }
+
+    private fun closeQuickCapture() {
+        compose.onNodeWithContentDescription("关闭快速添加").performClick()
+        compose.onNodeWithTag("quick-capture").assertDoesNotExist()
+    }
+
+    private fun openDetailedEditor() {
+        openQuickCapture()
+        compose.onNodeWithText("详细编辑").performClick()
+        compose.onNodeWithTag("task-editor").assertIsDisplayed()
     }
 
     private fun assertTouchTarget(node: SemanticsNodeInteraction) {
@@ -387,13 +532,32 @@ class AndroidUiTest {
         lateinit var image: Bitmap
         compose.runOnIdle {
             // Compose captureToImage waits for a hardware frame-commit callback
-            // that Robolectric cannot deliver. Draw the actual Compose view to
-            // a native Skia Canvas instead; dialogs have their own decor view.
+            // that Robolectric cannot deliver. Draw actual View windows to a
+            // native Skia Canvas, preserving their original viewport dimensions.
             val view = if (tag == null) rootView else checkNotNull(
                 ShadowDialog.getShownDialogs().lastOrNull { it.isShowing }?.window?.decorView)
             check(view.width > 0 && view.height > 0)
             image = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
-            view.draw(Canvas(image))
+            val canvas = Canvas(image)
+            if (tag != null && tag != "task-editor") {
+                // A partial bottom-sheet window has transparent space above
+                // its content. Render the actual underlying app there, then
+                // composite the actual dialog at its native on-screen offset.
+                check(rootView.width > 0 && rootView.height > 0)
+                rootView.draw(canvas)
+                val rootPosition = IntArray(2)
+                val dialogPosition = IntArray(2)
+                rootView.getLocationOnScreen(rootPosition)
+                view.getLocationOnScreen(dialogPosition)
+                canvas.save()
+                canvas.translate((dialogPosition[0] - rootPosition[0]).toFloat(),
+                    (dialogPosition[1] - rootPosition[1]).toFloat())
+                view.draw(canvas)
+                canvas.restore()
+            } else {
+                // Full-screen editor dialogs retain their existing capture.
+                view.draw(canvas)
+            }
         }
         val firstPixel = image.getPixel(0, 0)
         val containsUi = (0 until image.height step 13).any { y ->

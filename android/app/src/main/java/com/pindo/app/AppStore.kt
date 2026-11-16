@@ -78,12 +78,6 @@ class AppStore(application: Application) : AndroidViewModel(application) {
         next.put("tasks", if (phase == null || (baseline != null && phase == baseline.phase)) tasks else TodoRules.setPhase(tasks, id, phase))
     }
 
-    fun advancePhase(id: String) = mutate { next ->
-        val task = next.getJSONArray("tasks").objects().map(Todo::from).first { it.id == id }
-        val phase = when (task.phase) { "pending" -> "inProgress"; "inProgress" -> "completed"; else -> "pending" }
-        next.put("tasks", TodoRules.setPhase(next.getJSONArray("tasks"), id, phase))
-    }
-
     fun deleteTask(id: String) = mutate { next ->
         val tasks = next.getJSONArray("tasks").objects()
         val removed = TodoRules.descendants(tasks.map(Todo::from), id)
