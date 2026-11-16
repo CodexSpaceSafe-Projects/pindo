@@ -180,13 +180,11 @@ jobs:
             adb shell settings put secure show_ime_with_hard_keyboard 1
             adb shell am instrument -w -e class com.pindo.app.AndroidErgonomicsTest com.pindo.app.dev.test/androidx.test.runner.AndroidJUnitRunner > "$RUNNER_TEMP/pindo-upgrade/keyboard.txt"
             cat "$RUNNER_TEMP/pindo-upgrade/keyboard.txt"
-            for image in capture-keyboard reader editor-keyboard editor-saved failure; do
-              adb exec-out run-as com.pindo.app.dev cat "files/ergonomics/$image.png" > "$RUNNER_TEMP/pindo-upgrade/$image.png" || rm -f "$RUNNER_TEMP/pindo-upgrade/$image.png"
-            done
+            for image in capture-keyboard reader editor-keyboard editor-saved failure; do adb exec-out run-as com.pindo.app.dev cat "files/ergonomics/$image.png" > "$RUNNER_TEMP/pindo-upgrade/$image.png" || rm -f "$RUNNER_TEMP/pindo-upgrade/$image.png"; done
             adb exec-out run-as com.pindo.app.dev cat files/ergonomics/failure-hierarchy.txt > "$RUNNER_TEMP/pindo-upgrade/failure-hierarchy.txt" || rm -f "$RUNNER_TEMP/pindo-upgrade/failure-hierarchy.txt"
             grep -Fq 'OK (1 test)' "$RUNNER_TEMP/pindo-upgrade/keyboard.txt"
             ! grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed' "$RUNNER_TEMP/pindo-upgrade/keyboard.txt"
-            for image in capture-keyboard reader editor-keyboard editor-saved; do test -s "$RUNNER_TEMP/pindo-upgrade/$image.png"; done
+            for image in capture-keyboard reader editor-keyboard editor-saved; do test -s "$RUNNER_TEMP/pindo-upgrade/$image.png" || exit 1; done
       - uses: actions/upload-artifact@v6
         if: always()
         with:

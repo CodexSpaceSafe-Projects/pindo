@@ -131,8 +131,26 @@ class AndroidErgonomicsTest {
         return null
     }
 
-    private fun field(description: String): AccessibilityNodeInfo? = nodes().firstOrNull {
-        it.isVisibleToUser && it.isEditable && normal(it.contentDescription).contains(normal(description))
+    private fun field(description: String): AccessibilityNodeInfo? {
+        val visible = nodes().filter { it.isVisibleToUser }
+        val labels = visible.filter { normal(it.contentDescription).contains(normal(description)) }
+        // Compose can expose a field's description on a child semantic node
+        // while the editable action lives on its EditText ancestor.
+        for (label in labels) {
+            var node: AccessibilityNodeInfo? = label
+            while (node != null) {
+                if (node.isEditable && node.isEnabled && node.isVisibleToUser) return node
+                node = node.parent
+            }
+        }
+        // Some platform accessibility trees flatten those nodes into peers.
+        // Only associate an unambiguous editable node with the exact bounds
+        // of the requested label; never fall back to an arbitrary text field.
+        for (label in labels) {
+            val sameBounds = visible.filter { it.isEditable && it.isEnabled && bounds(it) == bounds(label) }.distinct()
+            if (sameBounds.size == 1) return sameBounds.single()
+        }
+        return null
     }
 
     private fun setText(description: String, text: String) {
