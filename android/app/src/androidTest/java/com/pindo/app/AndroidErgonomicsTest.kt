@@ -5,7 +5,6 @@ import android.app.Application
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Rect
-import android.os.Bundle
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
@@ -30,8 +29,8 @@ class AndroidErgonomicsTest {
 
     @Test fun captureAndEditorStayUsableAboveTheKeyboard() {
         val existing = tasks().associate { it.getString("id") to Pair(it.getString("title"), it.optString("note")) }
-        val firstTitle = "键盘验收第一件事"
-        val secondTitle = "键盘验收第二件事"
+        val firstTitle = "Keyboard capture one"
+        val secondTitle = "Keyboard capture two"
         assertFalse(tasks().any { it.getString("title") == firstTitle || it.getString("title") == secondTitle })
         val previousFlags = automation.serviceInfo.flags
         automation.serviceInfo = automation.serviceInfo.apply {
@@ -63,13 +62,13 @@ class AndroidErgonomicsTest {
             screenshot("reader")
             tap("编辑")
             await("editor keyboard must appear") { keyboardBounds() != null && field("事项备注，支持 Markdown") != null }
-            val note = "真实键盘上方的保存操作，必须保留这段备注。"
+            val note = "Keyboard editing must save this exact note."
             setText("事项备注，支持 Markdown", note)
             assertAboveKeyboard("保存")
             tap("预览")
             await("reading preview must hide the keyboard") { keyboardBounds() == null && clickable("继续编辑") != null }
             tap("继续编辑")
-            await("returning to writing restores the keyboard and note") { keyboardBounds() != null && normal(field("事项备注，支持 Markdown")?.text) == normal(note) }
+            await("returning to writing restores the keyboard and note") { keyboardBounds() != null && field("事项备注，支持 Markdown")?.text?.toString() == note }
             assertAboveKeyboard("保存")
             screenshot("editor-keyboard")
             tap("保存")
@@ -112,6 +111,9 @@ class AndroidErgonomicsTest {
         val result = mutableListOf<AccessibilityNodeInfo>()
         while (queue.isNotEmpty()) {
             val node = queue.removeFirst()
+            // UiAutomation may retain Compose's old virtual-node snapshots even
+            // after the screen updates. Refresh text, actions and children alike.
+            if (!node.refresh()) continue
             result.add(node)
             for (i in 0 until node.childCount) node.getChild(i)?.let(queue::add)
         }
@@ -139,7 +141,7 @@ class AndroidErgonomicsTest {
         for (label in labels) {
             var node: AccessibilityNodeInfo? = label
             while (node != null) {
-                if (node.isEditable && node.isEnabled && node.isVisibleToUser) return node
+                if (node.isEditable && node.isEnabled && node.isVisibleToUser && node.refresh()) return node
                 node = node.parent
             }
         }
@@ -148,7 +150,7 @@ class AndroidErgonomicsTest {
         // of the requested label; never fall back to an arbitrary text field.
         for (label in labels) {
             val sameBounds = visible.filter { it.isEditable && it.isEnabled && bounds(it) == bounds(label) }.distinct()
-            if (sameBounds.size == 1) return sameBounds.single()
+            if (sameBounds.size == 1 && sameBounds.single().refresh()) return sameBounds.single()
         }
         return null
     }
@@ -156,9 +158,17 @@ class AndroidErgonomicsTest {
     private fun setText(description: String, text: String) {
         await("editable field $description") { field(description) != null }
         val node = requireNotNull(field(description))
-        val arguments = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
-        assertTrue("Text field must accept Android's native set-text action", node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments))
-        await("text is visible in $description") { normal(field(description)?.text) == normal(text) }
+        assertTrue("Input fixture must start empty: $description", node.text.isNullOrEmpty())
+        val area = bounds(node)
+        keyboardBounds()?.let { area.bottom = minOf(area.bottom, it.top) }
+        tapArea(area, "text field $description")
+        await("$description must receive input focus with the keyboard visible") {
+            field(description)?.isFocused == true && keyboardBounds() != null
+        }
+        // Native key events exercise the focused editor's real input connection.
+        // The virtual keyboard key map supports these ASCII fixtures on API 29/34.
+        instrumentation.sendStringSync(text)
+        await("exact text is visible in $description") { field(description)?.text?.toString() == text }
     }
 
     private fun bounds(node: AccessibilityNodeInfo): Rect = Rect().also(node::getBoundsInScreen)
@@ -180,6 +190,10 @@ class AndroidErgonomicsTest {
     private fun tap(label: String, textContains: Boolean = false) {
         await("visible enabled action $label") { clickable(label, textContains) != null }
         val area = bounds(requireNotNull(clickable(label, textContains)))
+        tapArea(area, label)
+    }
+
+    private fun tapArea(area: Rect, label: String) {
         assertFalse("Cannot tap an empty target for $label", area.isEmpty)
         val time = SystemClock.uptimeMillis()
         val down = MotionEvent.obtain(time, time, MotionEvent.ACTION_DOWN, area.exactCenterX(), area.exactCenterY(), 0)
@@ -213,7 +227,10 @@ class AndroidErgonomicsTest {
         }
         nodes().filter { it.isVisibleToUser }.forEach { node ->
             append(node.className).append(" text=").append(if (node.isPassword) "<hidden>" else node.text)
-                .append(" description=").append(node.contentDescription).append(" bounds=").append(bounds(node)).append('\n')
+                .append(" description=").append(node.contentDescription).append(" bounds=").append(bounds(node))
+                .append(" editable=").append(node.isEditable).append(" focused=").append(node.isFocused)
+                .append(" accessibilityFocused=").append(node.isAccessibilityFocused)
+                .append(" enabled=").append(node.isEnabled).append(" actions=").append(node.actionList).append('\n')
         }
     }
 }

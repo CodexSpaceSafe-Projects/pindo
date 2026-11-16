@@ -157,6 +157,17 @@ jobs:
           cp android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/pindo-upgrade/before.apk"
           PINDO_BUILD_NUMBER="$((GITHUB_RUN_NUMBER + 1))" android/gradlew -p android --no-daemon assembleDebug assembleDebugAndroidTest
           cp android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/pindo-upgrade/after.apk"
+          cat > "$RUNNER_TEMP/pindo-upgrade/verify-screenshots.py" <<'PY'
+          import os, struct
+          from pathlib import Path
+          for path in (Path(os.environ['RUNNER_TEMP']) / 'pindo-upgrade').glob('*.png'):
+              header = path.read_bytes()[:24]
+              valid = (len(header) == 24 and header[:8] == b'\x89PNG\r\n\x1a\n'
+                       and header[12:16] == b'IHDR' and min(struct.unpack('>II', header[16:24])) >= 200)
+              if not valid:
+                  path.unlink()
+                  print(f'Discarded invalid screenshot: {path.name}')
+          PY
       - name: Enable hardware acceleration
         run: sudo chmod 666 /dev/kvm
       - name: Install, configure, update without uninstalling and verify
@@ -181,6 +192,7 @@ jobs:
             adb shell am instrument -w -e class com.pindo.app.AndroidErgonomicsTest com.pindo.app.dev.test/androidx.test.runner.AndroidJUnitRunner > "$RUNNER_TEMP/pindo-upgrade/keyboard.txt"
             cat "$RUNNER_TEMP/pindo-upgrade/keyboard.txt"
             for image in capture-keyboard reader editor-keyboard editor-saved failure; do adb exec-out run-as com.pindo.app.dev cat "files/ergonomics/$image.png" > "$RUNNER_TEMP/pindo-upgrade/$image.png" || rm -f "$RUNNER_TEMP/pindo-upgrade/$image.png"; done
+            python3 "$RUNNER_TEMP/pindo-upgrade/verify-screenshots.py"
             adb exec-out run-as com.pindo.app.dev cat files/ergonomics/failure-hierarchy.txt > "$RUNNER_TEMP/pindo-upgrade/failure-hierarchy.txt" || rm -f "$RUNNER_TEMP/pindo-upgrade/failure-hierarchy.txt"
             grep -Fq 'OK (1 test)' "$RUNNER_TEMP/pindo-upgrade/keyboard.txt"
             ! grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed' "$RUNNER_TEMP/pindo-upgrade/keyboard.txt"
