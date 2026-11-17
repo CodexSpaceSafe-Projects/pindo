@@ -170,7 +170,7 @@ internal class SyncCoordinator(
         if (timer?.isActive == true) return
         val ticker = scope.launch(start = CoroutineStart.LAZY) {
             while (isActive) {
-                delay(30_000)
+                delay(10_000)
                 automaticWork()
             }
         }

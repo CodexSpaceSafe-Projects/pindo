@@ -108,7 +108,7 @@ struct V3Device: Decodable, Identifiable {
             else if isConfigured {installTimer();syncNow()}
         }catch{failure(error)}
     }
-    private func installTimer(){timer?.invalidate();timer=Timer.scheduledTimer(withTimeInterval:30,repeats:true){[weak self]_ in Task{@MainActor in self?.syncNow(manual:false)}};RunLoop.main.add(timer!,forMode:.common)}
+    private func installTimer(){timer?.invalidate();timer=Timer.scheduledTimer(withTimeInterval:10,repeats:true){[weak self]_ in Task{@MainActor in self?.syncNow(manual:false)}};RunLoop.main.add(timer!,forMode:.common)}
     func documentDidChange(){guard isConfigured else{return};debounce?.cancel();debounce=Task{[weak self]in try? await Task.sleep(nanoseconds:1_000_000_000);guard !Task.isCancelled else{return};self?.syncNow(manual:false)}}
     func editingDidBegin(){generation=UUID();job?.cancel();job=nil;isSyncing=false}
     func editingDidEnd(){if isConfigured{syncNow(manual:false)}}
