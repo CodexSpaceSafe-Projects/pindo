@@ -50,6 +50,7 @@ import java.time.LocalDate
     val scope = rememberCoroutineScope()
     val installedPackage = remember(context) { context.packageManager.getPackageInfo(context.packageName, 0) }
     var cloudOpen by rememberSaveable { mutableStateOf(false) }
+    var updateOpen by rememberSaveable { mutableStateOf(false) }
     var groupsOpen by rememberSaveable { mutableStateOf(false) }
     var defaultMenu by remember { mutableStateOf(false) }
     var importText by remember { mutableStateOf<String?>(null) }
@@ -95,6 +96,10 @@ import java.time.LocalDate
     }
     if (cloudOpen) {
         CloudSettingsScreen(store, state) { cloudOpen = false }
+        return
+    }
+    if (updateOpen) {
+        AppUpdateScreen { updateOpen = false }
         return
     }
     BackHandler(onBack = onBack)
@@ -145,6 +150,12 @@ import java.time.LocalDate
                     SettingsDivider()
                     SettingsRow(Icons.Outlined.Folder, "分组管理", "名称、颜色与事项数量") { groupsOpen = true }
                 }
+                SettingsSection("应用") {
+                    SettingsRow(Icons.Outlined.SystemUpdate, "应用更新", "当前 ${installedPackage.versionName ?: "未知版本"}",
+                        !busy, Modifier.testTag("open-app-update")) {
+                        updateOpen = true
+                    }
+                }
                 SettingsSection("资料与备份") {
                     SettingsRow(Icons.Outlined.FileDownload, "导出资料", "待办、分组与 Markdown 备注", !busy && !state.readOnly) { export.launch("Pindo-${LocalDate.now()}.json") }
                     SettingsDivider()
@@ -184,7 +195,7 @@ import java.time.LocalDate
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable private fun SettingsTopBar(title: String, backLabel: String, onBack: () -> Unit) {
+@Composable internal fun SettingsTopBar(title: String, backLabel: String, onBack: () -> Unit) {
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
         TopAppBar(modifier = Modifier.widthIn(max = 720.dp),
             title = { Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold) },
@@ -248,8 +259,9 @@ import java.time.LocalDate
     HorizontalDivider(Modifier.padding(start = 52.dp, end = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .6f))
 }
 
-@Composable private fun SettingsRow(icon: ImageVector, title: String, subtitle: String, enabled: Boolean = true, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).clickable(enabled = enabled, onClick = onClick)
+@Composable private fun SettingsRow(icon: ImageVector, title: String, subtitle: String, enabled: Boolean = true,
+    modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Row(modifier.fillMaxWidth().heightIn(min = 72.dp).clickable(enabled = enabled, onClick = onClick)
         .padding(horizontal = 16.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, null, Modifier.size(21.dp), tint = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.outline)
         Column(Modifier.weight(1f).padding(horizontal = 13.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {

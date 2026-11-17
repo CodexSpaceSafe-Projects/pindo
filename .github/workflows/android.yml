@@ -184,6 +184,19 @@ jobs:
             adb shell am instrument -w -e class com.pindo.app.UpgradeStateTest#seed com.pindo.app.dev.test/androidx.test.runner.AndroidJUnitRunner > "$RUNNER_TEMP/pindo-upgrade/seed.txt"
             cat "$RUNNER_TEMP/pindo-upgrade/seed.txt"
             grep -Fq 'OK (1 test)' "$RUNNER_TEMP/pindo-upgrade/seed.txt"
+            adb shell run-as com.pindo.app.dev mkdir -p files/app-updates
+            adb shell -T 'run-as com.pindo.app.dev sh -c "cat > files/app-updates/platform-update.apk"' < "$RUNNER_TEMP/pindo-upgrade/after.apk"
+            adb shell appops set com.pindo.app.dev REQUEST_INSTALL_PACKAGES allow
+            adb logcat -c
+            adb shell am instrument -w -e class com.pindo.app.AppUpdatePlatformTest -e sourceRevision "$GITHUB_SHA" com.pindo.app.dev.test/androidx.test.runner.AndroidJUnitRunner > "$RUNNER_TEMP/pindo-upgrade/platform-update.txt"
+            cat "$RUNNER_TEMP/pindo-upgrade/platform-update.txt"
+            adb logcat -d -v threadtime > "$RUNNER_TEMP/pindo-upgrade/platform-logcat.txt"
+            for image in installer-confirmation failure; do if adb shell run-as com.pindo.app.dev test -s "files/update-platform/$image.png"; then adb exec-out run-as com.pindo.app.dev cat "files/update-platform/$image.png" > "$RUNNER_TEMP/pindo-upgrade/platform-$image.png"; fi; done
+            if adb shell run-as com.pindo.app.dev test -s files/update-platform/failure-hierarchy.txt; then adb exec-out run-as com.pindo.app.dev cat files/update-platform/failure-hierarchy.txt > "$RUNNER_TEMP/pindo-upgrade/platform-failure-hierarchy.txt"; fi
+            python3 "$RUNNER_TEMP/pindo-upgrade/verify-screenshots.py"
+            grep -Fq 'OK (1 test)' "$RUNNER_TEMP/pindo-upgrade/platform-update.txt"
+            ! grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed' "$RUNNER_TEMP/pindo-upgrade/platform-update.txt"
+            test -s "$RUNNER_TEMP/pindo-upgrade/platform-installer-confirmation.png"
             adb install -r "$RUNNER_TEMP/pindo-upgrade/after.apk"
             adb shell am instrument -w -e class com.pindo.app.UpgradeStateTest#verify com.pindo.app.dev.test/androidx.test.runner.AndroidJUnitRunner > "$RUNNER_TEMP/pindo-upgrade/verify.txt"
             cat "$RUNNER_TEMP/pindo-upgrade/verify.txt"

@@ -93,13 +93,15 @@ Swift 需要 5.9+；Linux 安装 SQLite 开发头文件，`swift test --jobs 4` 
 
 Android：在 `android/` 运行 `./gradlew testDebugUnitTest lintDebug assembleDebug`，需要 JDK 17 / SDK 35。
 
-Android 0.5 的界面以暖白纸感、克制蓝色和统一字阶呈现内容，深色模式使用高对比石墨底色。主导航只有“今天 / 日历 / 清单”，设置为次级返回页；手机底栏在键盘或快速录入面板打开时隐藏，宽屏使用侧栏，正文限宽。快速记录支持连续添加、收起保留草稿、继承当前日期/分组，以及把未提交标题交给完整编辑器；不会为了添加而清空筛选或切换页面。事项圆圈按“待办 → 进行中 → 已完成 → 待办”循环，推进以当前已保存状态为准；父项随子项汇总，显式开始的父项不会因无关增删被重算。普通未完成视图保留活跃父链下符合日期/分组条件的已完成子项，勾选划线且可恢复；上下文行不计入筛选命中或批量全选，搜索与显式状态筛选保持严格。列表把子项展开移到次级信息区，减少标题旁的按钮；长中文与大字体自然换行，所有操作保留至少48dp触控区和可区分的事项名称。阅读页无表单边框，写作工具靠近键盘，日期/分组/父项统一进入安排面板；草稿、选区、编辑租约与未保存退出保护继续复用。
+Android 的界面以暖白纸感、克制蓝色和统一字阶呈现内容，深色模式使用高对比石墨底色。主导航只有“今天 / 日历 / 清单”，设置为次级返回页；手机底栏在键盘或快速录入面板打开时隐藏，宽屏使用侧栏，正文限宽。快速记录支持连续添加、收起保留草稿、继承当前日期/分组，以及把未提交标题交给完整编辑器；不会为了添加而清空筛选或切换页面。事项圆圈按“待办 → 进行中 → 已完成 → 待办”循环，推进以当前已保存状态为准；父项随子项汇总，显式开始的父项不会因无关增删被重算。普通未完成视图保留活跃父链下符合日期/分组条件的已完成子项，勾选划线且可恢复；上下文行不计入筛选命中或批量全选，搜索与显式状态筛选保持严格。列表把子项展开移到次级信息区，减少标题旁的按钮；长中文与大字体自然换行，所有操作保留至少48dp触控区和可区分的事项名称。阅读页无表单边框，写作工具靠近键盘，日期/分组/父项统一进入安排面板；草稿、选区、编辑租约与未保存退出保护继续复用。
 
 设计参考了 [Now in Android](https://github.com/android/nowinandroid/blob/main/app/src/main/kotlin/com/google/samples/apps/nowinandroid/ui/NiaApp.kt) 的自适应导航、[Tasks.org](https://github.com/tasks/tasks/blob/main/app/src/main/res/layout/task_adapter_row.xml) 的事项信息层次、[Quillpad](https://github.com/quillpad/quillpad/blob/master/app/src/main/res/layout/fragment_editor.xml) 的读写分离与键盘附近工具，以及 [Fossify Notes](https://github.com/FossifyOrg/Notes/blob/main/app/src/main/kotlin/org/fossify/notes/fragments/TextFragment.kt) 的正文优先布局；Pindo 使用原创 Compose 实现。规范依据包括 [Android 导航与布局](https://developer.android.com/design/ui/mobile/guides/layout-and-content/layout-and-nav-patterns)、[Compose 无障碍与48dp触控](https://developer.android.com/develop/ui/compose/accessibility/api-defaults)、[自适应导航](https://developer.android.com/develop/adaptive-apps/guides/build-adaptive-navigation)。
 
 `AndroidUiTest` 使用虚构资料验证三态点击与父子进度、完成子项上下文、连续捕获与草稿交接、清单、日历上下文、批量操作、编辑恢复、深色主题、窄屏大字及宽屏导航，并将实际 Compose / Skia 渲染写入 `android/app/build/reports/screenshots/`。CI 报告与 Android Release 附带这些截图；它们用于布局检查，触屏、键盘遮挡、TalkBack 和系统返回仍需在真实设备验收。
 
 ### Android 发布与覆盖升级
+
+应用内更新从本仓库 GitHub Releases 分页查找 `android-build-*`（包含预发布），不使用指向 macOS 的 `/releases/latest`。已有 `android-update.json` 提供版本、包名、文件摘要、签名摘要和提交；APK 大小取官方 release asset。DownloadManager 保存到应用外部私有目录并保留任务记录，恢复后继续查询同一任务；校验通过后原子复制到 `files/app-updates/`，仅通过受限 FileProvider 给系统安装器只读授权。安装来源授权由 Android 管理，不请求共享存储权限，不静默安装。进度、取消、恢复、失败重试和安装取消都不改动事项或同步凭据。
 
 正式包固定使用 `com.pindo.app`；开发变体为 `com.pindo.app.dev`，显示名 `Pindo Dev`。CI 只向 Release 发布非调试的 `Pindo-Android.apk`。`versionCode = 1000 + PINDO_BUILD_NUMBER`；同一工作流的构建号递增，发布前还核对上一份 `android-update.json`，拒绝新源码复用或降低版本号。
 
@@ -111,7 +113,7 @@ gh secret set PINDO_ANDROID_SIGNING --repo CodexSpaceSafe-Projects/pindo < work/
 
 本机正式构建设置 `PINDO_ANDROID_KEYSTORE_PATH`、`PINDO_ANDROID_KEYSTORE_PASSWORD`、`PINDO_ANDROID_KEY_ALIAS` 及成对的 `PINDO_BUILD_NUMBER`、`PINDO_COMMIT_SHA`，执行 `./gradlew assembleRelease`。`scripts/verify-android-apk.py` 校验签名证书、包名、调试标记和版本；缺少 CI Secret 时暂停正式发布，禁止生成临时密钥兜底。
 
-Android CI 的覆盖升级作业分别在 API 29 / 34 模拟器中安装较低版本，写入真实 SQLite 事项/备注、主题、默认分组、设备名称及 Android Keystore 加密凭据；使用 `adb install -r` 安装较高版本后逐项断言保留，过程中不卸载应用。模拟器两包使用同一作业的测试身份，正式 APK 则另行对固定公钥证书和上一版本元数据校验。覆盖验证后，`AndroidErgonomicsTest` 通过生产 Activity、真实软件键盘与触摸验证连续记录、读写切换、键盘上方的48dp添加/保存按钮及 SQLite 保存，并附系统截图与失败界面层级；不清除已验证资料。此测试不能让旧的随机调试签名恢复兼容；Android 要求更新证书相同或具备由旧私钥签发的轮换证明，参见 [应用更新规则](https://developer.android.com/google/play/app-updates)。
+Android CI 的覆盖升级作业分别在 API 29 / 34 模拟器中安装较低版本，写入真实 SQLite 事项/备注、主题、默认分组、设备名称及 Android Keystore 加密凭据；使用 `adb install -r` 安装较高版本后逐项断言保留，过程中不卸载应用。模拟器两包使用同一作业的测试身份，正式 APK 则另行对固定公钥证书和上一版本元数据校验。覆盖安装前，`AppUpdatePlatformTest` 用系统 PackageManager 校验同签名的新版 APK，通过私有 FileProvider 打开真实系统更新确认页后取消，核对原资料未变并附截图；正式发布的长期证书另行校验。覆盖验证后，`AndroidErgonomicsTest` 通过生产 Activity、真实软件键盘与触摸验证连续记录、读写切换、键盘上方的48dp添加/保存按钮及 SQLite 保存，并附系统截图与失败界面层级；不清除已验证资料。此测试不能让旧的随机调试签名恢复兼容；Android 要求更新证书相同或具备由旧私钥签发的轮换证明，参见 [应用更新规则](https://developer.android.com/google/play/app-updates)。
 
 服务端使用 Node.js 22，在 `backend/cloudflare/` 运行：
 

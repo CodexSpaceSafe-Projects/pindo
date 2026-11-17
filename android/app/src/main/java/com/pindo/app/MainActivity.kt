@@ -12,8 +12,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 class MainActivity : ComponentActivity() {
     private val store: AppStore by viewModels()
+    private val updates: AppUpdateViewModel by viewModels()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        updates // Resume a system-managed download without touching the task database.
         enableEdgeToEdge()
         setContent {
             val state by store.state.collectAsStateWithLifecycle()

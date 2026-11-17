@@ -64,7 +64,8 @@ class ReadOnlyLifecycleTest {
         try {
             val activity = controller.setup().visible().get()
             val store = ViewModelProvider(activity)[AppStore::class.java]
-            assertTrue(store.state.value.readOnly)
+            assertTrue("expected=${app.filesDir}; actual=${store.getApplication<Application>().filesDir}; error=${store.state.value.error}",
+                store.state.value.readOnly)
             compose.onNodeWithText("存储异常").assertIsDisplayed().performClick()
             compose.onNodeWithText("云同步").performScrollTo().performClick()
             compose.onNodeWithTag("sync-read-only").assertIsDisplayed()
