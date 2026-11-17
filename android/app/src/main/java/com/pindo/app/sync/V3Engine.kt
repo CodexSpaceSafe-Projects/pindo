@@ -149,7 +149,7 @@ internal class V3Engine(private val store:V3Store,private val transport:V3Transp
                 val b=c.binding;val(fetched,appliedCursor)=store.cursors(b);if(fetched>remote.getLong("head"))throw V3Failure("cursor_mismatch")
                 val checkpointID=remote.optString("checkpointID").takeUnless{it.isEmpty()||it=="null"}
                 if(fetched<remote.getLong("gcFloor")||(fetched==0L&&checkpointID!=null&&store.installedCheckpoint(b)!=checkpointID)){
-                    val cp=readCheckpoint(c,c.epoch);check();store.installCheckpoint(b,cp.payload,cp.covered,cp.response.optJSONObject("checkpoint")?.getString("id"));applied();return@repeat
+                    val cp=readCheckpoint(c,c.epoch);check();store.installCheckpoint(b,cp.payload,cp.covered,cp.response.optJSONObject("checkpoint")?.getString("id"));applied();remote=info(c);return@repeat
                 }
                 if(fetched<remote.getLong("head")){
                     val(p,entries)=page(c,c.epoch,fetched);check();store.receive(b,entries);applied();remote.put("head",p.getLong("head")).put("gcFloor",p.getLong("gcFloor"));return@repeat

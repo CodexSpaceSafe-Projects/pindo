@@ -45,7 +45,7 @@ class AppStore(application: Application) : AndroidViewModel(application) {
             validateDocument(document)
             if (!state.value.readOnly) publish()
         } catch (_: Exception) {
-            mutable.value = AppState(error = "无法读取本机资料，原文件已保留。请先备份应用数据，再检查或重新安装。", readOnly = true)
+            mutable.value = AppState(error = "无法读取本机资料，原文件已保留。同步和修改已暂停，请先备份应用数据后检查。", readOnly = true)
         }
     }
 
@@ -58,11 +58,9 @@ class AppStore(application: Application) : AndroidViewModel(application) {
 
     fun addTask(title: String, note: String, day: LocalDate, groupID: String?, parentID: String?): Boolean = mutate { next ->
         val tasks = next.getJSONArray("tasks")
-        TodoRules.validateParent(tasks.objects().map(Todo::from), null, parentID)
         val maximumOrder = tasks.objects().maxOfOrNull { it.getLong("order") } ?: -1L
         require(maximumOrder < 9_007_199_254_740_991L) { "事项排序已达到安全上限，请先整理排序。" }
-        tasks.put(TodoRules.newTask(title, note, day, groupID, parentID, maximumOrder + 1))
-        next.put("tasks", TodoRules.reconcile(tasks))
+        next.put("tasks", TodoRules.insertTask(tasks, TodoRules.newTask(title, note, day, groupID, parentID, maximumOrder + 1)))
     }
 
     fun editTask(id: String, title: String, note: String, day: LocalDate, groupID: String?, parentID: String?, phase: String? = null, baseline: Todo? = null, baselineNoteDigest: String? = null): Boolean = mutate { next ->
@@ -79,16 +77,14 @@ class AppStore(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteTask(id: String) = mutate { next ->
-        val tasks = next.getJSONArray("tasks").objects()
-        val removed = TodoRules.descendants(tasks.map(Todo::from), id)
-        next.put("tasks", TodoRules.reconcile(tasks.filter { it.getString("id").lowercase() !in removed }.jsonArray()))
+        next.put("tasks", TodoRules.batch(next.getJSONArray("tasks"), setOf(id), TodoBatchAction.Delete))
     }
 
     fun move(id: String, offset: Int) = mutate { next ->
         val items = next.getJSONArray("tasks").objects()
         val task = items.map(Todo::from).first { it.id == id }
         val siblings = items.map(Todo::from).filter { it.parentID == task.parentID && (it.phase == "completed") == (task.phase == "completed") }
-            .sortedWith(compareBy<Todo> { it.order }.thenBy { it.id })
+            .sortedWith(TodoQueries.comparator(TaskSort.MANUAL))
         val index = siblings.indexOfFirst { it.id == id }
         if (index + offset in siblings.indices) {
             val ordered = siblings.toMutableList().apply { add(index + offset, removeAt(index)) }
@@ -134,6 +130,18 @@ class AppStore(application: Application) : AndroidViewModel(application) {
     fun applyBatch(ids: Set<String>, action: TodoBatchAction): Boolean = mutate { next ->
         next.put("tasks", TodoRules.batch(next.getJSONArray("tasks"), ids, action))
     }
+    fun advancePhase(id: String): Boolean = mutate { next ->
+        val tasks = next.getJSONArray("tasks")
+        val current = tasks.objects().firstOrNull { it.getString("id").equals(id, true) }
+            ?: kotlin.error("找不到这条待办。")
+        val phase = when (current.getString("phase")) {
+            "pending" -> "inProgress"
+            "inProgress" -> "completed"
+            "completed" -> "pending"
+            else -> kotlin.error("事项状态无效。")
+        }
+        next.put("tasks", TodoRules.setPhase(tasks, id, phase))
+    }
     fun batchPhase(ids: Set<String>, phase: String): Boolean = applyBatch(ids, TodoBatchAction.SetPhase(phase))
     fun batchGroup(ids: Set<String>, groupID: String?): Boolean = applyBatch(ids, TodoBatchAction.SetGroup(groupID))
     fun batchDay(ids: Set<String>, day: LocalDate): Boolean = applyBatch(ids, TodoBatchAction.SetDay(day))
@@ -172,10 +180,13 @@ class AppStore(application: Application) : AndroidViewModel(application) {
         foreground = true; uiReady = false
         mutable.value = state.value.copy(lifecycleRevision = state.value.lifecycleRevision + 1)
     }
-    fun markUiReady() { if (foreground && !uiReady) { uiReady = true; sync.foreground() } }
-    internal fun networkUiReady(): Boolean = foreground && uiReady && editingLeases.isEmpty()
-    fun stopForeground() { foreground = false; uiReady = false; sync.background() }
-    fun beginEditing(): String = UUID.randomUUID().toString().also { editingLeases.add(it);sync.pause() }
+    fun markUiReady() { if (!state.value.readOnly && foreground && !uiReady) { uiReady = true; sync.foreground() } }
+    internal fun networkUiReady(): Boolean = !state.value.readOnly && foreground && uiReady && editingLeases.isEmpty()
+    fun stopForeground() { foreground = false; uiReady = false; if (!state.value.readOnly) sync.background() }
+    fun beginEditing(): String = UUID.randomUUID().toString().also {
+        editingLeases.add(it)
+        if (!state.value.readOnly) sync.pause()
+    }
     fun endEditing(token: String) { editingLeases.remove(token); if (networkUiReady()) sync.sync(false) }
 
     private fun mutate(change: (JSONObject) -> Unit): Boolean {

@@ -1,6 +1,7 @@
 package com.pindo.app
 
 import com.pindo.app.sync.SyncReplica
+import com.pindo.app.sync.toMap
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -78,6 +79,77 @@ class TodoBatchTest {
         assertEquals("pending", original.getJSONObject(1).getString("phase"))
     }
 
+    @Test fun reparentingRootAppendsItsSubtreeAfterExistingChildren() {
+        val moving = task("先创建的根项").put("order", 0L).put("updatedAt", 1.0)
+        val parent = task("目标父项").put("order", 1L).put("updatedAt", 2.0)
+        val existing = task("已有子项", parent.getString("id")).put("order", 2L).put("updatedAt", 3.0)
+        val descendant = task("跟随移动的子项", moving.getString("id")).put("order", 3L).put("updatedAt", 4.0)
+        val original = JSONArray().put(moving).put(parent).put(existing).put(descendant)
+        val before = original.toString()
+        val moved = TodoRules.moveTask(original, moving.getString("id"), parent.getString("id"))
+        val children = moved.objects().map(Todo::from).filter { it.parentID == parent.getString("id") }.sortedBy { it.order }
+
+        assertEquals(listOf(existing.getString("id"), moving.getString("id")), children.map { it.id })
+        assertEquals(listOf(0L, 1L), children.map { it.order })
+        assertEquals(3.0, moved.getJSONObject(2).getDouble("updatedAt"), 0.0)
+        assertEquals(parent.toMap(), moved.getJSONObject(1).toMap())
+        assertEquals(descendant.toMap(), moved.getJSONObject(3).toMap())
+        assertTrue(moved.getJSONObject(0).getDouble("updatedAt") > 1.0)
+        assertEquals(before, original.toString())
+        validateDocument(emptyDocument().put("tasks", moved))
+    }
+
+    @Test fun reparentingBetweenFamiliesAppendsAndReconcilesBothAncestorChains() {
+        val grandparent = task("旧祖父项")
+        val oldParent = task("旧父项", grandparent.getString("id"))
+        val finished = task("旧父项的已完成子项", oldParent.getString("id"))
+        val moving = task("移动的未完成子项", oldParent.getString("id")).put("order", -MAX_TASK_ORDER)
+        val newParent = task("新父项")
+        val existing = task("新父项的已有子项", newParent.getString("id")).put("order", MAX_TASK_ORDER)
+        var original = JSONArray().put(grandparent).put(oldParent).put(finished).put(moving).put(newParent).put(existing)
+        original = TodoRules.setPhase(original, finished.getString("id"), "completed")
+        original = TodoRules.setPhase(original, newParent.getString("id"), "completed")
+        val before = original.toString()
+        val moved = TodoRules.moveTask(original, moving.getString("id"), newParent.getString("id"))
+
+        assertEquals("completed", moved.getJSONObject(0).getString("phase"))
+        assertEquals("completed", moved.getJSONObject(1).getString("phase"))
+        assertEquals("inProgress", moved.getJSONObject(4).getString("phase"))
+        assertFalse(moved.getJSONObject(4).getBoolean("isProgressExplicit"))
+        assertEquals(0L, moved.getJSONObject(5).getLong("order"))
+        assertEquals(1L, moved.getJSONObject(3).getLong("order"))
+        assertEquals(original.getJSONObject(5).getDouble("updatedAt"), moved.getJSONObject(5).getDouble("updatedAt"), 0.0)
+        assertEquals(original.getJSONObject(2).toMap(), moved.getJSONObject(2).toMap())
+        assertEquals(before, original.toString())
+        validateDocument(emptyDocument().put("tasks", moved))
+    }
+
+    @Test fun movingChildToRootAppendsAfterEqualAndMaximumOrderSiblings() {
+        val parent = task("旧父项").put("order", MAX_TASK_ORDER).put("updatedAt", 3.0)
+        val later = task("较晚创建的根项").put("order", 0L).put("createdAt", 2.0).put("updatedAt", 2.0)
+            .put("id", "11111111-1111-4111-8111-111111111111")
+        val earlier = task("较早创建的根项").put("order", 0L).put("createdAt", 1.0).put("updatedAt", 1.0)
+            .put("id", "22222222-2222-4222-8222-222222222222")
+        val moving = task("移到根层", parent.getString("id")).put("order", -MAX_TASK_ORDER).put("updatedAt", 4.0)
+        val original = JSONArray().put(parent).put(later).put(earlier).put(moving)
+        val before = original.toString()
+        val moved = TodoRules.moveTask(original, moving.getString("id"), null)
+        val roots = moved.objects().map(Todo::from).filter { it.parentID == null }.sortedBy { it.order }
+
+        assertEquals(listOf(earlier, later, parent, moving).map { it.getString("id") }, roots.map { it.id })
+        assertEquals(listOf(0L, 1L, 2L, 3L), roots.map { it.order })
+        for (index in 0..2) {
+            val unchanged = original.getJSONObject(index).toMap().toMutableMap().apply { remove("order") }
+            val actual = moved.getJSONObject(index).toMap().toMutableMap().apply { remove("order") }
+            assertEquals(unchanged, actual)
+        }
+        assertTrue(moved.getJSONObject(3).getDouble("updatedAt") > 4.0)
+        assertEquals(before, original.toString())
+        assertEquals(moved.objects().map { it.toMap() },
+            TodoRules.moveTask(moved, moving.getString("id"), null).objects().map { it.toMap() })
+        validateDocument(emptyDocument().put("tasks", moved))
+    }
+
     @Test fun deleteExpandsSelectedBranchesAndDeduplicatesParentAndChildSelection() {
         val parent = task("父项")
         val child = task("子项", parent.getString("id"))
@@ -89,6 +161,46 @@ class TodoBatchTest {
         val remaining = TodoRules.batch(tasks, ids, TodoBatchAction.Delete)
         assertEquals(listOf(other.getString("id")), remaining.objects().map { it.getString("id") })
         assertEquals(4, tasks.length())
+    }
+
+    @Test fun deletingUnrelatedBranchPreservesExplicitlyReopenedBranch() {
+        val grandparent = task("祖父项")
+        val parent = task("父项", grandparent.getString("id"))
+        val child = task("子项", parent.getString("id"))
+        val other = task("另一棵树")
+        val otherChild = task("另一棵树的子项", other.getString("id"))
+        val completed = TodoRules.setPhase(JSONArray().put(grandparent).put(parent).put(child).put(other).put(otherChild),
+            grandparent.getString("id"), "completed")
+        val reopened = TodoRules.setPhase(completed, parent.getString("id"), "inProgress")
+        val before = reopened.toString()
+        val remaining = TodoRules.batch(reopened, setOf(other.getString("id"), otherChild.getString("id")), TodoBatchAction.Delete)
+
+        assertEquals(3, remaining.length())
+        for (index in 0..2) {
+            assertEquals(reopened.getJSONObject(index).toMap(), remaining.getJSONObject(index).toMap())
+        }
+        assertEquals("inProgress", remaining.getJSONObject(1).getString("phase"))
+        assertTrue(remaining.getJSONObject(1).getBoolean("isProgressExplicit"))
+        assertEquals(before, reopened.toString())
+        validateDocument(emptyDocument().put("tasks", remaining))
+    }
+
+    @Test fun deletingLastUnfinishedGrandchildCompletesEverySurvivingAncestor() {
+        val grandparent = task("祖父项")
+        val parent = task("父项", grandparent.getString("id"))
+        val finished = task("已完成孙项", parent.getString("id"))
+        val unfinished = task("未完成孙项", parent.getString("id"))
+        val active = TodoRules.setPhase(JSONArray().put(grandparent).put(parent).put(finished).put(unfinished),
+            finished.getString("id"), "completed")
+        assertEquals("inProgress", active.getJSONObject(0).getString("phase"))
+        assertEquals("inProgress", active.getJSONObject(1).getString("phase"))
+        val remaining = TodoRules.batch(active, setOf(unfinished.getString("id")), TodoBatchAction.Delete)
+
+        assertEquals(3, remaining.length())
+        assertTrue(remaining.objects().all { it.getString("phase") == "completed" && !it.isNull("completedAt") })
+        assertEquals(active.getJSONObject(2).toMap(), remaining.getJSONObject(2).toMap())
+        assertEquals("inProgress", active.getJSONObject(0).getString("phase"))
+        validateDocument(emptyDocument().put("tasks", remaining))
     }
 
     @Test fun movingOrDeletingTheLastChildOnlyClearsDerivedParentProgress() {

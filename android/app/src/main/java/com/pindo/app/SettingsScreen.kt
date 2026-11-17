@@ -270,6 +270,21 @@ import java.time.LocalDate
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun CloudSettingsScreen(store: AppStore, state: AppState, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
+    if (state.readOnly) {
+        // Opening the coordinator would reopen the unreadable SQLite database.
+        // Keep this explanation reachable without touching storage or secrets.
+        Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = {
+            SettingsTopBar("云同步", "返回设置", onBack)
+        }) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())
+                .padding(20.dp).testTag("sync-read-only"), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                SyncStatusCard(state)
+                Text(state.error ?: "本机资料暂不可读取，同步已暂停，原文件已保留。",
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+            }
+        }
+        return
+    }
     var endpoint by rememberSaveable { mutableStateOf("") }
     var creating by rememberSaveable { mutableStateOf(false) }
     var secret by remember { mutableStateOf("") }
@@ -313,7 +328,7 @@ import java.time.LocalDate
                             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                             Icon(Icons.Outlined.Sync, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("立即同步")
                         }
-                    } else if (sync.active != null || sync.pending) {
+                    } else if (sync.canReconnect) {
                         Button(onClick = { sync.reconnect() }, enabled = !state.syncing,
                             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("继续同步") }
                     }
@@ -322,7 +337,7 @@ import java.time.LocalDate
                     state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
                 }
                 if (!state.syncEnabled) {
-                    SettingsSection(if (sync.active != null || sync.pending) "连接其他资料库" else "连接设备") {
+                    SettingsSection(if (sync.canReconnect) "连接其他资料库" else "连接设备") {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(if (creating) "创建资料库" else "配对连接", Modifier.weight(1f),

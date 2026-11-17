@@ -7,6 +7,8 @@
 - Android 采用暖白纸感与克制蓝色，以今天、日历、清单组织事项；支持连续快速记录、无边框阅读写作、上下文批量操作、离线编辑、深浅主题及宽屏侧栏。
 - 两端使用 SQLite 保存资料；同步支持设备配对、暂停、离线队列、并发备注与设备删除。
 
+Android 事项圆圈依次切换“待办 → 进行中 → 已完成 → 待办”。父项自动汇总子项进度；普通未完成视图中，已完成子项保留在尚未完成的父项下。整棵事项完成后，可在“清单”或已完成筛选中查看和恢复。
+
 ## 下载与运行
 
 [macOS 下载](https://github.com/CodexSpaceSafe-Projects/pindo/releases/latest) · [Android 下载](https://github.com/CodexSpaceSafe-Projects/pindo/releases?q=android-build-&expanded=true)

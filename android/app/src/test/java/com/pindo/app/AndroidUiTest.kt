@@ -13,6 +13,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -362,6 +363,85 @@ class AndroidUiTest {
         compose.runOnIdle { assertTrue("Storage errors must still open the relevant settings", clicked) }
     }
 
+    @Test fun childCyclesThroughAllThreeStatesAndRetainsCompletionContextAcrossViews() {
+        val parentTitle = "保留父子进度"
+        val childTitle = "逐步推进的子项"
+        val siblingTitle = "尚未开始的另一个子项"
+        compose.runOnUiThread {
+            check(store.addTask(parentTitle, "父项备注", LocalDate.now(), null, null))
+            val parent = store.state.value.tasks.single().id
+            check(store.addTask(childTitle, "子项备注", LocalDate.now(), null, parent))
+            check(store.addTask(siblingTitle, "", LocalDate.now(), null, parent))
+        }
+        showApp()
+        for ((tab, list) in listOf("今天" to "dashboard", "日历" to "calendar", "清单" to "management")) {
+            navigate(tab)
+            compose.onNodeWithTag(list).performScrollToNode(hasText(childTitle))
+            compose.onNodeWithContentDescription("开始进行：$childTitle").performClick()
+            compose.runOnIdle {
+                assertEquals("inProgress", store.state.value.tasks.first { it.title == childTitle }.phase)
+                assertEquals("inProgress", store.state.value.tasks.first { it.title == parentTitle }.phase)
+                assertEquals("pending", store.state.value.tasks.first { it.title == siblingTitle }.phase)
+            }
+            compose.onNodeWithContentDescription("完成事项：$childTitle")
+                .assert(SemanticsMatcher.expectValue(SemanticsProperties.ToggleableState, ToggleableState.Indeterminate))
+                .performClick()
+            compose.onNodeWithTag(list).performScrollToNode(hasText(childTitle))
+            val restore = compose.onNodeWithContentDescription("恢复待办：$childTitle")
+            assertTouchTarget(restore)
+            restore.assertIsOn()
+            compose.runOnIdle {
+                assertEquals("completed", store.state.value.tasks.first { it.title == childTitle }.phase)
+                assertEquals("inProgress", store.state.value.tasks.first { it.title == parentTitle }.phase)
+                val persisted = DocumentStorage(ApplicationProvider.getApplicationContext()).read().getJSONArray("tasks").objects().map(Todo::from)
+                assertEquals("completed", persisted.first { it.title == childTitle }.phase)
+                assertEquals("子项备注", persisted.first { it.title == childTitle }.note)
+            }
+            if (tab == "今天") saveScreenshot("child-completion-context")
+            restore.performClick()
+            compose.runOnIdle {
+                assertTrue(store.state.value.tasks.all { it.phase == "pending" })
+                assertEquals(3, store.state.value.tasks.size)
+            }
+        }
+    }
+
+    @Test fun repeatedStateActionsUsePersistedPhaseAndCompletedBranchesCanBeReopened() {
+        var parent = ""
+        var child = ""
+        var sibling = ""
+        compose.runOnUiThread {
+            check(store.addTask("循环父项", "", LocalDate.now(), null, null))
+            parent = store.state.value.tasks.single().id
+            check(store.addTask("循环子项", "", LocalDate.now(), null, parent))
+            child = store.state.value.tasks.last().id
+            check(store.addTask("循环兄弟项", "", LocalDate.now(), null, parent))
+            sibling = store.state.value.tasks.last().id
+            // Two actions before a UI recomposition must still traverse two states.
+            check(store.advancePhase(child))
+            check(store.advancePhase(child))
+            assertEquals("completed", store.state.value.tasks.first { it.id == child }.phase)
+            assertEquals("inProgress", store.state.value.tasks.first { it.id == parent }.phase)
+            check(store.batchPhase(setOf(sibling), "completed"))
+            assertTrue(store.state.value.tasks.all { it.phase == "completed" })
+        }
+        showApp()
+        compose.onNodeWithText("循环父项").assertDoesNotExist()
+        navigate("清单")
+        compose.onNodeWithTag("management").performScrollToNode(hasText("循环子项"))
+        compose.onNodeWithContentDescription("恢复待办：循环子项").performClick()
+        compose.runOnIdle {
+            assertEquals("pending", store.state.value.tasks.first { it.id == child }.phase)
+            assertEquals("inProgress", store.state.value.tasks.first { it.id == parent }.phase)
+            assertEquals("completed", store.state.value.tasks.first { it.id == sibling }.phase)
+            val restarted = AppStore(ApplicationProvider.getApplicationContext())
+            assertEquals(store.state.value.tasks.associate { it.id to it.phase }, restarted.state.value.tasks.associate { it.id to it.phase })
+        }
+        navigate("今天")
+        compose.onNodeWithText("循环子项").assertExists()
+        compose.onNodeWithText("循环兄弟项").assertExists()
+    }
+
     @Test fun primaryTaskControlsHave48DpTargetsAndPerformTheirActions() {
         compose.runOnUiThread {
             check(store.addTask("安排一次短途散步", "", LocalDate.now(), null, null))
@@ -369,9 +449,12 @@ class AndroidUiTest {
         showApp()
         assertTouchTarget(compose.onNodeWithTag("add-task"))
         compose.onNodeWithTag("dashboard").performScrollToNode(hasText("安排一次短途散步"))
-        val phase = compose.onNodeWithContentDescription("完成事项：安排一次短途散步")
+        val phase = compose.onNodeWithContentDescription("开始进行：安排一次短途散步")
         assertTouchTarget(phase)
         phase.performClick()
+        compose.runOnIdle { assertEquals("inProgress", store.state.value.tasks.single().phase) }
+        compose.onNodeWithText("安排一次短途散步").assertExists()
+        compose.onNodeWithContentDescription("完成事项：安排一次短途散步").performClick()
         compose.runOnIdle { assertEquals("completed", store.state.value.tasks.single().phase) }
         navigate("清单")
         compose.onNodeWithTag("management").performScrollToNode(hasText("安排一次短途散步"))

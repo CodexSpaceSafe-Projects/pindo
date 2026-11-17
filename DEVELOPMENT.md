@@ -93,11 +93,11 @@ Swift 需要 5.9+；Linux 安装 SQLite 开发头文件，`swift test --jobs 4` 
 
 Android：在 `android/` 运行 `./gradlew testDebugUnitTest lintDebug assembleDebug`，需要 JDK 17 / SDK 35。
 
-Android 0.5 的界面以暖白纸感、克制蓝色和统一字阶呈现内容，深色模式使用高对比石墨底色。主导航只有“今天 / 日历 / 清单”，设置为次级返回页；手机底栏在键盘或快速录入面板打开时隐藏，宽屏使用侧栏，正文限宽。快速记录支持连续添加、收起保留草稿、继承当前日期/分组，以及把未提交标题交给完整编辑器；不会为了添加而清空筛选或切换页面。圆形完成控件直接完成/恢复待办，“进行中”保留在菜单与安排面板。列表把子项展开移到次级信息区，减少标题旁的按钮；长中文与大字体自然换行，所有操作保留至少48dp触控区和可区分的事项名称。阅读页无表单边框，写作工具靠近键盘，日期/分组/父项统一进入安排面板；草稿、选区、编辑租约与未保存退出保护继续复用。
+Android 0.5 的界面以暖白纸感、克制蓝色和统一字阶呈现内容，深色模式使用高对比石墨底色。主导航只有“今天 / 日历 / 清单”，设置为次级返回页；手机底栏在键盘或快速录入面板打开时隐藏，宽屏使用侧栏，正文限宽。快速记录支持连续添加、收起保留草稿、继承当前日期/分组，以及把未提交标题交给完整编辑器；不会为了添加而清空筛选或切换页面。事项圆圈按“待办 → 进行中 → 已完成 → 待办”循环，推进以当前已保存状态为准；父项随子项汇总，显式开始的父项不会因无关增删被重算。普通未完成视图保留活跃父链下符合日期/分组条件的已完成子项，勾选划线且可恢复；上下文行不计入筛选命中或批量全选，搜索与显式状态筛选保持严格。列表把子项展开移到次级信息区，减少标题旁的按钮；长中文与大字体自然换行，所有操作保留至少48dp触控区和可区分的事项名称。阅读页无表单边框，写作工具靠近键盘，日期/分组/父项统一进入安排面板；草稿、选区、编辑租约与未保存退出保护继续复用。
 
 设计参考了 [Now in Android](https://github.com/android/nowinandroid/blob/main/app/src/main/kotlin/com/google/samples/apps/nowinandroid/ui/NiaApp.kt) 的自适应导航、[Tasks.org](https://github.com/tasks/tasks/blob/main/app/src/main/res/layout/task_adapter_row.xml) 的事项信息层次、[Quillpad](https://github.com/quillpad/quillpad/blob/master/app/src/main/res/layout/fragment_editor.xml) 的读写分离与键盘附近工具，以及 [Fossify Notes](https://github.com/FossifyOrg/Notes/blob/main/app/src/main/kotlin/org/fossify/notes/fragments/TextFragment.kt) 的正文优先布局；Pindo 使用原创 Compose 实现。规范依据包括 [Android 导航与布局](https://developer.android.com/design/ui/mobile/guides/layout-and-content/layout-and-nav-patterns)、[Compose 无障碍与48dp触控](https://developer.android.com/develop/ui/compose/accessibility/api-defaults)、[自适应导航](https://developer.android.com/develop/adaptive-apps/guides/build-adaptive-navigation)。
 
-`AndroidUiTest` 使用虚构资料验证连续捕获与草稿交接、清单、日历上下文、批量操作、编辑恢复、深色主题、窄屏大字及宽屏导航，并将实际 Compose / Skia 渲染写入 `android/app/build/reports/screenshots/`。CI 报告与 Android Release 附带这些截图；它们用于布局检查，触屏、键盘遮挡、TalkBack 和系统返回仍需在真实设备验收。
+`AndroidUiTest` 使用虚构资料验证三态点击与父子进度、完成子项上下文、连续捕获与草稿交接、清单、日历上下文、批量操作、编辑恢复、深色主题、窄屏大字及宽屏导航，并将实际 Compose / Skia 渲染写入 `android/app/build/reports/screenshots/`。CI 报告与 Android Release 附带这些截图；它们用于布局检查，触屏、键盘遮挡、TalkBack 和系统返回仍需在真实设备验收。
 
 ### Android 发布与覆盖升级
 

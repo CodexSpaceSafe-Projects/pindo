@@ -4,6 +4,7 @@ import android.content.Context
 import android.database.DatabaseErrorHandler
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteDatabaseCorruptException
+import android.database.sqlite.SQLiteTransactionListener
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -29,6 +30,12 @@ internal class V3Store(context:Context) {
         DatabaseErrorHandler{throw SQLiteDatabaseCorruptException("数据库损坏，原文件已保留。")})
     private var cached:JSONObject?=null
     var beforeCommit:(()->Unit)?=null
+    // Commit fault injection runs inside SQLite's endTransaction boundary.
+    private val transactionListener=object:SQLiteTransactionListener {
+        override fun onBegin() {}
+        override fun onCommit() { beforeCommit?.invoke() }
+        override fun onRollback() {}
+    }
     init{
         db.setForeignKeyConstraintsEnabled(true);db.execSQL("PRAGMA synchronous=FULL");db.rawQuery("PRAGMA busy_timeout=5000",null).use{it.moveToFirst()}
         require(db.version<=1){"本机数据库来自更新版本。"}
@@ -54,9 +61,21 @@ internal class V3Store(context:Context) {
     private fun bytes(j:Any)=j.toString().toByteArray(Charsets.UTF_8)
     @Synchronized fun <T> transaction(body:()->T):T {
         if(db.inTransaction())return body()
-        val old=cached;db.beginTransaction()
-        try{val result=body();beforeCommit?.invoke();db.setTransactionSuccessful();return result}
-        catch(e:Exception){cached=old;throw e}finally{db.endTransaction()}
+        val old=cached;db.beginTransactionWithListener(transactionListener)
+        var failure:Throwable?=null
+        try{val result=body();db.setTransactionSuccessful();return result}
+        catch(e:Throwable){cached=old;failure=e;throw e}
+        finally{
+            // Marking a transaction successful does not commit it. A failed
+            // endTransaction must also discard the uncommitted projection.
+            try{db.endTransaction()}
+            catch(e:Throwable){
+                cached=old
+                val primary=failure
+                if(primary==null)throw e
+                if(primary!==e)primary.addSuppressed(e)
+            }
+        }
     }
     private fun exec(sql:String,vararg args:Any?){db.execSQL(sql,args)}
     // Android CursorWindow is small on API 26/27. Read large BLOBs through

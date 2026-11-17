@@ -5,6 +5,7 @@ import android.app.Application
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.os.Build
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
@@ -83,6 +84,68 @@ class AndroidErgonomicsTest {
                 assertEquals("Existing task title changed", content.first, task.getString("title"))
                 assertEquals("Existing task note changed", content.second, task.optString("note"))
             }
+
+            val parentID = after.single { it.getString("title") == firstTitle }.getString("id")
+            val childTitle = "Keyboard child active"
+            val siblingTitle = "Keyboard child pending"
+            for (title in listOf(childTitle, siblingTitle)) {
+                reveal("事项操作：$firstTitle")
+                tap("事项操作：$firstTitle")
+                reveal("添加子项")
+                tap("添加子项")
+                await("new child editor must focus its title above the keyboard") {
+                    keyboardBounds() != null && field("事项标题") != null
+                }
+                setText("事项标题", title)
+                assertAboveKeyboard("保存")
+                tap("保存")
+                await("child must persist under the intended parent and close its editor") {
+                    clickable("关闭编辑") == null && keyboardBounds() == null &&
+                        tasks().singleOrNull { it.getString("title") == title }?.optString("parentID") == parentID
+                }
+            }
+            val children = tasks().filter { it.optString("parentID") == parentID }
+            assertEquals("Exactly two child tasks must be created", 2, children.size)
+            val childID = children.single { it.getString("title") == childTitle }.getString("id")
+            val sibling = children.single { it.getString("title") == siblingTitle }
+            val siblingID = sibling.getString("id")
+            val siblingBaseline = sibling.toString()
+            assertEquals("Sibling starts pending", "pending", sibling.getString("phase"))
+            fun assertChildPhase(childPhase: String, parentPhase: String) {
+                await("child phase $childPhase and parent aggregate $parentPhase must persist") {
+                    val snapshot = tasks().associateBy { it.getString("id") }
+                    snapshot[childID]?.optString("phase") == childPhase && snapshot[parentID]?.optString("phase") == parentPhase
+                }
+                val snapshot = tasks().associateBy { it.getString("id") }
+                assertEquals("Changing one child must leave its pending sibling unchanged", siblingBaseline, snapshot.getValue(siblingID).toString())
+                assertEquals("Child phase changes must preserve the parent's note", note, snapshot.getValue(parentID).getString("note"))
+            }
+            assertChildPhase("pending", "pending")
+            reveal("开始进行：$childTitle")
+            tap("开始进行：$childTitle")
+            assertChildPhase("inProgress", "inProgress")
+            reveal("完成事项：$childTitle")
+            tap("完成事项：$childTitle")
+            assertChildPhase("completed", "inProgress")
+            reveal("恢复待办：$childTitle")
+            await("completed child must stay visible and checked in the unfinished parent's context") {
+                val control = clickable("恢复待办：$childTitle") ?: return@await false
+                nodes().any { node ->
+                    node.isVisibleToUser && bounds(node) == bounds(control) &&
+                        ((node.isCheckable && node.isChecked) ||
+                            (Build.VERSION.SDK_INT >= 30 && normal(node.stateDescription) == normal("已完成")))
+                }
+            }
+            assertNotNull("Pending sibling remains available in the unfinished view", clickable("开始进行：$siblingTitle"))
+            screenshot("child-completion-context")
+            tap("恢复待办：$childTitle")
+            assertChildPhase("pending", "pending")
+            val finalTasks = tasks()
+            assertEquals("Child creation and phase cycling must not duplicate tasks", existing.size + 4, finalTasks.size)
+            assertEquals("Child operations must preserve all pre-upgrade content", existing,
+                finalTasks.filter { it.getString("id") in existing }.associate {
+                    it.getString("id") to Pair(it.getString("title"), it.optString("note"))
+                })
             finished = true
         } finally {
             if (!finished) {
@@ -201,6 +264,20 @@ class AndroidErgonomicsTest {
         await("visible enabled action $label") { clickable(label, textContains) != null }
         val area = bounds(requireNotNull(clickable(label, textContains)))
         tapArea(area, label)
+    }
+
+    private fun reveal(label: String) {
+        if (clickable(label) != null) return
+        for (direction in listOf(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)) {
+            repeat(8) {
+                if (clickable(label) != null) return
+                val scroller = nodes().firstOrNull { node ->
+                    node.isVisibleToUser && node.isEnabled && node.isScrollable && node.actionList.any { it.id == direction }
+                } ?: return@repeat
+                if (scroller.performAction(direction)) instrumentation.waitForIdleSync()
+            }
+        }
+        fail("Could not reveal action $label through bounded accessibility scrolling\n" + hierarchy())
     }
 
     private fun tapArea(area: Rect, label: String) {

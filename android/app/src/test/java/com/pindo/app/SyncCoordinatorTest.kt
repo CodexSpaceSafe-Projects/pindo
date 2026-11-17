@@ -195,6 +195,99 @@ class SyncCoordinatorTest {
         assertEquals(0, remote.consumeCalls)
     }
 
+    @Test fun structuredInvalidInvitationsNeverStageCredentialsOrContactTheServer() {
+        val sync = coordinator()
+        val missingPairing = invitation().apply { remove("pairingID") }
+        val missingCode = invitation().apply { remove("code") }
+        val invalid = listOf(missingPairing, missingCode,
+            invitation().put("pairingID", "not-a-uuid"), invitation().put("code", "short"),
+            invitation().put("code", "!".repeat(43)), invitation().put("endpoint", "https:/missing-host"))
+        for (value in invalid) {
+            assertTrue(sync.join(value.toString())); drain()
+            assertFalse(sync.pending)
+            assertFalse(sync.enabled)
+            assertNull(secrets.value)
+            assertEquals(0, remote.requests)
+            assertTrue(states.last().text.contains("配对信息格式无效"))
+        }
+    }
+
+    @Test fun failedLibrarySwitchCannotManageThePreviousLibraryAndStillAutomaticallyResumes() {
+        val old = connection()
+        store.bind(old.binding, false)
+        remote.registeredToken = old.token
+        secrets.value = JSONObject().put("version", 3).put("enabled", true).put("archived", JSONObject()).put("active", old.json())
+        val sync = coordinator()
+        sync.pair(); drain()
+        assertNotNull(sync.invitation)
+        assertTrue(sync.listDevices()); drain()
+        assertEquals(1, sync.devices.length())
+        sync.disconnect()
+        sync.foreground()
+        remote.failConsume = true
+        val nextVault = "00000000-0000-4000-8000-000000000019"
+        assertTrue(sync.join(invitation().put("vaultID", nextVault).toString())); drain()
+        assertTrue(sync.pending)
+        assertFalse(sync.enabled)
+        assertNull(sync.invitation)
+        assertEquals(0, sync.devices.length())
+        assertEquals(old, sync.active)
+        assertEquals(old.binding, store.binding())
+        val frozen = secrets.value!!.getJSONObject("pending").getJSONObject("connection").getString("deviceID")
+        val requests = remote.requests
+        assertFalse(sync.listDevices())
+        assertFalse(sync.deleteDevice("00000000-0000-4000-8000-000000000020"))
+        sync.pair(); sync.rotate(); drain()
+        assertEquals(requests, remote.requests)
+        remote.failConsume = false
+        shadowOf(Looper.getMainLooper()).idleFor(30, TimeUnit.SECONDS)
+        assertTrue(sync.enabled)
+        assertFalse(sync.pending)
+        assertEquals(nextVault, sync.active!!.vaultID)
+        assertEquals(frozen, sync.active!!.deviceID)
+        assertEquals(2, remote.consumeCalls)
+    }
+
+    @Test fun damagedJournalIsIsolatedUntilTheUserExplicitlyReconnectsToRecoveredCredentials() {
+        secrets.value = JSONObject().put("version", 3).put("enabled", true).put("archived", JSONObject()).put("active", JSONObject())
+        val original = secrets.value.toString()
+        val sync = coordinator()
+        assertNull(sync.active)
+        assertFalse(sync.enabled)
+        assertFalse(sync.pending)
+        assertTrue(sync.canReconnect)
+        sync.foreground(); sync.changed(); sync.sync(false); drain()
+        shadowOf(Looper.getMainLooper()).idleFor(90, TimeUnit.SECONDS)
+        sync.disconnect()
+        assertEquals(original, secrets.value.toString())
+        assertEquals(0, remote.requests)
+
+        val c = connection()
+        store.bind(c.binding, false)
+        secrets.value = JSONObject().put("version", 3).put("enabled", false).put("archived", JSONObject()).put("active", c.json())
+        remote.registeredToken = c.token
+        remote.failInfo = true // Credential recovery must survive an unrelated network failure.
+        sync.reconnect(); drain()
+        assertEquals(c, sync.active)
+        assertTrue(sync.enabled)
+        assertEquals(1, remote.infoCalls)
+        assertTrue(secrets.value!!.getBoolean("enabled"))
+    }
+
+    @Test fun startupPromotionDoesNotUndoAnExplicitPauseOfAnAlreadyBoundPendingConnection() {
+        val persisted = pendingJournal().put("enabled", false)
+        val c = V3Connection.from(persisted.getJSONObject("pending").getJSONObject("connection"))
+        store.bind(c.binding, false)
+        secrets.value = persisted
+        val sync = coordinator()
+        assertEquals(c, sync.active)
+        assertFalse(sync.enabled)
+        assertFalse(sync.pending)
+        assertFalse(secrets.value!!.getBoolean("enabled"))
+        sync.foreground(); drain()
+        assertEquals(0, remote.requests)
+    }
+
     private data class ConnectionState(val enabled: Boolean, val busy: Boolean, val text: String)
     private class MemoryJournal : V3JournalStorage {
         var value: JSONObject? = null
@@ -211,20 +304,26 @@ class SyncCoordinatorTest {
 
     private class PairingServer : V3Transport {
         var registeredToken: String? = null
+        var registeredVault = VAULT
+        var requests = 0
         var consumeCalls = 0
         var infoCalls = 0
         var failConsume = false
         var failInfo = false
         var loseConsumeResponse = false
         override suspend fun request(method: String, path: String, body: ByteArray?, token: String?): JSONObject {
+            requests++
+            if (path.endsWith("/pairings")) return JSONObject()
+            if (path.endsWith("/devices")) return JSONObject().put("devices", org.json.JSONArray().put(
+                JSONObject().put("id", connection().deviceID).put("name", "Android")))
             if (path.endsWith("/info")) {
                 infoCalls++
                 if (failInfo) throw V3Failure("storage_unavailable")
                 if (token != registeredToken) throw V3Failure("authentication_required")
                 val checkID = "00000000-0000-4000-8000-000000000010"
                 val encrypted = SyncCrypto(KEY).sealV3("PindoSync/v3/key-check".toByteArray(),
-                    SyncV3EnvelopeContext(SyncV3Identity(SERVICE, VAULT), EPOCH, "checkpoint", checkID))
-                return JSONObject().put("version", 3).put("serviceID", SERVICE).put("vaultID", VAULT)
+                    SyncV3EnvelopeContext(SyncV3Identity(SERVICE, registeredVault), EPOCH, "checkpoint", checkID))
+                return JSONObject().put("version", 3).put("serviceID", SERVICE).put("vaultID", registeredVault)
                     .put("epoch", EPOCH).put("head", 0).put("gcFloor", 0).put("checkpointID", JSONObject.NULL)
                     .put("checkpointCovered", 0).put("logCount", 0).put("logBytes", 0)
                     .put("keyCheck", JSONObject().put("id", checkID).put("epoch", EPOCH)
@@ -234,6 +333,7 @@ class SyncCoordinatorTest {
                 consumeCalls++
                 if (failConsume) throw V3Failure("storage_unavailable")
                 registeredToken = JSONObject(String(body!!, Charsets.UTF_8)).getString("deviceToken")
+                registeredVault = path.substringAfter("/vaults/").substringBefore('/')
                 if (loseConsumeResponse) { loseConsumeResponse = false; throw V3Failure("storage_unavailable") }
                 return JSONObject()
             }

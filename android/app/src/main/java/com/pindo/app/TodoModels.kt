@@ -111,7 +111,18 @@ object TodoRules {
         return batch(tasks, setOf(id), TodoBatchAction.SetPhase(phase))
     }
 
-    /** Reparent a subtree and reconcile both old and new ancestor chains. */
+    fun insertTask(tasks: JSONArray, task: JSONObject): JSONArray {
+        val items = tasks.objects().map { JSONObject(it.toString()) }.toMutableList()
+        val parsed = items.map(Todo::from)
+        val inserted = Todo.from(task)
+        require(parsed.none { it.id == inserted.id }) { "事项标识已存在。" }
+        validateParent(parsed, null, inserted.parentID)
+        items.add(JSONObject(task.toString()))
+        reconcileParents(items, setOfNotNull(inserted.parentID))
+        return items.jsonArray()
+    }
+
+    /** Append a subtree to its new siblings and reconcile both ancestor chains. */
     fun moveTask(tasks: JSONArray, id: String, parentID: String?): JSONArray {
         val items = tasks.objects().map { JSONObject(it.toString()) }
         val parsed = items.map(Todo::from)
@@ -121,11 +132,22 @@ object TodoRules {
         validateParent(parsed, taskID, newParent)
         val oldParent = item.optionalID("parentID")
         if (oldParent == newParent) return items.jsonArray()
+        val siblings = parsed.filter { it.parentID == newParent && it.id != taskID }
+            .sortedWith(TodoQueries.comparator(TaskSort.MANUAL)).map { it.json } + item
         item.put("parentID", newParent ?: JSONObject.NULL).put("updatedAt", swiftNow())
+        siblings.forEachIndexed { order, sibling ->
+            if (sibling.getLong("order") != order.toLong()) sibling.put("order", order.toLong())
+        }
+        reconcileParents(items, setOfNotNull(oldParent, newParent))
+        return items.jsonArray()
+    }
+
+    private fun reconcileParents(items: List<JSONObject>, parents: Set<String>) {
+        if (parents.isEmpty()) return
         val byID = items.associateBy { it.getString("id").lowercase() }
         val children = items.filter { it.optionalID("parentID") != null }.groupBy { it.optionalID("parentID")!! }
         val affected = mutableSetOf<String>()
-        for (seed in listOfNotNull(oldParent, newParent)) {
+        for (seed in parents) {
             var current: String? = seed
             val visited = mutableSetOf<String>()
             while (current != null) {
@@ -143,7 +165,6 @@ object TodoRules {
         affected.sortedWith(compareByDescending<String>(::depth).thenBy { it }).forEach { ancestor ->
             byID[ancestor]?.let { reconcileNode(it, children[ancestor].orEmpty()) }
         }
-        return items.jsonArray()
     }
 
     fun deletionIDs(tasks: List<Todo>, ids: Set<String>): Set<String> =
@@ -159,7 +180,10 @@ object TodoRules {
         when (action) {
             TodoBatchAction.Delete -> {
                 val removed = deletionIDs(parsed, selected)
-                return reconcile(items.filter { it.getString("id").lowercase() !in removed }.jsonArray())
+                val parents = parsed.filter { it.id in removed }.mapNotNull { it.parentID }.toSet() - removed
+                val remaining = items.filter { it.getString("id").lowercase() !in removed }
+                reconcileParents(remaining, parents)
+                return remaining.jsonArray()
             }
             is TodoBatchAction.SetPhase -> {
                 require(action.phase in listOf("pending", "inProgress", "completed")) { "事项状态无效。" }
@@ -204,21 +228,6 @@ object TodoRules {
                     .forEach { it.put("plannedDay", dayJSON(action.day)).put("updatedAt", now) }
             }
         }
-        return items.jsonArray()
-    }
-
-    fun reconcile(tasks: JSONArray): JSONArray {
-        val items = tasks.objects().map { JSONObject(it.toString()) }
-        val byID = items.associateBy { it.getString("id").lowercase() }
-        val childrenByParent = items.groupBy { it.optionalID("parentID") }
-        fun visit(id: String, seen: MutableSet<String>) {
-            require(seen.add(id)) { "待办层级存在循环。" }
-            val children = childrenByParent[id].orEmpty()
-            children.forEach { visit(it.getString("id").lowercase(), seen) }
-            reconcileNode(byID.getValue(id), children)
-            seen.remove(id)
-        }
-        childrenByParent[null].orEmpty().forEach { visit(it.getString("id").lowercase(), mutableSetOf()) }
         return items.jsonArray()
     }
 

@@ -81,7 +81,7 @@ internal fun LazyListScope.pindoTaskItems(rows: List<TaskOutlineEntry>, state: A
             PindoTaskRow(row, state, expanded = row.task.id !in collapsed, onDisclosure = { onDisclosure(row.task.id) },
                 onEdit = { onEdit(row.task.id, false) }, onWrite = { onEdit(row.task.id, true) }, onAddChild = { onAddChild(row.task.id) },
                 onDelete = { onDelete(setOf(row.task.id)) }, onMove = { store.move(row.task.id, it) },
-                onPhase = { store.batchPhase(setOf(row.task.id), if (row.task.phase == "completed") "pending" else "completed") },
+                onPhase = { store.advancePhase(row.task.id) },
                 onStart = { store.batchPhase(setOf(row.task.id), "inProgress") },
                 onReset = { store.batchPhase(setOf(row.task.id), "pending") }, selected = selected?.contains(row.task.id),
                 onSelect = { onSelect(row.task.id) }, onEnterSelection = onEnterSelection?.let { callback -> { callback(row.task.id) } })
@@ -98,7 +98,7 @@ internal fun LazyListScope.pindoTaskItems(rows: List<TaskOutlineEntry>, state: A
     val children = state.tasks.filter { it.parentID == task.id }
     val group = state.groups.find { it.id == task.groupID }
     var menu by remember { mutableStateOf(false) }
-    val editable = !state.readOnly && entry.matchesQuery
+    val editable = !state.readOnly && (entry.matchesQuery || selected == null && entry.isCompletionContext)
     val today = LocalDate.now()
     val overdue = task.day < today && task.phase != "completed"
     Column(Modifier.fillMaxWidth().padding(start = (entry.depth * 12).dp)) {
@@ -119,7 +119,7 @@ internal fun LazyListScope.pindoTaskItems(rows: List<TaskOutlineEntry>, state: A
                         maxLines = 3, overflow = TextOverflow.Ellipsis,
                         textDecoration = if (task.phase == "completed") TextDecoration.LineThrough else TextDecoration.None,
                         color = if (task.phase == "completed" || !entry.matchesQuery) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
-                    val labels = listOfNotNull(if (!entry.matchesQuery) "所在父项" else null,
+                    val labels = listOfNotNull(if (!entry.matchesQuery && !entry.isCompletionContext) "所在父项" else null,
                         if (task.day != today) relativeDay(task.day, today) else null,
                         if (task.phase == "inProgress") "进行中" else null, group?.name)
                     if (labels.isNotEmpty() || task.note.isNotBlank()) Row(verticalAlignment = Alignment.CenterVertically,
@@ -169,7 +169,11 @@ internal fun LazyListScope.pindoTaskItems(rows: List<TaskOutlineEntry>, state: A
     val state = when (phase) { "completed" -> ToggleableState.On; "inProgress" -> ToggleableState.Indeterminate; else -> ToggleableState.Off }
     Box(Modifier.size(48.dp).triStateToggleable(state, enabled = enabled, role = Role.Checkbox, onClick = onClick)
         .semantics {
-            contentDescription = (if (phase == "completed") "恢复待办：" else "完成事项：") + title + if (childCount > 0) "，含 $childCount 个子项" else ""
+            contentDescription = when (phase) {
+                "pending" -> "开始进行："
+                "inProgress" -> "完成事项："
+                else -> "恢复待办："
+            } + title + if (childCount > 0) "，含 $childCount 个子项" else ""
             stateDescription = when (phase) { "inProgress" -> "进行中"; "completed" -> "已完成"; else -> "待办" }
         },
         contentAlignment = Alignment.Center) {

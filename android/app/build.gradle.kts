@@ -37,7 +37,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 1000 + (distributionBuild ?: 0)
-        versionName = distributionBuild?.let { "0.5.0-build$it.${sourceRevision!!.take(7)}" } ?: "0.5.0-local"
+        versionName = distributionBuild?.let { "0.5.1-build$it.${sourceRevision!!.take(7)}" } ?: "0.5.1-local"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         resValue("string", "app_name", "Pindo")
     }

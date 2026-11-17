@@ -7,6 +7,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Base64
 import java.util.UUID
+import java.net.URI
 
 /** Device names are public metadata and share the server's Unicode limits. */
 internal fun normalizedDeviceName(value: String): String {
@@ -46,6 +47,7 @@ internal class SyncCoordinator(
     private var failures = 0
     private var retryAt = 0L
     private var lastFailure: String? = null
+    private var credentialsUnavailable = true
 
     var deviceName: String = runCatching { normalizedDeviceName(initialDeviceName) }.getOrDefault("Android")
         private set
@@ -53,21 +55,14 @@ internal class SyncCoordinator(
         private set
     var devices: JSONArray = JSONArray()
         private set
-    val active get() = journal.optJSONObject("active")?.let(V3Connection::from)
-    val enabled get() = journal.optBoolean("enabled") && active != null
+    val active get() = if (credentialsUnavailable) null else journal.optJSONObject("active")?.let(V3Connection::from)
+    val enabled get() = !credentialsUnavailable && journal.optBoolean("enabled") && !pending && active != null
     val pending get() = journal.optJSONObject("pending") != null
+    val canReconnect get() = credentialsUnavailable || active != null || pending
 
     init {
         try {
-            secrets.readJournal()?.let { require(it.getInt("version") == 3); journal = it }
-            journal.optJSONObject("pending")?.let {
-                val c = V3Connection.from(it.getJSONObject("connection"))
-                if (store.binding()?.transactionID == c.transactionID) {
-                    val promoted = (copyV3(journal) as JSONObject).put("active", c.json()).put("enabled", true)
-                    promoted.remove("pending")
-                    save(promoted)
-                }
-            }
+            restoreJournal()
             idle()
         } catch (_: Exception) {
             lastFailure = "同步失败：无法读取同步凭据；本机资料已保留。"
@@ -75,9 +70,76 @@ internal class SyncCoordinator(
         }
     }
 
+    private fun validateEndpoint(endpoint: String) {
+        val uri = try { URI(endpoint) } catch (_: Exception) { throw IllegalArgumentException("invalid_request") }
+        val loopback = uri.scheme == "http" && uri.host in listOf("localhost", "127.0.0.1", "::1")
+        require((uri.scheme == "https" || loopback) && !uri.host.isNullOrBlank() && uri.userInfo == null && uri.query == null && uri.fragment == null)
+        // Production V3HTTP rejects HTTP. A caller may explicitly inject the
+        // loopback-enabled transport for the real local Worker integration.
+        transportFactory(endpoint)
+    }
+
+    private fun validateConnection(c: V3Connection) {
+        c.binding
+        SyncV3.validateID(c.deviceID)
+        require(c.token.matches(Regex("[A-Za-z0-9_-]{43}")))
+        validateEndpoint(c.endpoint)
+        SyncCrypto(c.recoveryKey)
+    }
+
+    private fun validateInvitation(invite: JSONObject) {
+        require(invite.getInt("version") == 3)
+        listOf("serviceID", "vaultID", "epoch", "pairingID").forEach { SyncV3.validateID(invite.getString(it)) }
+        require(invite.getString("code").matches(Regex("[A-Za-z0-9_-]{43}")))
+        validateEndpoint(invite.getString("endpoint"))
+        SyncCrypto(invite.getString("recoveryKey"))
+    }
+
+    private fun restoreJournal() {
+        val candidate = secrets.readJournal()?.let { copyV3(it) as JSONObject }
+            ?: JSONObject().put("version", 3).put("enabled", false).put("archived", JSONObject())
+        require(candidate.getInt("version") == 3 && candidate.get("enabled") is Boolean)
+        val archived = candidate.getJSONObject("archived")
+        require(archived.length() <= 8)
+        for (key in archived.keys()) {
+            val c = V3Connection.from(archived.getJSONObject(key)); validateConnection(c)
+            require(key == c.binding.channel)
+        }
+        val current = candidate.optJSONObject("active")?.let(V3Connection::from)?.also(::validateConnection)
+        if (candidate.has("active") && !candidate.isNull("active")) require(current != null)
+        val pendingValue = candidate.optJSONObject("pending")
+        if (candidate.has("pending") && !candidate.isNull("pending")) require(pendingValue != null)
+        pendingValue?.let { p ->
+            val c = V3Connection.from(p.getJSONObject("connection")); validateConnection(c)
+            when (p.getString("operation")) {
+                "join" -> {
+                    val i = p.getJSONObject("invitation"); validateInvitation(i)
+                    require(c.endpoint == i.getString("endpoint") && c.serviceID == i.getString("serviceID") &&
+                        c.vaultID == i.getString("vaultID") && c.epoch == i.getString("epoch") && c.recoveryKey == i.getString("recoveryKey"))
+                }
+                "create" -> { require(p.getString("bootstrapSecret").isNotBlank()); p.getJSONObject("keyCheck") }
+                "rotate" -> require(current != null && c.copy(token = current.token, transactionID = current.transactionID) == current)
+                else -> error("invalid_request")
+            }
+        }
+        // Assign only after validation. A malformed source remains untouched;
+        // a later promotion write failure still leaves this valid pending usable.
+        journal = candidate
+        credentialsUnavailable = false
+        pendingValue?.let { p ->
+            val c = V3Connection.from(p.getJSONObject("connection"))
+            if (store.binding()?.transactionID == c.transactionID) {
+                val promoted = (copyV3(journal) as JSONObject).put("active", c.json())
+                promoted.remove("pending")
+                save(promoted)
+            }
+        }
+    }
+
     private fun save(value: JSONObject = journal) {
         secrets.writeJournal(value)
         journal = value
+        credentialsUnavailable = false
     }
 
     private fun check(g: UUID) {
@@ -131,7 +193,7 @@ internal class SyncCoordinator(
     }
 
     private fun automaticWork() {
-        if (!ready() || SystemClock.elapsedRealtime() < retryAt) return
+        if (credentialsUnavailable || !ready() || SystemClock.elapsedRealtime() < retryAt) return
         if (pending && journal.optBoolean("enabled")) resume() else sync(false)
     }
 
@@ -176,6 +238,8 @@ internal class SyncCoordinator(
         require(archived.length() <= 8)
         next.put("pending", extra.put("connection", c.json()).put("operation", operation)).put("enabled", true)
         save(next)
+        devices = JSONArray()
+        invitation = null
     }
 
     fun create(endpoint: String, secret: String): Boolean = launch("正在连接同步库…") { g ->
@@ -199,7 +263,7 @@ internal class SyncCoordinator(
     fun join(text: String): Boolean = launch("正在连接同步库…") { g ->
         val validated = try {
             val invite = JSONObject(text)
-            require(invite.getInt("version") == 3)
+            validateInvitation(invite)
             val c = V3Connection(invite.getString("endpoint"), invite.getString("serviceID"),
                 invite.getString("vaultID"), invite.getString("epoch"), UUID.randomUUID().toString(),
                 v3Token(), invite.getString("recoveryKey"))
@@ -259,19 +323,21 @@ internal class SyncCoordinator(
 
     fun disconnect() {
         pause()
-        journal.put("enabled", false)
-        try { save(); lastFailure = null; idle() }
+        if (credentialsUnavailable) return
+        try { save((copyV3(journal) as JSONObject).put("enabled", false)); lastFailure = null; idle() }
         catch (e: Exception) { failure(e) }
     }
 
     fun reconnect() {
         try {
-            journal.put("enabled", true); save()
+            if (credentialsUnavailable) restoreJournal()
+            save((copyV3(journal) as JSONObject).put("enabled", true))
             if (pending) resume() else sync()
         } catch (e: Exception) { failure(e) }
     }
 
     fun sync(manual: Boolean = true) {
+        if (credentialsUnavailable) { idle(); return }
         if (!manual && SystemClock.elapsedRealtime() < retryAt) return
         if (pending && journal.optBoolean("enabled")) { resume(); return }
         if (!enabled) return

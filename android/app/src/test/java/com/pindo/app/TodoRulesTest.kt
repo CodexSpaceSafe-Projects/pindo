@@ -58,6 +58,43 @@ class TodoRulesTest {
         assertTrue(reopened.objects().all { it.getString("phase") == "pending" && it.isNull("startedAt") && it.isNull("completedAt") })
     }
 
+    @Test fun insertingInAnotherFamilyPreservesExplicitlyReopenedBranch() {
+        val grandparent = task("grandparent")
+        val parent = task("parent", grandparent.getString("id"))
+        val child = task("child", parent.getString("id"))
+        val other = task("other")
+        val completed = TodoRules.setPhase(JSONArray().put(grandparent).put(parent).put(child).put(other),
+            grandparent.getString("id"), "completed")
+        val withCompletedOther = TodoRules.setPhase(completed, other.getString("id"), "completed")
+        val reopened = TodoRules.setPhase(withCompletedOther, parent.getString("id"), "inProgress")
+        val before = reopened.toString()
+
+        for (newParent in listOf(null, other.getString("id"))) {
+            val inserted = TodoRules.insertTask(reopened, task("new task", newParent))
+            for (index in 0..2) {
+                assertEquals(reopened.getJSONObject(index).toMap(), inserted.getJSONObject(index).toMap())
+            }
+            assertEquals(if (newParent == null) "completed" else "pending", inserted.getJSONObject(3).getString("phase"))
+            assertEquals("inProgress", inserted.getJSONObject(1).getString("phase"))
+            assertTrue(inserted.getJSONObject(1).getBoolean("isProgressExplicit"))
+            validateDocument(emptyDocument().put("tasks", inserted))
+        }
+        assertEquals(before, reopened.toString())
+    }
+
+    @Test fun insertingPendingGrandchildReopensEveryCompletedAncestor() {
+        val grandparent = task("grandparent")
+        val parent = task("parent", grandparent.getString("id"))
+        val completed = TodoRules.setPhase(JSONArray().put(grandparent).put(parent), grandparent.getString("id"), "completed")
+        val child = task("new child", parent.getString("id"))
+        val inserted = TodoRules.insertTask(completed, child)
+
+        assertTrue(inserted.objects().all { it.getString("phase") == "pending" && it.isNull("startedAt") && it.isNull("completedAt") })
+        assertEquals(parent.getString("id"), inserted.getJSONObject(2).getString("parentID"))
+        assertTrue(completed.objects().all { it.getString("phase") == "completed" })
+        validateDocument(emptyDocument().put("tasks", inserted))
+    }
+
     @Test fun directCompletionDoesNotReuseAnOldRoundStartTimestamp() {
         val pending = task("pending").put("startedAt", 1.0)
         val complete = TodoRules.setPhase(JSONArray().put(pending), pending.getString("id"), "completed").getJSONObject(0)

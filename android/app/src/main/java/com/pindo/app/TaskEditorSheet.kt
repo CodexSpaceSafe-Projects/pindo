@@ -49,7 +49,7 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
-@Composable internal fun TaskEditorSheet(store: AppStore, state: AppState, taskID: String?, parentID: String?, initialDay: LocalDate, initiallyEditing: Boolean = false, initialTitle: String = "", initialGroupID: String? = state.preferences.defaultGroupID, onDismiss: () -> Unit) {
+@Composable internal fun TaskEditorSheet(store: AppStore, state: AppState, taskID: String?, parentID: String?, initialDay: LocalDate, initiallyEditing: Boolean = false, initialTitle: String = "", initialGroupID: String? = state.preferences.defaultGroupID, draftHandle: NoteDraftHandle? = null, onDismiss: () -> Unit) {
     val currentTask = state.tasks.find { it.id == taskID }
     val baselineText by rememberSaveable(taskID, parentID) { mutableStateOf(currentTask?.let { TaskEditBaseline.capture(it).encoded() }) }
     val baseline = remember(baselineText) { baselineText?.let(TaskEditBaseline::decode) }
@@ -61,7 +61,7 @@ import java.time.format.DateTimeFormatter
     val originalGroup = when { baseline != null -> baseline.groupID; initialParent != null -> initialParent.groupID; else -> initialGroupID }
     val originalParent = if (baseline != null) baseline.parentID else parentID
     var draftWarning by remember { mutableStateOf<String?>(null) }
-    val noteDraft = remember(taskID, parentID) { store.noteDraftHandle() }
+    val noteDraft = remember(taskID, parentID, draftHandle) { draftHandle ?: store.noteDraftHandle() }
     val noteSaver = remember(noteDraft, originalNote) {
         Saver<TextFieldValue, String>(
             save = { value -> noteDraft.save(NoteDraft(value.text, value.selection.start, value.selection.end)).also { draftWarning = noteDraft.error } },
@@ -103,7 +103,12 @@ import java.time.format.DateTimeFormatter
         val saved = if (taskID == null) store.addTask(title, note.text, parsed, group, parent)
             else store.editTask(taskID, title, note.text, parsed, group, parent, phase,
                 baseline = baseline?.task(taskID), baselineNoteDigest = baseline?.noteDigest)
-        if (saved) closeDraft()
+        if (saved) {
+            // The SQLite commit is the save result. Failed cache cleanup must
+            // not leave a new-task editor able to submit the same task again.
+            noteDraft.clear()
+            onDismiss()
+        }
     }
     Dialog(onDismissRequest = requestClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         val keyboard = LocalSoftwareKeyboardController.current
