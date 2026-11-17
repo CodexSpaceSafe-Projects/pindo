@@ -267,17 +267,30 @@ class AndroidErgonomicsTest {
     }
 
     private fun reveal(label: String) {
-        if (clickable(label) != null) return
-        for (direction in listOf(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)) {
-            repeat(8) {
-                if (clickable(label) != null) return
-                val scroller = nodes().firstOrNull { node ->
-                    node.isVisibleToUser && node.isEnabled && node.isScrollable && node.actionList.any { it.id == direction }
-                } ?: return@repeat
+        var backwards = false
+        var forwardScrolls = 0
+        var backwardScrolls = 0
+        var nextScrollAt = 0L
+        await("action $label must appear through bounded accessibility scrolling") {
+            if (clickable(label) != null) return@await true
+            if (SystemClock.uptimeMillis() < nextScrollAt) return@await false
+            val scrollers = nodes().filter { it.isVisibleToUser && it.isEnabled && it.isScrollable }
+            fun scrollable(direction: Int) = scrollers.firstOrNull { node -> node.actionList.any { it.id == direction } }
+            if (!backwards && (forwardScrolls >= 8 ||
+                    (scrollable(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) == null &&
+                        scrollable(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) != null))) backwards = true
+            val direction = if (backwards) AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD else AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+            val used = if (backwards) backwardScrolls else forwardScrolls
+            val scroller = if (used < 8) scrollable(direction) else null
+            if (scroller != null) {
+                if (backwards) backwardScrolls++ else forwardScrolls++
                 if (scroller.performAction(direction)) instrumentation.waitForIdleSync()
+                nextScrollAt = SystemClock.uptimeMillis() + 250
             }
+            // A popup can be drawn before its accessibility root is published.
+            // No nodes or scroll actions means wait for the next bounded poll.
+            false
         }
-        fail("Could not reveal action $label through bounded accessibility scrolling\n" + hierarchy())
     }
 
     private fun tapArea(area: Rect, label: String) {
