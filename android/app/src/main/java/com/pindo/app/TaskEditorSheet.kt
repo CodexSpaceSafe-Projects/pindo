@@ -243,7 +243,7 @@ import java.time.format.DateTimeFormatter
                                     fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface),
                                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary), visualTransformation = MixedScriptVisualTransformation,
                                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("task-title")
-                                    .initialInputFocus(titleFocus, !state.readOnly && taskID == null && initialTitle.isBlank())
+                                    .initialInputFocus(titleFocus, !state.readOnly && taskID == null && initialTitle.isBlank()) { keyboard?.show() }
                                     .semantics { contentDescription = "事项标题" },
                                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                                 decorationBox = { input -> Box {
@@ -267,7 +267,7 @@ import java.time.format.DateTimeFormatter
                                 color = MaterialTheme.colorScheme.onSurface),
                             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary), visualTransformation = MixedScriptVisualTransformation,
                             modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp).testTag("task-note")
-                                .initialInputFocus(noteFocus, !state.readOnly && (taskID != null || initialTitle.isNotBlank()))
+                                .initialInputFocus(noteFocus, !state.readOnly && (taskID != null || initialTitle.isNotBlank())) { keyboard?.show() }
                                 .semantics { contentDescription = "事项备注，支持 Markdown" },
                             decorationBox = { input -> Box {
                                 if (note.text.isEmpty()) Text("写下细节、清单或想法…",

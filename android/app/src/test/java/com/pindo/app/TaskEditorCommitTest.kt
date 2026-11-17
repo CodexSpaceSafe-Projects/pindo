@@ -1,15 +1,25 @@
 package com.pindo.app
 
 import android.app.Application
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.platform.WindowInfo
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.*
 import org.junit.Before
@@ -77,6 +87,39 @@ class TaskEditorCommitTest {
             assertTrue(draft.exists())
             assertArrayEquals(draftBefore, draft.readBytes())
         }
+    }
+
+    @Test fun initialInputWaitsForItsWindowAndDoesNotStealFocusAfterAPickerReturns() {
+        val window = TestWindowInfo()
+        var focusedCallbacks = 0
+        compose.setContent {
+            val focus = remember { FocusRequester() }
+            CompositionLocalProvider(LocalWindowInfo provides window) {
+                PindoTheme {
+                    Column {
+                        BasicTextField("标题", {}, Modifier.heightIn(min = 48.dp).testTag("initial-input")
+                            .initialInputFocus(focus, true) { focusedCallbacks++ })
+                        BasicTextField("备注", {}, Modifier.heightIn(min = 48.dp).testTag("other-input"))
+                    }
+                }
+            }
+        }
+        compose.onNodeWithTag("initial-input").assertIsNotFocused()
+        compose.runOnIdle {
+            assertEquals(0, focusedCallbacks)
+            window.isWindowFocused = true
+        }
+        compose.onNodeWithTag("initial-input").assertIsFocused()
+        compose.runOnIdle { assertEquals(1, focusedCallbacks) }
+        compose.onNodeWithTag("other-input").performClick().assertIsFocused()
+        compose.runOnIdle { window.isWindowFocused = false }
+        compose.runOnIdle { window.isWindowFocused = true }
+        compose.onNodeWithTag("other-input").assertIsFocused()
+        compose.runOnIdle { assertEquals(1, focusedCallbacks) }
+    }
+
+    private class TestWindowInfo : WindowInfo {
+        override var isWindowFocused by mutableStateOf(false)
     }
 
     private class UndeletableDraftFiles(private val files: NoteDraftFiles) : NoteDraftFiles by files {

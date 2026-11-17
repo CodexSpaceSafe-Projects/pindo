@@ -21,6 +21,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.stateDescription
@@ -222,12 +223,18 @@ internal fun relativeDay(day: LocalDate, today: LocalDate = LocalDate.now()): St
         else day.format(DateTimeFormatter.ofPattern("M月d日", Locale.SIMPLIFIED_CHINESE))
 }
 
-/** Scaffold and bottom-sheet bodies can be subcomposed after their parent
- * effects. Initial focus belongs to the actual, attached input node. */
+/** Wait for both the input placement and its own window, then focus once.
+ * Returning from a picker must not move focus back to the initial field. */
 @Composable internal fun Modifier.initialInputFocus(requester: FocusRequester, requested: Boolean, onFocused: () -> Unit = {}): Modifier {
     var placed by remember { mutableStateOf(false) }
-    LaunchedEffect(placed, requested) {
-        if (placed && requested) { requester.requestFocus(); onFocused() }
+    var issued by remember { mutableStateOf(false) }
+    val windowFocused = LocalWindowInfo.current.isWindowFocused
+    val currentOnFocused by rememberUpdatedState(onFocused)
+    LaunchedEffect(placed, requested, windowFocused) {
+        if (placed && requested && windowFocused && !issued) {
+            issued = true
+            if (requester.requestFocus()) currentOnFocused()
+        }
     }
     return focusRequester(requester).onGloballyPositioned { placed = true }
 }
