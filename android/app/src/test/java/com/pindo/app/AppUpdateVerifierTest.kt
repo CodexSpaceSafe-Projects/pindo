@@ -3,6 +3,7 @@ package com.pindo.app
 import android.app.Application
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
+import android.content.pm.PackageManager
 import android.content.pm.Signature
 import android.content.pm.SigningInfo
 import android.os.Build
@@ -16,10 +17,13 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+import org.robolectric.shadows.ShadowApplicationPackageManager
 import org.robolectric.util.ReflectionHelpers
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], shadows = [AppUpdateVerifierTest.LegacyArchiveCertificatesPackageManager::class])
 class AppUpdateVerifierTest {
     private lateinit var app: Application
     private lateinit var apk: File
@@ -30,6 +34,7 @@ class AppUpdateVerifierTest {
     private val bytes = "Synthetic APK bytes: archive identity is supplied by Android PackageManager's test shadow.".toByteArray()
 
     @Before fun prepare() {
+        LegacyArchiveCertificatesPackageManager.archiveFlags = 0
         app = ApplicationProvider.getApplicationContext()
         apk = File(app.cacheDir, "app-update-verifier.apk").apply { writeBytes(bytes) }
         shadowOf(app.packageManager).installPackage(info(app.packageName, 1000, "0.6.0", arrayOf(certificate)))
@@ -47,6 +52,15 @@ class AppUpdateVerifierTest {
         assertEquals(digest(certificate.toByteArray()), identity.certificateSha256)
         AppUpdateVerifier.verify(app, apk, update, identity)
         assertArrayEquals(bytes, apk.readBytes())
+    }
+
+    @Suppress("DEPRECATION")
+    @Test fun archiveReadsRequestModernSigningInfoAndLegacyCertificateCollection() {
+        AppUpdateVerifier.verify(app, apk, update, identity)
+        val flags = LegacyArchiveCertificatesPackageManager.archiveFlags
+        assertTrue(flags and PackageManager.GET_SIGNATURES != 0)
+        assertTrue(flags and PackageManager.GET_SIGNING_CERTIFICATES != 0)
+        assertEquals(digest(certificate.toByteArray()), identity.certificateSha256)
     }
 
     @Test fun sameSizedTamperingAndTruncatedOrMissingFilesNeverReachInstallation() {
@@ -144,4 +158,23 @@ class AppUpdateVerifierTest {
 
     private fun digest(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes)
         .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
+    /** Android 10 AOSP gates collectCertificates on GET_SIGNATURES. Model
+     * that real parser behavior so a modern-only request fails this test. */
+    @Implements(className = "android.app.ApplicationPackageManager", isInAndroidSdk = false)
+    class LegacyArchiveCertificatesPackageManager : ShadowApplicationPackageManager() {
+        @Suppress("DEPRECATION")
+        @Implementation
+        protected override fun getPackageArchiveInfo(archiveFilePath: String, flags: Int): PackageInfo? {
+            archiveFlags = flags
+            return super.getPackageArchiveInfo(archiveFilePath, flags).also { info ->
+                if (flags and PackageManager.GET_SIGNATURES == 0) {
+                    info?.signingInfo = null
+                    info?.signatures = null
+                }
+            }
+        }
+
+        companion object { var archiveFlags = 0 }
+    }
 }

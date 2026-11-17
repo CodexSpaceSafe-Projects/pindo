@@ -56,7 +56,11 @@ internal object AppUpdateVerifier {
     }
 
     @Suppress("DEPRECATION")
-    private fun signingFlags(): Int = if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
+    private fun signingFlags(): Int = if (Build.VERSION.SDK_INT >= 28) {
+        // Android 10's archive parser collects certificates only when the
+        // legacy flag is present, even if modern SigningInfo was requested.
+        PackageManager.GET_SIGNATURES or PackageManager.GET_SIGNING_CERTIFICATES
+    } else PackageManager.GET_SIGNATURES
 
     @Suppress("DEPRECATION")
     private fun certificate(info: PackageInfo): String {
